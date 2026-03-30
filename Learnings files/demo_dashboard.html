@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chaizup — TOC Buffer Management Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════
+   DESIGN TOKENS (Modern Slate & Vivid Accents)
+═══════════════════════════════════════════════════ */
+:root {
+  --bg-main:      #020617; /* Slate 950 */
+  --bg-sidebar:   #0F172A; /* Slate 900 */
+  --bg-card:      #1E293B; /* Slate 800 */
+  --bg-card-hover:#334155; /* Slate 700 */
+  
+  --orange:       #F97316;
+  --orange-dim:   rgba(249, 115, 22, 0.15);
+  --teal:         #14B8A6;
+  --teal-dim:     rgba(20, 184, 166, 0.15);
+  
+  --red:          #EF4444;
+  --red-dim:      rgba(239, 68, 68, 0.15);
+  --yel:          #F59E0B;
+  --yel-dim:      rgba(245, 158, 11, 0.15);
+  --grn:          #10B981;
+  --grn-dim:      rgba(16, 185, 129, 0.15);
+
+  --white:        #F8FAFC;
+  --muted:        #94A3B8;
+  --border:       rgba(255, 255, 255, 0.08);
+  --border-lit:   rgba(255, 255, 255, 0.15);
+
+  --font-head:    'Plus Jakarta Sans', sans-serif;
+  --font-body:    'Inter', sans-serif;
+  
+  --radius-sm:    8px;
+  --radius:       16px;
+  --radius-lg:    24px;
+  
+  --shadow-sm:    0 2px 4px rgba(0,0,0,0.1);
+  --shadow:       0 10px 30px -10px rgba(0,0,0,0.5);
+  --shadow-glow:  0 0 20px rgba(249, 115, 22, 0.2);
+  
+  --transition:   all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ═══════════════════════════════════════════════════
+   RESET & BASE
+═══════════════════════════════════════════════════ */
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg-main);
+  color: var(--white);
+  min-height: 100vh;
+  overflow-x: hidden;
+  font-size: 14.5px;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { font-family: var(--font-head); line-height: 1.2; }
+input, select { outline: none; }
+button { cursor: pointer; font-family: var(--font-body); }
+a { text-decoration: none; color: inherit; }
+
+/* ═══════════════════════════════════════════════════
+   LAYOUT
+═══════════════════════════════════════════════════ */
+.app { display: flex; min-height: 100vh; }
+
+/* SIDEBAR */
+.sidebar {
+  width: 260px; min-width: 260px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  position: fixed; top: 0; left: 0; height: 100vh;
+  z-index: 100; overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 32px 24px 24px;
+}
+.logo-text { font-family: var(--font-head); font-size: 26px; font-weight: 800; color: var(--white); letter-spacing: -0.5px; }
+.logo-text span { color: var(--orange); }
+.logo-sub { font-size: 11px; color: var(--muted); margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; font-weight: 600; }
+.sidebar-nav { padding: 0 12px 24px; flex: 1; }
+.nav-section { padding: 24px 12px 8px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; margin-bottom: 4px;
+  color: var(--muted); font-size: 14px; font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer; transition: var(--transition);
+}
+.nav-item:hover { color: var(--white); background: rgba(255,255,255,0.05); }
+.nav-item.active { color: var(--white); background: var(--orange-dim); font-weight: 600; box-shadow: inset 3px 0 0 var(--orange); }
+.nav-item .icon { font-size: 18px; width: 20px; text-align: center; }
+.sidebar-footer { padding: 24px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); }
+
+/* MAIN CONTENT */
+.main { margin-left: 260px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+.topbar {
+  background: rgba(2, 6, 23, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 40px; display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 50;
+}
+.topbar-title { font-family: var(--font-head); font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+.topbar-badge {
+  background: var(--orange-dim); color: var(--orange);
+  border: 1px solid rgba(249, 115, 22, 0.3);
+  padding: 6px 14px; border-radius: 30px; font-size: 11px; font-weight: 700; letter-spacing: 1px;
+}
+.content { padding: 40px; flex: 1; max-width: 1400px; }
+
+/* ═══════════════════════════════════════════════════
+   PAGES (show/hide)
+═══════════════════════════════════════════════════ */
+.page { display: none; }
+.page.active { display: block; animation: fadeUp 0.4s ease forwards; }
+
+/* ═══════════════════════════════════════════════════
+   CARDS
+═══════════════════════════════════════════════════ */
+.card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 28px;
+  box-shadow: var(--shadow); margin-bottom: 24px;
+}
+.card-sm { padding: 24px; border-radius: var(--radius); }
+.card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
+.card-title { font-family: var(--font-head); font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.card-sub { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+/* STAT CARDS */
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 32px; }
+.stat-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px;
+  box-shadow: var(--shadow); position: relative; overflow: hidden;
+  transition: var(--transition);
+}
+.stat-card:hover { transform: translateY(-4px); border-color: var(--border-lit); }
+.stat-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+.stat-card.orange::before { background: var(--orange); box-shadow: 0 0 12px var(--orange); }
+.stat-card.teal::before { background: var(--teal); box-shadow: 0 0 12px var(--teal); }
+.stat-card.red::before { background: var(--red); box-shadow: 0 0 12px var(--red); }
+.stat-card.grn::before { background: var(--grn); box-shadow: 0 0 12px var(--grn); }
+.stat-label { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+.stat-value { font-family: var(--font-head); font-size: 36px; font-weight: 800; line-height: 1; color: var(--white); }
+.stat-desc { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+/* GRID LAYOUTS */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+
+/* ═══════════════════════════════════════════════════
+   CONCEPT BOXES
+═══════════════════════════════════════════════════ */
+.concept-box {
+  background: linear-gradient(145deg, var(--teal-dim), rgba(2, 6, 23, 0.4));
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  border-radius: var(--radius); padding: 20px 24px; margin-bottom: 24px;
+  backdrop-filter: blur(8px);
+}
+.concept-box.orange {
+  background: linear-gradient(145deg, var(--orange-dim), rgba(2, 6, 23, 0.4));
+  border-color: rgba(249, 115, 22, 0.2);
+}
+.concept-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--teal); font-weight: 800; margin-bottom: 8px; }
+.concept-box.orange .concept-label { color: var(--orange); }
+.concept-text { font-size: 14px; color: #CBD5E1; line-height: 1.7; }
+.concept-formula {
+  font-family: var(--font-head); font-size: 16px; font-weight: 700;
+  color: var(--white); margin-top: 16px; padding: 12px 20px;
+  background: rgba(0,0,0,0.3); border-radius: var(--radius-sm);
+  border-left: 3px solid var(--orange);
+}
+
+/* ═══════════════════════════════════════════════════
+   INPUTS
+═══════════════════════════════════════════════════ */
+.input-group { margin-bottom: 20px; }
+.input-label {
+  display: block; font-size: 12px; font-weight: 600;
+  color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.input-label span { color: var(--orange); margin-left: 6px; font-size: 10px; opacity: 0.8; }
+.inp {
+  width: 100%; background: #0F172A;
+  border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-sm);
+  padding: 12px 16px; color: var(--white); font-size: 14px; font-family: var(--font-body);
+  transition: var(--transition); box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+.inp:focus { border-color: var(--orange); box-shadow: 0 0 0 3px var(--orange-dim), inset 0 2px 4px rgba(0,0,0,0.2); }
+.inp::placeholder { color: #475569; }
+select.inp option { background: var(--bg-sidebar); color: var(--white); }
+.input-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* RANGE */
+.range-wrap { display: flex; align-items: center; gap: 16px; }
+input[type=range] {
+  flex: 1; -webkit-appearance: none; height: 6px;
+  background: #334155; border-radius: 4px; outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 20px; height: 20px;
+  background: var(--orange); border-radius: 50%; cursor: pointer;
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.6); transition: transform 0.1s;
+}
+input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.range-val {
+  font-family: var(--font-head); font-size: 16px; font-weight: 700;
+  color: var(--white); min-width: 44px; text-align: center;
+  background: var(--bg-sidebar); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════
+   RESULT DISPLAYS
+═══════════════════════════════════════════════════ */
+.result-box {
+  background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 24px; text-align: center; backdrop-filter: blur(4px);
+}
+.result-label { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+.result-value { font-family: var(--font-head); font-size: 46px; font-weight: 800; color: var(--orange); line-height: 1; text-shadow: 0 2px 10px rgba(249,115,22,0.2); }
+.result-unit { font-size: 14px; color: var(--muted); margin-top: 8px; }
+
+/* ZONE DISPLAY */
+.zone-display {
+  border-radius: var(--radius-sm); padding: 18px; text-align: center;
+  font-family: var(--font-head); font-size: 18px; font-weight: 800;
+  transition: var(--transition); letter-spacing: 0.5px;
+}
+.zone-display.green { background: var(--grn-dim); border: 1px solid rgba(16, 185, 129, 0.3); color: var(--grn); }
+.zone-display.yellow { background: var(--yel-dim); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--yel); }
+.zone-display.red { background: var(--red-dim); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--red); box-shadow: 0 0 20px rgba(239, 68, 68, 0.15); }
+.zone-display.black { background: rgba(255,255,255,0.05); border: 1px solid #444; color: #94A3B8; }
+
+/* BUFFER BAR */
+.buffer-bar-wrap { margin: 20px 0; }
+.buffer-bar-label { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.buffer-bar-track {
+  height: 28px; background: #0F172A; border-radius: 14px; overflow: hidden; position: relative; box-shadow: inset 0 2px 6px rgba(0,0,0,0.4);
+}
+.buffer-bar-fill {
+  height: 100%; border-radius: 14px; transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+.buffer-bar-fill.green { background: linear-gradient(90deg, #059669, #10B981); }
+.buffer-bar-fill.yellow { background: linear-gradient(90deg, #D97706, #F59E0B); }
+.buffer-bar-fill.red { background: linear-gradient(90deg, #B91C1C, #EF4444); }
+
+/* ═══════════════════════════════════════════════════
+   PRIORITY TABLE
+═══════════════════════════════════════════════════ */
+.priority-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.priority-table th {
+  padding: 14px 16px; font-size: 12px; font-weight: 700;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
+  border-bottom: 1px solid var(--border); text-align: left; background: rgba(0,0,0,0.2);
+}
+.priority-table th:first-child { border-top-left-radius: var(--radius-sm); }
+.priority-table th:last-child { border-top-right-radius: var(--radius-sm); }
+.priority-table td { padding: 16px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.03); transition: background 0.2s; }
+.priority-table tr:hover td { background: rgba(255,255,255,0.02); }
+.priority-table tr:last-child td { border-bottom: none; }
+.rank-badge {
+  width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-head); font-size: 14px; font-weight: 800; box-shadow: var(--shadow-sm);
+}
+.zone-pill {
+  padding: 6px 12px; border-radius: 20px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px;
+  display: inline-block; box-shadow: var(--shadow-sm);
+}
+.zone-pill.red { background: var(--red-dim); color: #FCA5A5; border: 1px solid rgba(239, 68, 68, 0.4); }
+.zone-pill.yellow { background: var(--yel-dim); color: #FCD34D; border: 1px solid rgba(245, 158, 11, 0.4); }
+.zone-pill.green { background: var(--grn-dim); color: #6EE7B7; border: 1px solid rgba(16, 185, 129, 0.4); }
+.zone-pill.black { background: rgba(255,255,255,0.1); color: #CBD5E1; border: 1px solid #475569; }
+
+/* ═══════════════════════════════════════════════════
+   BUTTONS
+═══════════════════════════════════════════════════ */
+.btn {
+  padding: 12px 24px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 700;
+  border: none; transition: var(--transition); display: inline-flex; align-items: center; gap: 8px;
+  justify-content: center;
+}
+.btn-primary { background: linear-gradient(135deg, #F97316, #EA580C); color: white; box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(249, 115, 22, 0.5); }
+.btn-primary:active { transform: translateY(0); }
+.btn-teal { background: linear-gradient(135deg, #14B8A6, #0D9488); color: white; box-shadow: 0 4px 12px rgba(20, 184, 166, 0.3); }
+.btn-teal:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(20, 184, 166, 0.5); }
+.btn-ghost { background: transparent; color: var(--white); border: 1px solid var(--border); }
+.btn-ghost:hover { background: rgba(255,255,255,0.05); border-color: var(--border-lit); }
+.btn-sm { padding: 8px 16px; font-size: 13px; }
+
+/* ═══════════════════════════════════════════════════
+   TABS
+═══════════════════════════════════════════════════ */
+.tabs { display: flex; gap: 8px; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 12px; margin-bottom: 28px; flex-wrap: wrap; border: 1px solid var(--border); }
+.tab {
+  padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  border: none; background: transparent; color: var(--muted); cursor: pointer; transition: var(--transition);
+}
+.tab.active { background: var(--bg-card-hover); color: var(--white); box-shadow: var(--shadow-sm); }
+.tab:hover:not(.active) { color: var(--white); background: rgba(255,255,255,0.05); }
+.tab-content { display: none; }
+.tab-content.active { display: block; animation: fadeUp 0.3s ease forwards; }
+
+/* ═══════════════════════════════════════════════════
+   SECTION HEADERS
+═══════════════════════════════════════════════════ */
+.page-header { margin-bottom: 36px; }
+.page-header h2 { font-family: var(--font-head); font-size: 32px; font-weight: 800; margin-bottom: 10px; letter-spacing: -0.5px; }
+.page-header p { font-size: 16px; color: var(--muted); line-height: 1.6; max-width: 800px; }
+.page-header .tag {
+  display: inline-block; background: var(--orange-dim);
+  border: 1px solid rgba(249, 115, 22, 0.3); color: var(--orange);
+  font-size: 12px; font-weight: 800; padding: 4px 12px; border-radius: 30px;
+  margin-bottom: 16px; letter-spacing: 1px; text-transform: uppercase;
+}
+
+.section-title {
+  font-family: var(--font-head); font-size: 18px; font-weight: 700;
+  margin-bottom: 16px; display: flex; align-items: center; gap: 10px;
+}
+.section-title::before { content: ''; display: block; width: 4px; height: 20px; background: var(--orange); border-radius: 4px; }
+
+/* ═══════════════════════════════════════════════════
+   DIVIDER
+═══════════════════════════════════════════════════ */
+.divider { height: 1px; background: var(--border); margin: 28px 0; }
+
+/* ═══════════════════════════════════════════════════
+   ALERT BOXES
+═══════════════════════════════════════════════════ */
+.alert { border-radius: var(--radius-sm); padding: 16px 20px; font-size: 14px; line-height: 1.6; margin: 16px 0; }
+.alert-red { background: var(--red-dim); border: 1px solid rgba(239, 68, 68, 0.3); color: #FCA5A5; }
+.alert-yel { background: var(--yel-dim); border: 1px solid rgba(245, 158, 11, 0.3); color: #FCD34D; }
+.alert-grn { background: var(--grn-dim); border: 1px solid rgba(16, 185, 129, 0.3); color: #6EE7B7; }
+.alert-blue { background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); color: #BAE6FD; }
+
+/* ═══════════════════════════════════════════════════
+   COMPARISON TABLE (TOC vs MRP)
+═══════════════════════════════════════════════════ */
+.compare-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.compare-table th { padding: 16px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; }
+.compare-table th:first-child { color: var(--muted); text-align: left; background: transparent; }
+.compare-table th.old { background: var(--red-dim); color: #FCA5A5; text-align: center; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px 0 0 0; }
+.compare-table th.new { background: var(--grn-dim); color: #6EE7B7; text-align: center; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 0 8px 0 0; }
+.compare-table td { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 14px; }
+.compare-table td:first-child { font-weight: 600; color: var(--white); }
+.compare-table td.old { text-align: center; color: #FCA5A5; background: rgba(239, 68, 68, 0.03); border-left: 1px solid rgba(239, 68, 68, 0.1); }
+.compare-table td.new { text-align: center; color: #6EE7B7; background: rgba(16, 185, 129, 0.03); border-left: 1px solid rgba(16, 185, 129, 0.1); border-right: 1px solid rgba(16, 185, 129, 0.1); }
+.compare-table tr:last-child td.old { border-radius: 0 0 0 8px; border-bottom: 1px solid rgba(239, 68, 68, 0.1); }
+.compare-table tr:last-child td.new { border-radius: 0 0 8px 0; border-bottom: 1px solid rgba(16, 185, 129, 0.1); }
+
+/* ═══════════════════════════════════════════════════
+   FORMULA BREAKDOWN
+═══════════════════════════════════════════════════ */
+.formula-breakdown {
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px; flex-wrap: wrap; margin: 24px 0;
+}
+.formula-part {
+  background: var(--bg-sidebar); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 20px; text-align: center;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+.formula-part .fp-value { font-family: var(--font-head); font-size: 26px; font-weight: 800; color: var(--white); }
+.formula-part .fp-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; font-weight: 600;}
+.formula-op { font-family: var(--font-head); font-size: 28px; font-weight: 700; color: var(--muted); }
+.formula-equals {
+  background: var(--orange-dim); border: 1px solid rgba(249, 115, 22, 0.4);
+  border-radius: 12px; padding: 14px 24px; text-align: center;
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.15);
+}
+.formula-equals .fp-value { font-family: var(--font-head); font-size: 32px; font-weight: 800; color: var(--orange); }
+
+/* ═══════════════════════════════════════════════════
+   SCROLLBAR
+═══════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-main); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
+/* ═══════════════════════════════════════════════════
+   ANIMATIONS
+═══════════════════════════════════════════════════ */
+@keyframes pulse-red { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 0 12px rgba(239,68,68,0); } }
+.pulse-red { animation: pulse-red 2s infinite; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.fade-in { animation: fadeUp 0.4s ease forwards; }
+
+/* ═══════════════════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════════════════ */
+@media(max-width: 1100px) {
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+}
+@media(max-width: 900px) {
+  .sidebar { width: 80px; min-width: 80px; }
+  .logo-text { font-size: 14px; text-align: center; }
+  .logo-sub, .nav-section, .nav-item span:not(.icon) { display: none; }
+  .nav-item { justify-content: center; padding: 14px; margin: 4px 8px;}
+  .main { margin-left: 80px; }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .content { padding: 24px; }
+  .topbar { padding: 16px 24px; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+<!-- ═══════════════════════════════════════════════
+  SIDEBAR
+═══════════════════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-text">CHAI<span>ZUP</span></div>
+    <div class="logo-sub">TOC Dashboard</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">Overview</div>
+    <div class="nav-item active" onclick="showPage('home',this)">
+      <span class="icon">🏠</span><span>Home Dashboard</span>
+    </div>
+    <div class="nav-item" onclick="showPage('glossary',this)">
+      <span class="icon">📖</span><span>TOC Glossary</span>
+    </div>
+
+    <div class="nav-section">Formulas</div>
+    <div class="nav-item" onclick="showPage('f1',this)">
+      <span class="icon">📐</span><span>F1 · Target Buffer</span>
+    </div>
+    <div class="nav-item" onclick="showPage('f2',this)">
+      <span class="icon">📦</span><span>F2 · Inventory Pos</span>
+    </div>
+    <div class="nav-item" onclick="showPage('f3',this)">
+      <span class="icon">🎯</span><span>F3 · Buffer Pen</span>
+    </div>
+    <div class="nav-item" onclick="showPage('f4',this)">
+      <span class="icon">🔄</span><span>F4 · Order Qty</span>
+    </div>
+    <div class="nav-item" onclick="showPage('f5',this)">
+      <span class="icon">⚡</span><span>F5 · T/CU Tie</span>
+    </div>
+
+    <div class="nav-section">Operations</div>
+    <div class="nav-item" onclick="showPage('production',this)">
+      <span class="icon">🏭</span><span>Prod Priority</span>
+    </div>
+    <div class="nav-item" onclick="showPage('procurement',this)">
+      <span class="icon">🛒</span><span>Procurement</span>
+    </div>
+    <div class="nav-item" onclick="showPage('dbm',this)">
+      <span class="icon">🔧</span><span>DBM Simulator</span>
+    </div>
+    <div class="nav-item" onclick="showPage('daf',this)">
+      <span class="icon">📅</span><span>DAF · Seasonal</span>
+    </div>
+    <div class="nav-section">Compare</div>
+    <div class="nav-item" onclick="showPage('compare',this)">
+      <span class="icon">⚖️</span><span>TOC vs MRP</span>
+    </div>
+  </nav>
+  <div class="sidebar-footer">Chaizup · Internal Use</div>
+</aside>
+
+<!-- ═══════════════════════════════════════════════
+  MAIN
+═══════════════════════════════════════════════ -->
+<main class="main">
+  <div class="topbar">
+    <div class="topbar-title" id="topbar-title">Home Dashboard</div>
+    <div class="topbar-badge">LIVE CALCULATIONS</div>
+  </div>
+  <div class="content">
+
+<!-- ════════════════════════
+  PAGE: HOME
+════════════════════════ -->
+<div id="page-home" class="page active">
+  <div class="page-header">
+    <div class="tag">Buffer Management</div>
+    <h2>TOC Operations Dashboard</h2>
+    <p>Theory of Constraints Buffer Management — all formulas, live calculations, concept explanations.<br>Use the sidebar to explore each formula and operational module.</p>
+  </div>
+
+  <div class="stats-grid" id="home-stats">
+    <div class="stat-card red">
+      <div class="stat-label">SKUs in Red Zone</div>
+      <div class="stat-value" id="hs-red">2</div>
+      <div class="stat-desc">Require immediate production</div>
+    </div>
+    <div class="stat-card grn">
+      <div class="stat-label">SKUs in Green Zone</div>
+      <div class="stat-value" id="hs-grn">1</div>
+      <div class="stat-desc">No action needed today</div>
+    </div>
+    <div class="stat-card teal">
+      <div class="stat-label">Avg Buffer Penetration</div>
+      <div class="stat-value" id="hs-avg">55.4%</div>
+      <div class="stat-desc">Across all 5 SKUs</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="stat-label">VFFS Capacity Today</div>
+      <div class="stat-value">12,075</div>
+      <div class="stat-desc">Pouches available</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-header">
+      <div><div class="card-title">📊 Live Production Priority Board</div><div class="card-sub">Sorted by Buffer Penetration % — highest urgency first</div></div>
+      <button class="btn btn-primary btn-sm" onclick="showPage('production',document.querySelector('.nav-item:nth-child(12)'))">Open Full Board →</button>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="priority-table" id="home-board">
+      <thead><tr>
+        <th>Rank</th><th>SKU</th><th>Target</th><th>IP</th><th>BP%</th><th>SR%</th><th>Zone</th><th>Buffer Bar</th>
+      </tr></thead>
+      <tbody id="home-board-body"></tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card card-sm">
+      <div class="section-title" style="color:var(--orange)">What is TOC?</div>
+      <p style="font-size:14px;color:#CBD5E1;line-height:1.7">Theory of Constraints (TOC) is a management philosophy by Dr. Eliyahu Goldratt. <strong style="color:var(--white)">The big idea:</strong> every system has ONE single bottleneck that limits total output. Fix that one thing first. At Chaizup, the bottleneck is the <strong style="color:var(--orange)">VFFS (Vertical Form Fill Seal)</strong> pouch-filling machine.</p>
+      <div class="divider" style="margin:16px 0"></div>
+      <p style="font-size:13px;color:var(--muted)">🔩 VFFS = Vertical Form Fill Seal — fills and seals premix tea pouches at ~35/min</p>
+    </div>
+    <div class="card card-sm">
+      <div class="section-title" style="color:var(--teal)">Why Buffer Management?</div>
+      <p style="font-size:14px;color:#CBD5E1;line-height:1.7">Traditional FMCG companies use <strong style="color:#FCA5A5">forecasts</strong> — wrong 30–40% of the time. This creates the bimodal trap: stocked out on fast movers, excess on slow movers. TOC replaces forecasting with <strong style="color:var(--teal)">Buffer Management</strong> — replenish exactly what was consumed today.</p>
+      <div class="divider" style="margin:16px 0"></div>
+      <p style="font-size:13px;color:var(--muted)">✅ 30–45% less inventory · 97%+ fill rate · Zero forecast required</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: GLOSSARY
+════════════════════════ -->
+<div id="page-glossary" class="page">
+  <div class="page-header">
+    <div class="tag">Reference</div>
+    <h2>Complete TOC Glossary</h2>
+    <p>Every term used in TOC Buffer Management — plain English with Chaizup context.</p>
+  </div>
+  <div class="grid-2" id="glossary-grid"></div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: F1 — TARGET BUFFER
+════════════════════════ -->
+<div id="page-f1" class="page">
+  <div class="page-header">
+    <div class="tag">Formula 1</div>
+    <h2>Target Buffer Sizing</h2>
+    <p>How big should the buffer be? This foundational formula determines the maximum stock to hold for each SKU or material.</p>
+  </div>
+  <div class="concept-box orange">
+    <div class="concept-label">Concept</div>
+    <div class="concept-text">A buffer is a planned safety cushion of stock. It protects Chaizup from two types of variability: <strong style="color:white">demand variability</strong> (customers buy more or less than expected) and <strong style="color:white">supply variability</strong> (supplier delivers late or short). The larger the variability, the larger the buffer needed.</div>
+    <div class="concept-formula">Target Buffer = ADU × RLT × VF</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">🎛️ Buffer Calculator</div></div>
+      <div class="input-group">
+        <label class="input-label">ADU — Average Daily Usage <span>(units/day)</span></label>
+        <input class="inp" type="number" id="f1-adu" value="200" min="1" oninput="calcF1()">
+        <div class="input-hint">Rolling 90-day average of daily shipments. Masala Tea 1kg = 200 units/day.</div>
+      </div>
+      <div class="input-group">
+        <label class="input-label">RLT — Replenishment Lead Time <span>(days)</span></label>
+        <input class="inp" type="number" id="f1-rlt" value="3" min="0.5" step="0.5" oninput="calcF1()">
+        <div class="input-hint">FG: Blend+Pack+QC+Move. RM Tea Dust: PO to receipt.</div>
+      </div>
+      <div class="input-group">
+        <label class="input-label">VF — Variability Factor</label>
+        <div class="range-wrap">
+          <input type="range" id="f1-vf" min="1.0" max="2.0" step="0.05" value="1.5" oninput="calcF1()">
+          <div class="range-val" id="f1-vf-val">1.5</div>
+        </div>
+        <div class="input-hint">1.0–1.3 = stable demand/supply · 1.3–1.6 = moderate · 1.6–2.0 = volatile</div>
+      </div>
+      <div class="divider"></div>
+      <div class="formula-breakdown" id="f1-breakdown">
+        <div class="formula-part"><div class="fp-value" id="f1-b-adu">200</div><div class="fp-label">ADU</div></div>
+        <div class="formula-op">×</div>
+        <div class="formula-part"><div class="fp-value" id="f1-b-rlt">3</div><div class="fp-label">RLT</div></div>
+        <div class="formula-op">×</div>
+        <div class="formula-part"><div class="fp-value" id="f1-b-vf">1.5</div><div class="fp-label">VF</div></div>
+        <div class="formula-op">=</div>
+        <div class="formula-equals"><div class="fp-value" id="f1-b-result">900</div><div class="fp-label">Target Buffer</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 Buffer Zone Thresholds</div></div>
+      <div class="result-box" style="margin-bottom:20px">
+        <div class="result-label">Target Buffer Size</div>
+        <div class="result-value" id="f1-target">900</div>
+        <div class="result-unit">units</div>
+      </div>
+      <div class="grid-3" style="gap:16px;margin-bottom:20px">
+        <div style="background:var(--red-dim);border:1px solid rgba(239,68,68,0.3);border-radius:12px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:var(--red);font-weight:800;margin-bottom:6px">🔴 RED ZONE</div>
+          <div style="font-family:var(--font-head);font-size:20px;font-weight:800;color:var(--red)" id="f1-red-range">0–297</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">BP% > 67%</div>
+        </div>
+        <div style="background:var(--yel-dim);border:1px solid rgba(245,158,11,0.3);border-radius:12px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:var(--yel);font-weight:800;margin-bottom:6px">🟡 YELLOW</div>
+          <div style="font-family:var(--font-head);font-size:20px;font-weight:800;color:var(--yel)" id="f1-yel-range">297–594</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">BP% 33–67%</div>
+        </div>
+        <div style="background:var(--grn-dim);border:1px solid rgba(16,185,129,0.3);border-radius:12px;padding:16px;text-align:center">
+          <div style="font-size:11px;color:var(--grn);font-weight:800;margin-bottom:6px">🟢 GREEN</div>
+          <div style="font-family:var(--font-head);font-size:20px;font-weight:800;color:var(--grn)" id="f1-grn-range">594–900</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">BP% 0–33%</div>
+        </div>
+      </div>
+      <div class="alert alert-blue">
+        <strong>📌 VF Quick Reference:</strong><br><br>
+        1.1–1.3 = Sugar (stable local supplier)<br>
+        1.3–1.5 = Milk Powder (standard variability)<br>
+        1.5–1.7 = Tea Dust (moderate demand swings)<br>
+        1.7–2.0 = Cardamom (volatile pricing, seasonal)
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">📋 All Chaizup FG Buffers</div><div class="card-sub">Pre-configured with default values</div></div>
+    <div style="overflow-x:auto">
+    <table class="priority-table">
+      <thead><tr><th>SKU</th><th>ADU</th><th>RLT</th><th>VF</th><th>Target Buffer</th><th>Red &lt;33%</th><th>Yellow 33–66%</th><th>Green &gt;66%</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Masala Tea 1kg</strong></td><td>200</td><td>3d</td><td>1.5</td><td><strong style="color:var(--orange)">900</strong></td><td style="color:var(--red)">0–297</td><td style="color:var(--yel)">297–594</td><td style="color:var(--grn)">594–900</td></tr>
+        <tr><td><strong>Masala Tea 500g</strong></td><td>350</td><td>3d</td><td>1.5</td><td><strong style="color:var(--orange)">1,575</strong></td><td style="color:var(--red)">0–520</td><td style="color:var(--yel)">520–1,040</td><td style="color:var(--grn)">1,040–1,575</td></tr>
+        <tr><td><strong>Masala Tea 200g</strong></td><td>500</td><td>3d</td><td>1.5</td><td><strong style="color:var(--orange)">2,250</strong></td><td style="color:var(--red)">0–743</td><td style="color:var(--yel)">743–1,485</td><td style="color:var(--grn)">1,485–2,250</td></tr>
+        <tr><td><strong>Ginger Tea 500g</strong></td><td>180</td><td>3d</td><td>1.5</td><td><strong style="color:var(--orange)">810</strong></td><td style="color:var(--red)">0–267</td><td style="color:var(--yel)">267–535</td><td style="color:var(--grn)">535–810</td></tr>
+        <tr><td><strong>Cardamom Tea 200g</strong></td><td>280</td><td>3d</td><td>1.5</td><td><strong style="color:var(--orange)">1,260</strong></td><td style="color:var(--red)">0–416</td><td style="color:var(--yel)">416–832</td><td style="color:var(--grn)">832–1,260</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: F2 — INVENTORY POSITION
+════════════════════════ -->
+<div id="page-f2" class="page">
+  <div class="page-header">
+    <div class="tag">Formula 2</div>
+    <h2>Inventory Position (IP)</h2>
+    <p>Your TRUE stock level — not just what is on the shelf, but everything that counts toward future supply.</p>
+  </div>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('f2','fg')">📦 Finished Goods (FG)</button>
+    <button class="tab" onclick="switchTab('f2','rm')">🏗️ Raw / Packaging Material</button>
+  </div>
+
+  <div id="f2-fg" class="tab-content active">
+    <div class="concept-box">
+      <div class="concept-label">Concept — FG Inventory Position</div>
+      <div class="concept-text">On-hand stock alone is misleading. WIP (work in progress — product on the VFFS line) will be available very soon, so it counts. Backorders (already promised to distributors) are spoken for and must be deducted. True IP tells you exactly how much demand you can actually fill.</div>
+      <div class="concept-formula">IP (FG) = On-Hand + WIP − Backorders</div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header"><div class="card-title">🎛️ FG Position Calculator</div></div>
+        <div class="input-group">
+          <label class="input-label">On-Hand Stock <span>(units in warehouse)</span></label>
+          <input class="inp" type="number" id="f2-oh" value="180" min="0" oninput="calcF2FG()">
+          <div class="input-hint">QC-released, physically in finished goods store, available to ship.</div>
+        </div>
+        <div class="input-group">
+          <label class="input-label">WIP — Work In Progress <span>(units on VFFS now)</span></label>
+          <input class="inp" type="number" id="f2-wip" value="50" min="0" oninput="calcF2FG()">
+          <div class="input-hint">Product currently being filled and sealed on the VFFS line. Will be available shortly.</div>
+        </div>
+        <div class="input-group">
+          <label class="input-label">Backorders <span>(units already promised)</span></label>
+          <input class="inp" type="number" id="f2-bo" value="30" min="0" oninput="calcF2FG()">
+          <div class="input-hint">Confirmed distributor orders awaiting dispatch — these units are spoken for.</div>
+        </div>
+        <div class="divider"></div>
+        <div class="formula-breakdown">
+          <div class="formula-part"><div class="fp-value" id="f2-b-oh">180</div><div class="fp-label">On-Hand</div></div>
+          <div class="formula-op">+</div>
+          <div class="formula-part"><div class="fp-value" id="f2-b-wip">50</div><div class="fp-label">WIP</div></div>
+          <div class="formula-op">−</div>
+          <div class="formula-part"><div class="fp-value" id="f2-b-bo">30</div><div class="fp-label">Backorders</div></div>
+          <div class="formula-op">=</div>
+          <div class="formula-equals"><div class="fp-value" id="f2-fg-result">200</div><div class="fp-label">IP (FG)</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">📊 Position Analysis</div></div>
+        <div class="result-box" style="margin-bottom:24px">
+          <div class="result-label">Inventory Position</div>
+          <div class="result-value" id="f2-fg-display">200</div>
+          <div class="result-unit">units</div>
+        </div>
+        <div class="input-group">
+          <label class="input-label">Target Buffer <span>(from Formula 1)</span></label>
+          <input class="inp" type="number" id="f2-target" value="900" oninput="calcF2FG()">
+        </div>
+        <div id="f2-fg-analysis"></div>
+        <div class="alert alert-blue" style="margin-top:20px">
+          <strong>⚠️ Common Mistake:</strong> Looking only at On-Hand (180) would suggest the buffer is 80% penetrated. But the true IP (200) including WIP shows 77.8% penetration. Always use IP, never just On-Hand.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="f2-rm" class="tab-content">
+    <div class="concept-box">
+      <div class="concept-label">Concept — RM/PM Inventory Position</div>
+      <div class="concept-text">For raw and packaging materials, "On-Order" replaces WIP — materials that are ordered and in transit are real supply already committed. "Committed" (allocated to released production work orders) must be deducted because those materials are already spoken for and unavailable for future orders.</div>
+      <div class="concept-formula">IP (RM/PM) = On-Hand + On-Order − Committed</div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header"><div class="card-title">🎛️ RM/PM Position Calculator</div></div>
+        <div class="input-group">
+          <label class="input-label">On-Hand Stock <span>(kg or units in RM store)</span></label>
+          <input class="inp" type="number" id="f2-rm-oh" value="1800" min="0" oninput="calcF2RM()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">On-Order <span>(in transit from supplier)</span></label>
+          <input class="inp" type="number" id="f2-rm-oo" value="2000" min="0" oninput="calcF2RM()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">Committed to Production <span>(allocated to work orders)</span></label>
+          <input class="inp" type="number" id="f2-rm-com" value="1500" min="0" oninput="calcF2RM()">
+        </div>
+        <div class="divider"></div>
+        <div class="formula-breakdown">
+          <div class="formula-part"><div class="fp-value" id="f2-rm-b-oh">1800</div><div class="fp-label">On-Hand</div></div>
+          <div class="formula-op">+</div>
+          <div class="formula-part"><div class="fp-value" id="f2-rm-b-oo">2000</div><div class="fp-label">On-Order</div></div>
+          <div class="formula-op">−</div>
+          <div class="formula-part"><div class="fp-value" id="f2-rm-b-com">1500</div><div class="fp-label">Committed</div></div>
+          <div class="formula-op">=</div>
+          <div class="formula-equals"><div class="fp-value" id="f2-rm-result">2300</div><div class="fp-label">IP (RM)</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">📊 RM Position Analysis</div></div>
+        <div class="result-box" style="margin-bottom:24px">
+          <div class="result-label">RM Inventory Position</div>
+          <div class="result-value" id="f2-rm-display">2,300</div>
+          <div class="result-unit">kg / units</div>
+        </div>
+        <div class="input-group">
+          <label class="input-label">RM Target Buffer</label>
+          <input class="inp" type="number" id="f2-rm-target" value="7200" oninput="calcF2RM()">
+          <div class="input-hint">Tea Dust (CTC): 450 ADU × 10d × 1.6 VF = 7,200 kg</div>
+        </div>
+        <div id="f2-rm-analysis"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: F3 — BUFFER PENETRATION
+════════════════════════ -->
+<div id="page-f3" class="page">
+  <div class="page-header">
+    <div class="tag">Formula 3</div>
+    <h2>Buffer Penetration % & Stock Remaining %</h2>
+    <p>THE most important number in the system. Two ways to measure the same thing — both correct, opposite directions.</p>
+  </div>
+  <div class="concept-box orange">
+    <div class="concept-label">Key Insight — Two Methods, Same Conclusion</div>
+    <div class="concept-text"><strong style="color:var(--orange)">Method A (SR%)</strong> asks "How FULL is the buffer?" — High number = safe. Low number = danger.<br><strong style="color:var(--teal)">Method B (BP%)</strong> asks "How EMPTY is the buffer?" — Low number = safe. High number = danger.<br><br>They always add up to 100%. SR% + BP% = 100% (always, without exception).</div>
+    <div class="concept-formula">BP% = (Target − IP) ÷ Target × 100 &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp; SR% = IP ÷ Target × 100 &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp; BP% + SR% = 100%</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">🎛️ Buffer Zone Calculator</div></div>
+      <div class="input-group">
+        <label class="input-label">Target Buffer <span>(from Formula 1)</span></label>
+        <input class="inp" type="number" id="f3-target" value="900" min="1" oninput="calcF3()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Inventory Position <span>(from Formula 2)</span></label>
+        <input class="inp" type="number" id="f3-ip" value="200" min="0" oninput="calcF3()">
+      </div>
+      <div class="divider"></div>
+      <div class="grid-2" style="gap:20px">
+        <div>
+          <div style="font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px">BP% — How Empty?</div>
+          <div class="result-box" style="border-color:rgba(249, 115, 22, 0.4)">
+            <div class="result-label" style="text-transform:none">(Target − IP) ÷ Target</div>
+            <div class="result-value" id="f3-bp" style="color:var(--orange)">77.8</div>
+            <div class="result-unit">% consumed</div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px">SR% — How Full?</div>
+          <div class="result-box" style="border-color:rgba(20, 184, 166, 0.4)">
+            <div class="result-label" style="text-transform:none">IP ÷ Target</div>
+            <div class="result-value" id="f3-sr" style="color:var(--teal)">22.2</div>
+            <div class="result-unit">% remaining</div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:24px;font-size:14px;color:var(--muted)">
+        <span id="f3-bp-v" style="color:var(--orange);font-weight:bold">77.8</span>% + <span id="f3-sr-v" style="color:var(--teal);font-weight:bold">22.2</span>% = <strong style="color:var(--white);font-size:16px">100%</strong> ✓
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 Visual Zone Status</div></div>
+      <div class="buffer-bar-wrap" style="margin-top:0">
+        <div class="buffer-bar-label"><span>0% (Stockout)</span><span id="f3-bar-label">Buffer Penetration %</span><span>100% (Full)</span></div>
+        <div class="buffer-bar-track">
+          <div class="buffer-bar-fill" id="f3-bar-fill-sr" style="width:22.2%;background:linear-gradient(90deg,#B91C1C,#EF4444)">SR: 22.2%</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">Stock Remaining (full portion of tank)</div>
+      </div>
+      <div class="zone-display" id="f3-zone" style="margin:24px 0">🔴 RED ZONE — Produce/Order IMMEDIATELY</div>
+      <div id="f3-action-box"></div>
+      <div class="divider"></div>
+      <div class="section-title">Zone Reference</div>
+      <table class="priority-table" style="font-size:13px">
+        <thead><tr><th>Zone</th><th>BP%</th><th>SR%</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><span class="zone-pill green">🟢 GREEN</span></td><td style="color:var(--grn);font-weight:600">0–33%</td><td style="color:var(--grn);font-weight:600">66–100%</td><td>No action needed</td></tr>
+          <tr><td><span class="zone-pill yellow">🟡 YELLOW</span></td><td style="color:var(--yel);font-weight:600">33–67%</td><td style="color:var(--yel);font-weight:600">33–67%</td><td>Plan replenishment</td></tr>
+          <tr><td><span class="zone-pill red">🔴 RED</span></td><td style="color:var(--red);font-weight:600">67–100%</td><td style="color:var(--red);font-weight:600">0–33%</td><td>Produce/Order NOW</td></tr>
+          <tr><td><span class="zone-pill black">⚫ BLACK</span></td><td style="color:var(--muted);font-weight:600">100%+</td><td style="color:var(--muted);font-weight:600">0%</td><td>EMERGENCY</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: F4 — ORDER QUANTITY
+════════════════════════ -->
+<div id="page-f4" class="page">
+  <div class="page-header">
+    <div class="tag">Formula 4</div>
+    <h2>Replenishment Quantity</h2>
+    <p>How much to produce or order? The answer: exactly enough to restore the buffer to its target. No more, no less.</p>
+  </div>
+  <div class="concept-box">
+    <div class="concept-label">Concept — Pull System</div>
+    <div class="concept-text">TOC uses a <strong>PULL system</strong> — you only replenish what was actually consumed. This is the opposite of traditional MRP which uses a PUSH system (forecast next month, produce in advance). By ordering exactly Target − IP, Chaizup avoids both overstocking and understocking. The buffer then naturally refills to 100%.</div>
+    <div class="concept-formula">Order Quantity = Target Buffer − Inventory Position</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">🎛️ Order Quantity Calculator</div></div>
+      <div class="input-group">
+        <label class="input-label">SKU / Material Name</label>
+        <input class="inp" type="text" id="f4-sku" value="Masala Tea 1kg" placeholder="e.g. Masala Tea 1kg">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Target Buffer <span>(from Formula 1)</span></label>
+        <input class="inp" type="number" id="f4-target" value="900" min="1" oninput="calcF4()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Inventory Position <span>(from Formula 2)</span></label>
+        <input class="inp" type="number" id="f4-ip" value="200" min="0" oninput="calcF4()">
+      </div>
+      <div class="divider"></div>
+      <div class="formula-breakdown">
+        <div class="formula-part"><div class="fp-value" id="f4-b-t">900</div><div class="fp-label">Target</div></div>
+        <div class="formula-op">−</div>
+        <div class="formula-part"><div class="fp-value" id="f4-b-ip">200</div><div class="fp-label">IP</div></div>
+        <div class="formula-op">=</div>
+        <div class="formula-equals"><div class="fp-value" id="f4-result">700</div><div class="fp-label">Order Qty</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 Replenishment Analysis</div></div>
+      <div class="result-box" style="margin-bottom:24px">
+        <div class="result-label">Units to Produce / Order</div>
+        <div class="result-value" id="f4-display">700</div>
+        <div class="result-unit">units</div>
+      </div>
+      <div id="f4-analysis"></div>
+      <div class="alert alert-yel" style="margin-top:20px">
+        <strong>⚠️ Never Over-Order:</strong> Ordering more than Target − IP wastes cash and creates the very excess inventory problem TOC is designed to fix. Always use exactly this formula.
+      </div>
+    </div>
+  </div>
+  <!-- Multi-SKU table -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">📋 Today's Order Quantities — All SKUs</div><div class="card-sub">March 3 example — sorted by BP%</div></div>
+    <div style="overflow-x:auto">
+    <table class="priority-table">
+      <thead><tr><th>SKU</th><th>Target</th><th>On-Hand</th><th>WIP</th><th>Backord</th><th>IP</th><th>BP%</th><th>Zone</th><th>Order Qty</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Cardamom Tea 200g</strong></td><td>1,260</td><td>120</td><td>80</td><td>50</td><td>150</td><td style="color:var(--red);font-weight:700">88.1%</td><td><span class="zone-pill red">🔴 RED</span></td><td><strong style="color:var(--orange)">1,110 units</strong></td><td style="color:var(--red);font-weight:700">PRODUCE NOW</td></tr>
+        <tr><td><strong>Masala Tea 1kg</strong></td><td>900</td><td>180</td><td>50</td><td>30</td><td>200</td><td style="color:var(--red);font-weight:700">77.8%</td><td><span class="zone-pill red">🔴 RED</span></td><td><strong style="color:var(--orange)">700 units</strong></td><td style="color:var(--red);font-weight:700">PRODUCE NEXT</td></tr>
+        <tr><td><strong>Ginger Tea 500g</strong></td><td>810</td><td>280</td><td>100</td><td>20</td><td>360</td><td style="color:var(--yel);font-weight:700">55.6%</td><td><span class="zone-pill yellow">🟡 YELLOW</span></td><td><strong style="color:var(--orange)">450 units</strong></td><td style="color:var(--yel)">This week</td></tr>
+        <tr><td><strong>Masala Tea 500g</strong></td><td>1,575</td><td>800</td><td>200</td><td>50</td><td>950</td><td style="color:var(--yel);font-weight:700">39.7%</td><td><span class="zone-pill yellow">🟡 YELLOW</span></td><td><strong style="color:var(--orange)">625 units</strong></td><td style="color:var(--yel)">Tomorrow</td></tr>
+        <tr><td><strong>Masala Tea 200g</strong></td><td>2,250</td><td>1,600</td><td>300</td><td>0</td><td>1,900</td><td style="color:var(--grn);font-weight:700">15.6%</td><td><span class="zone-pill green">🟢 GREEN</span></td><td><strong style="color:var(--grn)">350 units</strong></td><td style="color:var(--grn)">Wait</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: F5 — T/CU
+════════════════════════ -->
+<div id="page-f5" class="page">
+  <div class="page-header">
+    <div class="tag">Formula 5</div>
+    <h2>Throughput per Constraint Unit (T/CU)</h2>
+    <p>The tie-breaker. When two SKUs have the same BP%, which earns Chaizup more money per minute of VFFS time?</p>
+  </div>
+  <div class="concept-box orange">
+    <div class="concept-label">Concept</div>
+    <div class="concept-text"><strong>Throughput (T)</strong> = Selling Price minus ONLY truly variable costs (RM + PM). Labour, electricity, rent, and machine depreciation are <strong>NOT deducted</strong> — they are fixed costs that don't change regardless of which SKU you produce. They cannot affect the relative priority of one SKU over another.<br><br><strong>T/CU</strong> = Rupees earned per minute of VFFS (bottleneck) time. Higher T/CU = runs first when BP% is tied.</div>
+    <div class="concept-formula">T = Price − RM Cost − PM Cost &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp; T/CU = T ÷ Constraint Minutes per Unit</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">🎛️ T/CU Calculator</div></div>
+      <div class="input-group">
+        <label class="input-label">SKU Name</label>
+        <input class="inp" type="text" id="f5-sku" value="Masala Tea 1kg" placeholder="SKU name">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Selling Price <span>(₹ per unit)</span></label>
+        <input class="inp" type="number" id="f5-price" value="380" min="0" oninput="calcF5()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">RM Cost <span>(₹ per unit — ingredients only)</span></label>
+        <input class="inp" type="number" id="f5-rm" value="160" min="0" oninput="calcF5()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">PM Cost <span>(₹ per unit — pouch + carton)</span></label>
+        <input class="inp" type="number" id="f5-pm" value="12" min="0" oninput="calcF5()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">VFFS Speed <span>(pouches per minute)</span></label>
+        <input class="inp" type="number" id="f5-speed" value="30" min="1" oninput="calcF5()">
+        <div class="input-hint">Masala 1kg = 30/min, 500g = 40/min, 200g = 45/min</div>
+      </div>
+      <div class="divider"></div>
+      <div class="formula-breakdown">
+        <div class="formula-part"><div class="fp-value" id="f5-b-price">380</div><div class="fp-label">Price</div></div>
+        <div class="formula-op">−</div>
+        <div class="formula-part"><div class="fp-value" id="f5-b-tvc">172</div><div class="fp-label">RM+PM</div></div>
+        <div class="formula-op">=</div>
+        <div class="formula-part"><div class="fp-value" id="f5-b-t" style="color:var(--teal)">208</div><div class="fp-label">T/unit</div></div>
+        <div class="formula-op">÷</div>
+        <div class="formula-part"><div class="fp-value" id="f5-b-min">0.033</div><div class="fp-label">min/unit</div></div>
+        <div class="formula-op">=</div>
+        <div class="formula-equals"><div class="fp-value" id="f5-result">6,242</div><div class="fp-label">₹/min</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 T/CU Comparison — All SKUs</div></div>
+      <div class="result-box" style="margin-bottom:24px">
+        <div class="result-label">T/CU for this SKU</div>
+        <div class="result-value" id="f5-display">₹6,242</div>
+        <div class="result-unit">per VFFS minute</div>
+      </div>
+      <table class="priority-table" style="font-size:12px">
+        <thead><tr><th>SKU</th><th>T/unit</th><th>min/unit</th><th style="color:var(--orange)">T/CU (₹/min)</th><th>Rank</th></tr></thead>
+        <tbody>
+          <tr><td>Masala Tea 1kg</td><td>₹208</td><td>0.033</td><td><strong style="color:var(--orange)">₹6,303</strong></td><td>🥇 #1</td></tr>
+          <tr><td>Masala Tea 500g</td><td>₹121</td><td>0.025</td><td><strong style="color:var(--orange)">₹4,840</strong></td><td>🥈 #2</td></tr>
+          <tr><td>Ginger Tea 500g</td><td>₹114</td><td>0.025</td><td><strong style="color:var(--orange)">₹4,560</strong></td><td>🥉 #3</td></tr>
+          <tr><td>Masala Tea 200g</td><td>₹54</td><td>0.022</td><td><strong style="color:var(--orange)">₹2,454</strong></td><td>#4</td></tr>
+          <tr><td>Cardamom Tea 200g</td><td>₹49</td><td>0.025</td><td><strong style="color:var(--orange)">₹1,960</strong></td><td>#5</td></tr>
+        </tbody>
+      </table>
+      <div class="alert alert-yel" style="margin-top:20px">
+        <strong>⚠️ Remember:</strong> BP% is ALWAYS the primary sort. T/CU is used ONLY when two SKUs have the same (or very close) BP%. Even though Cardamom Tea has the lowest T/CU, if its BP% is 88.1% vs Masala Tea's 77.8%, Cardamom Tea runs first.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: PRODUCTION PRIORITY
+════════════════════════ -->
+<div id="page-production" class="page">
+  <div class="page-header">
+    <div class="tag">Operations</div>
+    <h2>Production Priority Board</h2>
+    <p>Every morning at 7:00 AM. Enter actual inventory data to get today's VFFS run sequence.</p>
+  </div>
+  <div class="concept-box">
+    <div class="concept-label">How It Works</div>
+    <div class="concept-text">Step 1: Calculate IP for each SKU (On-Hand + WIP − Backorders). Step 2: Calculate BP% = (Target − IP) ÷ Target × 100. Step 3: Sort highest BP% first. Step 4: If tied, use T/CU. Step 5: Calculate Order Qty = Target − IP. The VFFS runs in this sequence. No guesswork, no politics.</div>
+  </div>
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-header">
+      <div class="card-title">🎛️ Enter Today's Inventory</div>
+      <button class="btn btn-primary btn-sm" onclick="calcProduction()">▶ Calculate Priority</button>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="priority-table" id="prod-input-table">
+      <thead><tr><th>SKU</th><th>Target</th><th>On-Hand</th><th>WIP</th><th>Backorders</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Masala Tea 1kg</strong></td><td>900</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="0" data-field="oh" value="180" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="0" data-field="wip" value="50" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="0" data-field="bo" value="30" oninput="calcProduction()"></td></tr>
+        <tr><td><strong>Masala Tea 500g</strong></td><td>1575</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="1" data-field="oh" value="800" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="1" data-field="wip" value="200" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="1" data-field="bo" value="50" oninput="calcProduction()"></td></tr>
+        <tr><td><strong>Masala Tea 200g</strong></td><td>2250</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="2" data-field="oh" value="1600" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="2" data-field="wip" value="300" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="2" data-field="bo" value="0" oninput="calcProduction()"></td></tr>
+        <tr><td><strong>Ginger Tea 500g</strong></td><td>810</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="3" data-field="oh" value="280" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="3" data-field="wip" value="100" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="3" data-field="bo" value="20" oninput="calcProduction()"></td></tr>
+        <tr><td><strong>Cardamom Tea 200g</strong></td><td>1260</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="4" data-field="oh" value="120" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="4" data-field="wip" value="80" oninput="calcProduction()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-sku="4" data-field="bo" value="50" oninput="calcProduction()"></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">📊 Today's VFFS Run Sequence</div><div class="card-sub">Run in this exact order — highest BP% first</div></div>
+    <div style="overflow-x:auto">
+    <table class="priority-table" id="prod-output-table">
+      <thead><tr><th>Rank</th><th>SKU</th><th>Target</th><th>IP</th><th>BP%</th><th>SR%</th><th>Zone</th><th>Order Qty</th><th>Buffer Bar</th></tr></thead>
+      <tbody id="prod-output-body"></tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: PROCUREMENT
+════════════════════════ -->
+<div id="page-procurement" class="page">
+  <div class="page-header">
+    <div class="tag">Operations</div>
+    <h2>Procurement Planner</h2>
+    <p>At 7:30 AM — enter RM/PM inventory data to get today's purchase order action list.</p>
+  </div>
+  <div class="concept-box">
+    <div class="concept-label">Same Logic as Production — Different Terms</div>
+    <div class="concept-text">For RM/PM: IP = On-Hand + On-Order − Committed. Target Buffer = ADU × RLT × VF. BP% drives urgency. Order Qty = Target − IP. The only difference: you raise a Purchase Order to a supplier instead of a Production Work Order to the factory floor.</div>
+  </div>
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-header"><div class="card-title">🎛️ Enter RM/PM Inventory</div><button class="btn btn-primary btn-sm" onclick="calcProcurement()">▶ Generate Action List</button></div>
+    <div style="overflow-x:auto">
+    <table class="priority-table" id="proc-input-table">
+      <thead><tr><th>Material</th><th>Target (kg/u)</th><th>On-Hand</th><th>On-Order</th><th>Committed</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Cardamom Powder</strong></td><td>833</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="0" data-f="oh" value="80" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="0" data-f="oo" value="0" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="0" data-f="com" value="60" oninput="calcProcurement()"></td></tr>
+        <tr><td><strong>Tea Dust (CTC)</strong></td><td>7200</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="1" data-f="oh" value="1800" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="1" data-f="oo" value="2000" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="1" data-f="com" value="1500" oninput="calcProcurement()"></td></tr>
+        <tr><td><strong>Milk Powder</strong></td><td>11250</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="2" data-f="oh" value="4500" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="2" data-f="oo" value="3000" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="2" data-f="com" value="1200" oninput="calcProcurement()"></td></tr>
+        <tr><td><strong>200g Pouches</strong></td><td>21600</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="3" data-f="oh" value="9000" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="3" data-f="oo" value="8000" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="3" data-f="com" value="3500" oninput="calcProcurement()"></td></tr>
+        <tr><td><strong>Sugar</strong></td><td>9750</td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="4" data-f="oh" value="6000" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="4" data-f="oo" value="3000" oninput="calcProcurement()"></td>
+          <td><input class="inp" type="number" style="width:100px;padding:8px 10px;font-size:13px" data-rm="4" data-f="com" value="1200" oninput="calcProcurement()"></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">📋 Procurement Action List</div></div>
+    <div style="overflow-x:auto">
+    <table class="priority-table" id="proc-output-table">
+      <thead><tr><th>Material</th><th>Target</th><th>IP</th><th>BP%</th><th>Zone</th><th>PO Quantity</th><th>Freight</th><th>Action</th></tr></thead>
+      <tbody id="proc-output-body"></tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: DBM
+════════════════════════ -->
+<div id="page-dbm" class="page">
+  <div class="page-header">
+    <div class="tag">Dynamic Buffer Management</div>
+    <h2>DBM — Self-Correcting Buffers</h2>
+    <p>Buffers set on day one will eventually become wrong. DBM automatically adjusts them based on real behaviour — no forecasts.</p>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="concept-box" style="margin-bottom:24px">
+        <div class="concept-label">🔴 Too Much Red (TMR)</div>
+        <div class="concept-text">If stock stays in the Red zone for more than 20% of the RLT in a single replenishment cycle, the buffer is too small. Stockouts are happening or near. Increase buffer by 33%.</div>
+        <div class="concept-formula" style="font-size:14px">New Buffer = Current Buffer × 1.33</div>
+      </div>
+      <div class="input-group">
+        <label class="input-label">Current Buffer Size</label>
+        <input class="inp" type="number" id="dbm-tmr-buf" value="900" oninput="calcDBM_TMR()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">RLT (days)</label>
+        <input class="inp" type="number" id="dbm-tmr-rlt" value="3" oninput="calcDBM_TMR()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Days Spent in Red This Cycle</label>
+        <input class="inp" type="number" id="dbm-tmr-red-days" value="1.2" step="0.1" oninput="calcDBM_TMR()">
+      </div>
+      <div id="dbm-tmr-result"></div>
+    </div>
+    <div class="card">
+      <div class="concept-box" style="margin-bottom:24px">
+        <div class="concept-label" style="color:var(--grn)">🟢 Too Much Green (TMG)</div>
+        <div class="concept-text">If stock stays in the Green zone for 3 complete replenishment cycles, the buffer is too large. Cash is locked up unnecessarily. Decrease buffer by 33%.</div>
+        <div class="concept-formula" style="font-size:14px;border-left-color:var(--grn)">New Buffer = Current Buffer × 0.67</div>
+      </div>
+      <div class="input-group">
+        <label class="input-label">Current Buffer Size</label>
+        <input class="inp" type="number" id="dbm-tmg-buf" value="9750" oninput="calcDBM_TMG()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">RLT (days)</label>
+        <input class="inp" type="number" id="dbm-tmg-rlt" value="5" oninput="calcDBM_TMG()">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Consecutive Days in Green</label>
+        <input class="inp" type="number" id="dbm-tmg-grn-days" value="16" oninput="calcDBM_TMG()">
+      </div>
+      <div id="dbm-tmg-result"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:24px">
+    <div class="card-header"><div class="card-title">🧠 DBM Asymmetry Explained</div></div>
+    <div class="grid-2">
+      <div>
+        <p style="font-size:14px;color:#CBD5E1;line-height:1.7">DBM is deliberately <strong style="color:var(--orange)">asymmetric</strong>. Increasing the buffer triggers after just <strong>20% of RLT in Red</strong> (fast), but decreasing the buffer requires <strong>3 full cycles in Green</strong> (slow).</p>
+        <div class="divider" style="margin:16px 0"></div>
+        <p style="font-size:14px;color:#CBD5E1;line-height:1.7">This is intentional. The cost of a stockout — lost sales, angry distributors, emergency air freight, production downtime — almost always exceeds the cost of holding a little extra inventory. TOC protects the constraint.</p>
+      </div>
+      <div>
+        <table class="priority-table" style="font-size:13px">
+          <thead><tr><th>Trigger</th><th>Condition</th><th>Action</th><th>Speed</th></tr></thead>
+          <tbody>
+            <tr><td><span class="zone-pill red">TMR</span></td><td>>20% of RLT in Red</td><td>+33% buffer</td><td style="color:var(--red);font-weight:700">Fast ⚡</td></tr>
+            <tr><td><span class="zone-pill yellow">Normal</span></td><td>Oscillates Yellow</td><td>No change</td><td style="color:var(--yel)">Steady</td></tr>
+            <tr><td><span class="zone-pill green">TMG</span></td><td>3 full cycles Green</td><td>−33% buffer</td><td style="color:var(--grn)">Slow 🐢</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: DAF
+════════════════════════ -->
+<div id="page-daf" class="page">
+  <div class="page-header">
+    <div class="tag">Demand Adjustment Factor</div>
+    <h2>DAF — Seasonal Buffer Adjustment</h2>
+    <p>For predictable events like Diwali, summer slowdowns, and trade promotions — temporarily adjust buffers without touching DBM.</p>
+  </div>
+  <div class="concept-box orange">
+    <div class="concept-label">Concept</div>
+    <div class="concept-text">DBM adjusts buffers based on <em>past actual behaviour</em>. DAF adjusts buffers based on <em>known future events</em>. Set by the Supply Chain Manager at the monthly S&OP meeting. Applied temporarily for the event window, then reverted to the baseline buffer.</div>
+    <div class="concept-formula">Adjusted Buffer = Current Target Buffer × DAF</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">🎛️ DAF Calculator</div></div>
+      <div class="input-group">
+        <label class="input-label">Base Target Buffer <span>(current)</span></label>
+        <input class="inp" type="number" id="daf-base" value="900" oninput="calcDAF()">
+        <div class="input-hint">Masala Tea 1kg baseline = 900 units</div>
+      </div>
+      <div class="input-group">
+        <label class="input-label">Demand Adjustment Factor (DAF)</label>
+        <div class="range-wrap">
+          <input type="range" id="daf-factor" min="0.4" max="2.5" step="0.05" value="1.0" oninput="calcDAF()">
+          <div class="range-val" id="daf-factor-val">1.0×</div>
+        </div>
+      </div>
+      <div class="input-group">
+        <label class="input-label">Or select a preset event</label>
+        <select class="inp" onchange="setDAFPreset(this.value)">
+          <option value="1.0">Normal Operations (1.0×)</option>
+          <option value="1.6">Diwali Festival (1.6×)</option>
+          <option value="1.8">Trade Promotion (1.8×)</option>
+          <option value="1.3">Year-End Stocking (1.3×)</option>
+          <option value="0.7">Summer Slowdown (0.7×)</option>
+          <option value="0.85">Monsoon Dip (0.85×)</option>
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="formula-breakdown">
+        <div class="formula-part"><div class="fp-value" id="daf-b-base">900</div><div class="fp-label">Base Buffer</div></div>
+        <div class="formula-op">×</div>
+        <div class="formula-part"><div class="fp-value" id="daf-b-factor">1.0</div><div class="fp-label">DAF</div></div>
+        <div class="formula-op">=</div>
+        <div class="formula-equals"><div class="fp-value" id="daf-result">900</div><div class="fp-label">Adjusted Buffer</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 DAF Impact Analysis</div></div>
+      <div id="daf-analysis"></div>
+      <div class="divider"></div>
+      <div class="section-title">Chaizup DAF Calendar</div>
+      <table class="priority-table" style="font-size:13px">
+        <thead><tr><th>Event</th><th>DAF</th><th>Period</th><th>Impact on 900-unit buffer</th></tr></thead>
+        <tbody>
+          <tr><td>Diwali Festival</td><td style="color:var(--orange);font-weight:700">1.6×</td><td>Oct 15 – Nov 15</td><td style="color:var(--orange)">→ 1,440 units</td></tr>
+          <tr><td>Trade Promotion</td><td style="color:var(--orange);font-weight:700">1.8×</td><td>Any 2-week window</td><td style="color:var(--orange)">→ 1,620 units</td></tr>
+          <tr><td>Year-End Stocking</td><td style="color:var(--yel);font-weight:700">1.3×</td><td>Nov 15 – Dec 31</td><td style="color:var(--yel)">→ 1,170 units</td></tr>
+          <tr><td>Normal Ops</td><td style="color:var(--grn);font-weight:700">1.0×</td><td>All other periods</td><td style="color:var(--muted)">900 units (no change)</td></tr>
+          <tr><td>Monsoon Dip</td><td style="color:var(--teal);font-weight:700">0.85×</td><td>Jul 1 – Sep 30</td><td style="color:var(--teal)">→ 765 units</td></tr>
+          <tr><td>Summer Slowdown</td><td style="color:var(--teal);font-weight:700">0.7×</td><td>Apr 1 – Jun 30</td><td style="color:var(--teal)">→ 630 units</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════
+  PAGE: COMPARE
+════════════════════════ -->
+<div id="page-compare" class="page">
+  <div class="page-header">
+    <div class="tag">Analysis</div>
+    <h2>TOC vs Traditional MRP</h2>
+    <p>How every decision changes when you move from forecast-based planning to buffer-based management.</p>
+  </div>
+  <div class="grid-2" style="margin-bottom:24px">
+    <div style="background:var(--bg-card);border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-lg);padding:28px;text-align:center;box-shadow:var(--shadow)">
+      <div style="font-size:36px;margin-bottom:12px">❌</div>
+      <div style="font-family:var(--font-head);font-size:22px;font-weight:800;color:#FCA5A5">Traditional MRP</div>
+      <div style="font-size:14px;color:var(--muted);margin-top:4px">Forecast-Based · PUSH System</div>
+      <div style="margin-top:16px;font-size:14px;color:#FCA5A5;line-height:1.6">Forecast accuracy: 60–70%<br>Inventory: Bimodal trap<br>Response: Monthly planning cycle</div>
+    </div>
+    <div style="background:var(--bg-card);border:1px solid rgba(16,185,129,0.3);border-radius:var(--radius-lg);padding:28px;text-align:center;box-shadow:var(--shadow)">
+      <div style="font-size:36px;margin-bottom:12px">✅</div>
+      <div style="font-family:var(--font-head);font-size:22px;font-weight:800;color:#6EE7B7">TOC Buffer Management</div>
+      <div style="font-size:14px;color:var(--muted);margin-top:4px">Consumption-Based · PULL System</div>
+      <div style="margin-top:16px;font-size:14px;color:#6EE7B7;line-height:1.6">Forecast needed: None<br>Inventory: 30–45% less<br>Response: Daily replenishment signal</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">📊 Direct Comparison</div></div>
+    <div style="overflow-x:auto">
+    <table class="compare-table">
+      <thead><tr><th>Dimension</th><th class="old">❌ Traditional MRP</th><th class="new">✅ TOC Buffer Mgmt</th></tr></thead>
+      <tbody>
+        <tr><td>What drives production?</td><td class="old">Forecast: guess next month's sales</td><td class="new">BP%: produce what was actually consumed today</td></tr>
+        <tr><td>Planning approach</td><td class="old">PUSH — make products based on prediction</td><td class="new">PULL — make only when buffer is depleted</td></tr>
+        <tr><td>Batch sizing logic</td><td class="old">Economic Order Quantity (EOQ) — large batches</td><td class="new">Target − IP — exactly what was consumed</td></tr>
+        <tr><td>Safety stock</td><td class="old">Fixed static quantity, set once, rarely reviewed</td><td class="new">Dynamic 3-zone buffer, auto-adjusted by DBM</td></tr>
+        <tr><td>Priority system</td><td class="old">Due-date based: oldest order gets made first</td><td class="new">BP% based: most endangered buffer runs first</td></tr>
+        <tr><td>Demand variability</td><td class="old">Bullwhip Effect: 10% retail spike → 80% factory overproduction</td><td class="new">Buffers absorb variability at each layer</td></tr>
+        <tr><td>Forecast accuracy</td><td class="old">60–70% at SKU level. Wrong 1 in 3 times.</td><td class="new">No forecast needed. React to reality.</td></tr>
+        <tr><td>Inventory outcome</td><td class="old">Bimodal trap: too much wrong + stockouts of right</td><td class="new">Right-sized buffers. 97%+ fill rate.</td></tr>
+        <tr><td>Constraint awareness</td><td class="old">None. Every machine treated equally.</td><td class="new">VFFS identified and protected at all costs</td></tr>
+        <tr><td>System behaviour</td><td class="old">Nervous — plans change with every forecast update</td><td class="new">Stable — act by exception on Red items only</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <div class="alert alert-blue" style="margin-top:24px">
+    <strong>💡 Key Insight for the IT Team:</strong> TOC does not replace your ERP system. It replaces the PLANNING LOGIC on top of ERP. Your ERP still manages inventory records, purchase orders, and bills of materials. TOC replaces monthly forecasting spreadsheets and gut-feel decisions with a colour-coded daily priority engine.
+  </div>
+</div>
+
+  </div><!-- /content -->
+</main>
+</div><!-- /app -->
+
+<!-- ═══════════════════════════════════════════════════════
+  JAVASCRIPT (All Logic Remains Functionally Identical)
+═══════════════════════════════════════════════════════ -->
+<script>
+// ═══════ SKU DATA ═══════
+const SKUS = [
+  {name:'Masala Tea 1kg',    target:900,  tcu:6303, oh:180, wip:50,  bo:30},
+  {name:'Masala Tea 500g',   target:1575, tcu:4840, oh:800, wip:200, bo:50},
+  {name:'Masala Tea 200g',   target:2250, tcu:2454, oh:1600,wip:300, bo:0},
+  {name:'Ginger Tea 500g',   target:810,  tcu:4560, oh:280, wip:100, bo:20},
+  {name:'Cardamom Tea 200g', target:1260, tcu:1960, oh:120, wip:80,  bo:50},
+];
+const RMS = [
+  {name:'Cardamom Powder', target:833,   oh:80,   oo:0,    com:60,   unit:'kg'},
+  {name:'Tea Dust (CTC)',  target:7200,  oh:1800, oo:2000, com:1500, unit:'kg'},
+  {name:'Milk Powder',     target:11250, oh:4500, oo:3000, com:1200, unit:'kg'},
+  {name:'200g Pouches',    target:21600, oh:9000, oo:8000, com:3500, unit:'u'},
+  {name:'Sugar',           target:9750,  oh:6000, oo:3000, com:1200, unit:'kg'},
+];
+
+// ═══════ HELPERS ═══════
+function getZone(bp){
+  if(bp >= 100) return 'black';
+  if(bp >= 67)  return 'red';
+  if(bp >= 33)  return 'yellow';
+  return 'green';
+}
+function getZoneLabel(z){
+  const m = {black:'⚫ BLACK',red:'🔴 RED',yellow:'🟡 YELLOW',green:'🟢 GREEN'};
+  return m[z];
+}
+function getZoneAction(z, type='prod'){
+  const a = {
+    prod: {black:'EMERGENCY — ESCALATE',red:'PRODUCE NOW',yellow:'This week',green:'Wait — no action'},
+    proc: {black:'EMERGENCY — alt supplier',red:'ORDER NOW + AIR FREIGHT',yellow:'Standard PO',green:'No action needed'},
+  };
+  return a[type][z];
+}
+function getZoneFreight(z){
+  return {black:'Air Freight EMERGENCY',red:'Air/Express Freight',yellow:'Standard Freight',green:'N/A'}[z];
+}
+function fmt(n){return Number(n).toLocaleString('en-IN')}
+function pct(n){return Number(n).toFixed(1)+'%'}
+function calcBP(target,ip){return Math.max(0, (target-ip)/target*100)}
+function calcSR(target,ip){return Math.min(100, ip/target*100)}
+function makePill(z){return `<span class="zone-pill ${z}">${getZoneLabel(z)}</span>`}
+function makeRankBadge(rank,z){
+  const bg = {red:'var(--red-dim)',yellow:'var(--yel-dim)',green:'var(--grn-dim)',black:'rgba(255,255,255,0.1)'}[z];
+  const c  = {red:'var(--red)',yellow:'var(--yel)',green:'var(--grn)',black:'#94A3B8'}[z];
+  const border = {red:'1px solid rgba(239,68,68,0.4)',yellow:'1px solid rgba(245,158,11,0.4)',green:'1px solid rgba(16,185,129,0.4)',black:'1px solid #475569'}[z];
+  return `<div class="rank-badge" style="background:${bg};color:${c};border:${border}">${rank}</div>`;
+}
+function makeBarHTML(bp,z){
+  const sr = 100-bp;
+  const col = {red:'linear-gradient(90deg,#B91C1C,#EF4444)',yellow:'linear-gradient(90deg,#D97706,#F59E0B)',green:'linear-gradient(90deg,#047857,#10B981)',black:'linear-gradient(90deg,#111,#333)'}[z];
+  return `<div class="buffer-bar-track" style="width:120px"><div class="buffer-bar-fill" style="width:${Math.min(sr,100)}%;background:${col};font-size:10px">${sr<20?'':pct(sr)}</div></div>`;
+}
+
+// ═══════ NAVIGATION ═══════
+function showPage(id, el){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  const p = document.getElementById('page-'+id);
+  if(p){ p.classList.add('active'); }
+  if(el){ el.classList.add('active'); }
+  const titles = {
+    home:'Home Dashboard', glossary:'TOC Glossary',
+    f1:'F1 · Target Buffer Sizing', f2:'F2 · Inventory Position',
+    f3:'F3 · Buffer Penetration %', f4:'F4 · Order Quantity',
+    f5:'F5 · T/CU Tie-Breaker', production:'Production Priority Board',
+    procurement:'Procurement Planner', dbm:'DBM Simulator',
+    daf:'DAF · Seasonal Adjustment', compare:'TOC vs MRP'
+  };
+  document.getElementById('topbar-title').textContent = titles[id]||id;
+}
+
+function switchTab(page, tab){
+  const contents = document.querySelectorAll(`#page-${page} .tab-content`);
+  const tabs = document.querySelectorAll(`#page-${page} .tab`);
+  contents.forEach(c=>c.classList.remove('active'));
+  tabs.forEach(t=>t.classList.remove('active'));
+  document.getElementById(`${page}-${tab}`).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ═══════ HOME BOARD ═══════
+function renderHomeBoard(){
+  const rows = SKUS.map(s=>{
+    const ip = s.oh + s.wip - s.bo;
+    const bp = calcBP(s.target,ip);
+    const sr = calcSR(s.target,ip);
+    const z  = getZone(bp);
+    return {...s, ip, bp, sr, z};
+  }).sort((a,b)=>b.bp-a.bp);
+  const body = document.getElementById('home-board-body');
+  body.innerHTML = rows.map((r,i)=>`
+    <tr class="fade-in" style="animation-delay:${i*0.05}s">
+      <td>${makeRankBadge(i+1,r.z)}</td>
+      <td><strong>${r.name}</strong></td>
+      <td>${fmt(r.target)}</td>
+      <td><strong>${fmt(r.ip)}</strong></td>
+      <td><strong style="color:${r.z==='red'?'var(--red)':r.z==='yellow'?'var(--yel)':'var(--grn)'}">${pct(r.bp)}</strong></td>
+      <td style="color:var(--muted)">${pct(r.sr)}</td>
+      <td>${makePill(r.z)}</td>
+      <td>${makeBarHTML(r.bp,r.z)}</td>
+    </tr>`).join('');
+  
+  const reds = rows.filter(r=>r.z==='red').length;
+  const grns = rows.filter(r=>r.z==='green').length;
+  const avgBP = rows.reduce((a,r)=>a+r.bp,0)/rows.length;
+  document.getElementById('hs-red').textContent = reds;
+  document.getElementById('hs-grn').textContent = grns;
+  document.getElementById('hs-avg').textContent = pct(avgBP);
+}
+
+// ═══════ F1 ═══════
+function calcF1(){
+  const adu = parseFloat(document.getElementById('f1-adu').value)||0;
+  const rlt = parseFloat(document.getElementById('f1-rlt').value)||0;
+  const vf  = parseFloat(document.getElementById('f1-vf').value)||1;
+  document.getElementById('f1-vf-val').textContent = vf.toFixed(2);
+  const t = Math.round(adu*rlt*vf);
+  document.getElementById('f1-b-adu').textContent = fmt(adu);
+  document.getElementById('f1-b-rlt').textContent = rlt;
+  document.getElementById('f1-b-vf').textContent  = vf.toFixed(2);
+  document.getElementById('f1-b-result').textContent = fmt(t);
+  document.getElementById('f1-target').textContent = fmt(t);
+  document.getElementById('f1-red-range').textContent = `0–${fmt(Math.round(t*0.33))}`;
+  document.getElementById('f1-yel-range').textContent = `${fmt(Math.round(t*0.33))}–${fmt(Math.round(t*0.66))}`;
+  document.getElementById('f1-grn-range').textContent = `${fmt(Math.round(t*0.66))}–${fmt(t)}`;
+}
+
+// ═══════ F2 FG ═══════
+function calcF2FG(){
+  const oh  = parseFloat(document.getElementById('f2-oh').value)||0;
+  const wip = parseFloat(document.getElementById('f2-wip').value)||0;
+  const bo  = parseFloat(document.getElementById('f2-bo').value)||0;
+  const t   = parseFloat(document.getElementById('f2-target').value)||900;
+  const ip  = oh + wip - bo;
+  const bp  = calcBP(t,ip);
+  const z   = getZone(bp);
+  document.getElementById('f2-b-oh').textContent  = fmt(oh);
+  document.getElementById('f2-b-wip').textContent = fmt(wip);
+  document.getElementById('f2-b-bo').textContent  = fmt(bo);
+  document.getElementById('f2-fg-result').textContent = fmt(ip);
+  document.getElementById('f2-fg-display').textContent = fmt(ip);
+  const cls = {red:'alert-red',yellow:'alert-yel',green:'alert-grn',black:'alert-red'};
+  document.getElementById('f2-fg-analysis').innerHTML = `
+    <div class="alert ${cls[z]}">
+      <strong>BP% = ${pct(bp)} · SR% = ${pct(100-bp)}</strong><br>
+      Zone: ${getZoneLabel(z)}<br>
+      Order Qty = ${fmt(t)} − ${fmt(ip)} = <strong>${fmt(Math.max(0,t-ip))} units</strong>
+    </div>`;
+}
+
+// ═══════ F2 RM ═══════
+function calcF2RM(){
+  const oh  = parseFloat(document.getElementById('f2-rm-oh').value)||0;
+  const oo  = parseFloat(document.getElementById('f2-rm-oo').value)||0;
+  const com = parseFloat(document.getElementById('f2-rm-com').value)||0;
+  const t   = parseFloat(document.getElementById('f2-rm-target').value)||7200;
+  const ip  = oh + oo - com;
+  const bp  = calcBP(t,ip);
+  const z   = getZone(bp);
+  document.getElementById('f2-rm-b-oh').textContent  = fmt(oh);
+  document.getElementById('f2-rm-b-oo').textContent  = fmt(oo);
+  document.getElementById('f2-rm-b-com').textContent = fmt(com);
+  document.getElementById('f2-rm-result').textContent = fmt(ip);
+  document.getElementById('f2-rm-display').textContent = fmt(ip);
+  const cls = {red:'alert-red',yellow:'alert-yel',green:'alert-grn',black:'alert-red'};
+  document.getElementById('f2-rm-analysis').innerHTML = `
+    <div class="alert ${cls[z]}">
+      <strong>BP% = ${pct(bp)} · SR% = ${pct(Math.max(0,100-bp))}</strong><br>
+      Zone: ${getZoneLabel(z)}<br>
+      PO Qty = ${fmt(t)} − ${fmt(ip)} = <strong>${fmt(Math.max(0,t-ip))} kg/units</strong>
+    </div>`;
+}
+
+// ═══════ F3 ═══════
+function calcF3(){
+  const t  = parseFloat(document.getElementById('f3-target').value)||900;
+  const ip = parseFloat(document.getElementById('f3-ip').value)||0;
+  const bp = calcBP(t,ip);
+  const sr = calcSR(t,ip);
+  const z  = getZone(bp);
+  document.getElementById('f3-bp').textContent = pct(bp);
+  document.getElementById('f3-sr').textContent = pct(sr);
+  document.getElementById('f3-bp-v').textContent = pct(bp);
+  document.getElementById('f3-sr-v').textContent = pct(sr);
+  
+  const fill = document.getElementById('f3-bar-fill-sr');
+  fill.style.width = Math.max(2,sr)+'%';
+  fill.textContent = sr > 10 ? `SR: ${pct(sr)}` : '';
+  const barColors = {green:'linear-gradient(90deg,#047857,#10B981)',yellow:'linear-gradient(90deg,#D97706,#F59E0B)',red:'linear-gradient(90deg,#B91C1C,#EF4444)',black:'linear-gradient(90deg,#111,#333)'};
+  fill.style.background = barColors[z];
+  
+  const zd = document.getElementById('f3-zone');
+  zd.className = 'zone-display '+z;
+  const msgs = {
+    green:'🟢 GREEN ZONE — Buffer healthy. No action needed.',
+    yellow:'🟡 YELLOW ZONE — Buffer being consumed. Plan replenishment.',
+    red:'🔴 RED ZONE — Buffer critically low. Produce/Order IMMEDIATELY.',
+    black:'⚫ BLACK — STOCKOUT! EMERGENCY. Escalate now.'
+  };
+  zd.textContent = msgs[z];
+  if(z==='red'||z==='black') zd.classList.add('pulse-red');
+  
+  const cls2 = {red:'alert-red',yellow:'alert-yel',green:'alert-grn',black:'alert-red'};
+  const acts = {
+    green:'✅ Buffer is healthy ('+pct(sr)+' remaining). Do nothing — let the buffer do its job.',
+    yellow:'⚠️ Buffer is '+pct(bp)+' consumed. Initiate a standard replenishment work order or purchase order.',
+    red:'🚨 Buffer is '+pct(bp)+' consumed! Only '+pct(sr)+' remains. Produce/order Target − IP = '+fmt(Math.max(0,t-ip))+' units IMMEDIATELY.',
+    black:'🆘 STOCKOUT! Buffer completely empty. All demand is unfulfilled. Emergency escalation required.'
+  };
+  document.getElementById('f3-action-box').innerHTML = `<div class="alert ${cls2[z]}">${acts[z]}</div>`;
+}
+
+// ═══════ F4 ═══════
+function calcF4(){
+  const t  = parseFloat(document.getElementById('f4-target').value)||900;
+  const ip = parseFloat(document.getElementById('f4-ip').value)||0;
+  const bp = calcBP(t,ip);
+  const qty = Math.max(0,t-ip);
+  const z  = getZone(bp);
+  document.getElementById('f4-b-t').textContent  = fmt(t);
+  document.getElementById('f4-b-ip').textContent = fmt(ip);
+  document.getElementById('f4-result').textContent = fmt(qty);
+  document.getElementById('f4-display').textContent = fmt(qty);
+  const cls = {red:'alert-red',yellow:'alert-yel',green:'alert-grn',black:'alert-red'};
+  const msg = z==='green' ? 'Buffer is healthy (BP% '+pct(bp)+'). You MAY choose to produce, but it is not urgent. The buffer provides coverage.' :
+              z==='yellow' ? 'Buffer is '+pct(bp)+' penetrated. Issue standard replenishment work order for '+fmt(qty)+' units.' :
+              'Buffer is '+pct(bp)+' penetrated! URGENT — issue emergency work order for '+fmt(qty)+' units now.';
+  document.getElementById('f4-analysis').innerHTML = `<div class="alert ${cls[z]}"><strong>Zone: ${getZoneLabel(z)}</strong><br>${msg}</div>`;
+}
+
+// ═══════ F5 ═══════
+function calcF5(){
+  const price = parseFloat(document.getElementById('f5-price').value)||0;
+  const rm    = parseFloat(document.getElementById('f5-rm').value)||0;
+  const pm    = parseFloat(document.getElementById('f5-pm').value)||0;
+  const speed = parseFloat(document.getElementById('f5-speed').value)||1;
+  const tvc   = rm+pm;
+  const t     = price-tvc;
+  const minPU = 1/speed;
+  const tcu   = t/minPU;
+  document.getElementById('f5-b-price').textContent = '₹'+fmt(price);
+  document.getElementById('f5-b-tvc').textContent   = '₹'+fmt(tvc);
+  document.getElementById('f5-b-t').textContent     = '₹'+fmt(t);
+  document.getElementById('f5-b-min').textContent   = minPU.toFixed(3);
+  document.getElementById('f5-result').textContent  = '₹'+fmt(Math.round(tcu));
+  document.getElementById('f5-display').textContent = '₹'+fmt(Math.round(tcu));
+}
+
+// ═══════ PRODUCTION BOARD ═══════
+function calcProduction(){
+  const targets = [900,1575,2250,810,1260];
+  const tcus    = [6303,4840,2454,4560,1960];
+  const names   = ['Masala Tea 1kg','Masala Tea 500g','Masala Tea 200g','Ginger Tea 500g','Cardamom Tea 200g'];
+  const rows = [];
+  for(let i=0;i<5;i++){
+    const inputs = document.querySelectorAll(`#prod-input-table [data-sku="${i}"]`);
+    const vals = {};
+    inputs.forEach(inp=>vals[inp.dataset.field]=parseFloat(inp.value)||0);
+    const ip  = vals.oh + vals.wip - vals.bo;
+    const bp  = calcBP(targets[i],ip);
+    const sr  = calcSR(targets[i],ip);
+    const qty = Math.max(0,targets[i]-ip);
+    const z   = getZone(bp);
+    rows.push({name:names[i],target:targets[i],ip,bp,sr,qty,z,tcu:tcus[i]});
+  }
+  rows.sort((a,b)=>{
+    if(Math.abs(b.bp-a.bp)>0.5) return b.bp-a.bp;
+    return b.tcu-a.tcu;
+  });
+  const body = document.getElementById('prod-output-body');
+  body.innerHTML = rows.map((r,i)=>`
+    <tr>
+      <td>${makeRankBadge(i+1,r.z)}</td>
+      <td><strong>${r.name}</strong></td>
+      <td>${fmt(r.target)}</td>
+      <td><strong>${fmt(r.ip)}</strong></td>
+      <td><strong style="color:${r.z==='red'?'var(--red)':r.z==='yellow'?'var(--yel)':'var(--grn)'}">${pct(r.bp)}</strong></td>
+      <td style="color:var(--muted)">${pct(r.sr)}</td>
+      <td>${makePill(r.z)}</td>
+      <td><strong style="color:var(--orange)">${fmt(r.qty)} units</strong></td>
+      <td>${makeBarHTML(r.bp,r.z)}</td>
+    </tr>`).join('');
+}
+
+// ═══════ PROCUREMENT ═══════
+function calcProcurement(){
+  const targets = [833,7200,11250,21600,9750];
+  const names   = ['Cardamom Powder','Tea Dust (CTC)','Milk Powder','200g Pouches','Sugar'];
+  const units   = ['kg','kg','kg','u','kg'];
+  const rows = [];
+  for(let i=0;i<5;i++){
+    const inputs = document.querySelectorAll(`#proc-input-table [data-rm="${i}"]`);
+    const vals = {};
+    inputs.forEach(inp=>vals[inp.dataset.f]=parseFloat(inp.value)||0);
+    const ip  = vals.oh + vals.oo - vals.com;
+    const bp  = calcBP(targets[i],ip);
+    const qty = Math.max(0,targets[i]-ip);
+    const z   = getZone(bp);
+    rows.push({name:names[i],target:targets[i],ip,bp,qty,z,unit:units[i]});
+  }
+  rows.sort((a,b)=>b.bp-a.bp);
+  const body = document.getElementById('proc-output-body');
+  body.innerHTML = rows.map(r=>`
+    <tr>
+      <td><strong>${r.name}</strong></td>
+      <td>${fmt(r.target)} ${r.unit}</td>
+      <td><strong>${fmt(r.ip)} ${r.unit}</strong></td>
+      <td><strong style="color:${r.z==='red'?'var(--red)':r.z==='yellow'?'var(--yel)':'var(--grn)'}">${pct(r.bp)}</strong></td>
+      <td>${makePill(r.z)}</td>
+      <td><strong style="color:var(--orange)">${fmt(r.qty)} ${r.unit}</strong></td>
+      <td style="color:${r.z==='red'?'var(--red)':r.z==='yellow'?'var(--yel)':'var(--muted)'}">${getZoneFreight(r.z)}</td>
+      <td style="color:${r.z==='red'?'var(--red)':r.z==='yellow'?'var(--yel)':'var(--grn)'}"><strong>${getZoneAction(r.z,'proc')}</strong></td>
+    </tr>`).join('');
+}
+
+// ═══════ DBM ═══════
+function calcDBM_TMR(){
+  const buf  = parseFloat(document.getElementById('dbm-tmr-buf').value)||900;
+  const rlt  = parseFloat(document.getElementById('dbm-tmr-rlt').value)||3;
+  const days = parseFloat(document.getElementById('dbm-tmr-red-days').value)||0;
+  const thresh = rlt*0.2;
+  const triggered = days > thresh;
+  const newBuf = Math.round(buf*1.33);
+  document.getElementById('dbm-tmr-result').innerHTML = `
+    <div class="alert ${triggered?'alert-red':'alert-grn'}" style="margin-top:20px">
+      <strong>TMR Threshold: ${thresh.toFixed(1)} days (20% × ${rlt}d RLT)</strong><br>
+      Days in Red: <strong>${days}d</strong>${triggered?' > threshold — TMR TRIGGERED 🚨':' ≤ threshold — not triggered'}<br>
+      ${triggered?`<br><strong>New Buffer = ${fmt(buf)} × 1.33 = ${fmt(newBuf)} units</strong>
+      <br>Increase: +${fmt(newBuf-buf)} units`:'<br>Continue monitoring. No change to buffer size.'}
+    </div>`;
+}
+function calcDBM_TMG(){
+  const buf  = parseFloat(document.getElementById('dbm-tmg-buf').value)||9750;
+  const rlt  = parseFloat(document.getElementById('dbm-tmg-rlt').value)||5;
+  const days = parseFloat(document.getElementById('dbm-tmg-grn-days').value)||0;
+  const thresh = rlt*3;
+  const triggered = days >= thresh;
+  const newBuf = Math.round(buf*0.67);
+  document.getElementById('dbm-tmg-result').innerHTML = `
+    <div class="alert ${triggered?'alert-grn':'alert-blue'}" style="margin-top:20px">
+      <strong>TMG Threshold: ${thresh} days (3 × ${rlt}d RLT)</strong><br>
+      Consecutive days in Green: <strong>${days}d</strong>${triggered?' ≥ threshold — TMG TRIGGERED 💚':' < threshold — not yet triggered'}<br>
+      ${triggered?`<br><strong>New Buffer = ${fmt(buf)} × 0.67 = ${fmt(newBuf)}</strong>
+      <br>Reduction: −${fmt(buf-newBuf)} units (cash freed up)`:'<br>Continue monitoring. No change to buffer size.'}
+    </div>`;
+}
+
+// ═══════ DAF ═══════
+function calcDAF(){
+  const base   = parseFloat(document.getElementById('daf-base').value)||900;
+  const factor = parseFloat(document.getElementById('daf-factor').value)||1;
+  document.getElementById('daf-factor-val').textContent = factor.toFixed(2)+'×';
+  document.getElementById('daf-b-base').textContent   = fmt(base);
+  document.getElementById('daf-b-factor').textContent = factor.toFixed(2)+'×';
+  const adj = Math.round(base*factor);
+  document.getElementById('daf-result').textContent   = fmt(adj);
+  const diff = adj-base;
+  const pctChange = ((factor-1)*100).toFixed(0);
+  const isUp = factor > 1, isSame = factor === 1;
+  const cls = isUp ? 'alert-yel' : isSame ? 'alert-blue' : 'alert-grn';
+  document.getElementById('daf-analysis').innerHTML = `
+    <div class="result-box" style="margin-bottom:16px">
+      <div class="result-label">Adjusted Buffer</div>
+      <div class="result-value" style="color:${isUp?'var(--yel)':isSame?'var(--orange)':'var(--teal)'}">${fmt(adj)}</div>
+      <div class="result-unit">units</div>
+    </div>
+    <div class="alert ${cls}">
+      ${isSame?'Normal operations — no adjustment applied. Buffer stays at '+fmt(base)+' units.':
+        isUp?`📈 Buffer INCREASED by ${fmt(diff)} units (+${pctChange}%) for this event period.<br>Ensure procurement is placed in advance to fill the larger buffer.`:
+             `📉 Buffer DECREASED by ${fmt(Math.abs(diff))} units (${pctChange}%) — capital freed.<br>Reduce production and procurement orders proportionally.`}
+    </div>`;
+}
+function setDAFPreset(val){
+  document.getElementById('daf-factor').value = val;
+  calcDAF();
+}
+
+// ═══════ GLOSSARY ═══════
+const GLOSSARY = [
+  {code:'TOC',name:'Theory of Constraints',def:'Find and fix your ONE biggest bottleneck first. Everything else is secondary.',example:'Chaizup\'s bottleneck is the VFFS pouch-filling line. Everything else serves it.'},
+  {code:'Buffer',name:'Safety Stock Cushion',def:'A planned stock cushion held so you never run out of any product or material.',example:'Chaizup holds 900 units of Masala Tea 1kg as a safety net so distributors never wait.'},
+  {code:'BP%',name:'Buffer Penetration %',def:'How EMPTY the buffer is. BP% = (Target − IP) ÷ Target × 100. 0% = full. 100% = stockout.',example:'Target=900, IP=200 → BP% = 77.8% → Red Zone. Higher = more urgent.'},
+  {code:'SR%',name:'Stock Remaining %',def:'How FULL the buffer is. SR% = IP ÷ Target × 100. 100% = full. 0% = stockout. SR% + BP% = 100%.',example:'Target=900, IP=200 → SR% = 22.2% → Red Zone (same conclusion, opposite direction).'},
+  {code:'ADU',name:'Avg. Daily Usage',def:'Rolling 90-day average of daily consumption — shipments for FG, production use for RM.',example:'Masala Tea 1kg: 200 units shipped per day on average → ADU = 200.'},
+  {code:'RLT',name:'Replenishment Lead Time',def:'Total time from "we need more" until the stock is on the shelf, including all steps.',example:'FG: Blend+Pack+QC+Move = 3 days. Tea Dust: PO to GRN = 10 days.'},
+  {code:'VF',name:'Variability Factor',def:'Safety multiplier. Higher unpredictability in demand or supply = higher VF.',example:'Sugar (reliable) = 1.3. Cardamom Powder (volatile seasonal) = 1.7.'},
+  {code:'IP',name:'Inventory Position',def:'TRUE stock level. FG: On-Hand + WIP − Backorders. RM: On-Hand + On-Order − Committed.',example:'Masala Tea 1kg: 180 + 50 − 30 = 200 units IP (not just 180 on-hand).'},
+  {code:'WIP',name:'Work In Progress',def:'Items currently being manufactured on the VFFS — not on shelf yet but coming soon.',example:'50 units of Masala Tea 1kg currently being filled and sealed on the VFFS line.'},
+  {code:'FG',name:'Finished Goods',def:'Packed, labelled, QC-passed products ready to ship to distributors.',example:'Masala Tea 200g/500g/1kg, Ginger Tea 500g, Cardamom Tea 200g — all sealed.'},
+  {code:'SFG',name:'Semi-Finished Goods',def:'Blended premix powder QC-passed but NOT yet packed. Can be packed into any SKU size.',example:'Masala Premix Blend in bulk bins — pack into any pouch size as needed.'},
+  {code:'RM',name:'Raw Materials',def:'Ingredients purchased from suppliers and used in the premix blend.',example:'Tea dust (CTC), sugar, milk powder, cardamom powder, ginger powder.'},
+  {code:'PM',name:'Packaging Materials',def:'Materials that wrap, seal, and box the final product.',example:'Printed pouches (200g, 500g, 1kg), corrugated cartons, labels, shrink wrap.'},
+  {code:'T',name:'Throughput',def:'Selling Price minus ONLY truly variable costs (RM + PM). Labour/rent/electricity NOT deducted.',example:'Masala Tea 1kg: ₹380 − ₹172 (RM+PM) = ₹208 throughput per unit.'},
+  {code:'T/CU',name:'Throughput per Constraint Unit',def:'Rupees earned per minute of VFFS time. Tie-breaker when two SKUs have the same BP%.',example:'Masala Tea 1kg = ₹6,303/min. Cardamom Tea 200g = ₹1,960/min.'},
+  {code:'DBM',name:'Dynamic Buffer Management',def:'Auto self-correction: buffers grow (TMR) or shrink (TMG) based on real behaviour.',example:'Masala Tea keeps hitting Red → DBM increases buffer by 33% automatically.'},
+  {code:'TMR',name:'Too Much Red',def:'Buffer is too small. Stock in Red > 20% of RLT in one cycle → increase by 33%.',example:'900 × 1.33 = 1,200 units new target after TMR triggers.'},
+  {code:'TMG',name:'Too Much Green',def:'Buffer is too large. Stock in Green for 3 full cycles → decrease by 33%.',example:'9,750 × 0.67 = 6,500 kg new sugar buffer after TMG triggers.'},
+  {code:'DAF',name:'Demand Adjustment Factor',def:'Planned multiplier for predictable events. Applied at S&OP before the event window.',example:'Diwali = 1.6× (900 → 1,440). Summer = 0.7× (900 → 630).'},
+  {code:'VFFS',name:'Vertical Form Fill Seal',def:'Chaizup\'s packaging bottleneck. Forms pouches, fills premix, seals. ~35 pouches/min.',example:'V=Vertical, F=Form (shapes film), F=Fill (auger deposits powder), S=Seal (heat seals).'},
+  {code:'OEE',name:'Overall Equipment Effectiveness',def:'How efficiently the VFFS runs vs its theoretical maximum speed.',example:'VFFS rated 50 pouches/min but averages 35 → OEE = 70%.'},
+  {code:'PO',name:'Purchase Order',def:'Formal document sent to a supplier to order a specific quantity at agreed terms.',example:'Chaizup sends a PO to tea dust supplier for 4,900 kg delivery by a target date.'},
+];
+function renderGlossary(){
+  const grid = document.getElementById('glossary-grid');
+  grid.innerHTML = GLOSSARY.map(g=>`
+    <div class="card card-sm fade-in">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
+        <div style="font-family:var(--font-head);font-size:22px;font-weight:800;color:var(--orange)">${g.code}</div>
+        <div style="font-size:11px;color:var(--muted);text-align:right;max-width:60%">${g.name}</div>
+      </div>
+      <div style="font-size:14px;color:#CBD5E1;line-height:1.6;margin-bottom:12px">${g.def}</div>
+      <div style="font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:12px">📌 ${g.example}</div>
+    </div>`).join('');
+}
+
+// ═══════ INIT ═══════
+document.addEventListener('DOMContentLoaded',()=>{
+  renderHomeBoard();
+  renderGlossary();
+  calcF1();
+  calcF2FG();
+  calcF2RM();
+  calcF3();
+  calcF4();
+  calcF5();
+  calcProduction();
+  calcProcurement();
+  calcDBM_TMR();
+  calcDBM_TMG();
+  calcDAF();
+});
+</script>
+</body>
+</html>

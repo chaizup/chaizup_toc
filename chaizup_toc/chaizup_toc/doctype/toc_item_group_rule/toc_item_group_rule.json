@@ -1,0 +1,55 @@
+{
+  "actions": [],
+  "creation": "2026-03-30 10:00:00",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "istable": 1,
+  "module": "Chaizup Toc",
+  "name": "TOC Item Group Rule",
+  "owner": "Administrator",
+  "fields": [
+    {
+      "fieldname": "item_group",
+      "fieldtype": "Link",
+      "label": "Item Group",
+      "options": "Item Group",
+      "reqd": 1,
+      "in_list_view": 1,
+      "columns": 3,
+      "description": "Item Group to map to a buffer type. Items in this group will automatically get the selected buffer type when TOC is enabled, unless the item has a manual buffer type set."
+    },
+    {
+      "fieldname": "buffer_type",
+      "fieldtype": "Select",
+      "label": "Buffer Type",
+      "options": "\nFG\nSFG\nRM\nPM",
+      "reqd": 1,
+      "in_list_view": 1,
+      "columns": 2,
+      "bold": 1,
+      "description": "FG = Finished Goods (manufactured, sold). SFG = Semi-Finished Goods (intermediates). RM = Raw Materials (purchased). PM = Packaging Materials (purchased)."
+    },
+    {
+      "fieldname": "include_sub_groups",
+      "fieldtype": "Check",
+      "label": "Include Sub-Groups",
+      "default": "1",
+      "in_list_view": 1,
+      "columns": 2,
+      "description": "If checked, this rule applies to all child item groups within this group (walks the full hierarchy). If unchecked, only items directly in this group are matched."
+    },
+    {
+      "fieldname": "priority",
+      "fieldtype": "Int",
+      "label": "Priority",
+      "default": "10",
+      "in_list_view": 1,
+      "columns": 1,
+      "description": "Lower number = higher priority. When an item matches multiple rules (e.g. it belongs to a child group that matches two parent rules), the rule with the lowest priority number wins. Use to handle overlapping group hierarchies."
+    }
+  ],
+  "permissions": [],
+  "sort_field": "priority",
+  "sort_order": "ASC",
+  "track_changes": 0
+}

@@ -1,0 +1,436 @@
+{
+  "charts": [
+    {
+      "chart_name": "TOC - Zone Distribution",
+      "label": "TOC - Zone Distribution"
+    }
+  ],
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\">\\ud83c\\udfed TOC Buffer Management</span>\", \"level\": 3, \"col\": 12}}, {\"type\": \"paragraph\", \"data\": {\"text\": \"Theory of Constraints \\u2014 Replenish what was consumed. No forecasting needed. Daily at 7:00 AM.\", \"col\": 12}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83d\\udcd6 TOC Guide \\u2014 Glossary, Flows, Reports, Use Cases\", \"level\": 4, \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Complete User Guide\", \"col\": 12}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83c\\udfe0 Live Buffer Dashboard\", \"level\": 4, \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Live Dashboard\", \"col\": 12}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83d\\udcca Live Status\", \"level\": 4, \"col\": 12}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"TOC - Items in Red Zone\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"TOC - Items in Yellow Zone\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"TOC - Items in Green Zone\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"TOC - Open Material Requests\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83d\\udcc8 Buffer Zone Distribution\", \"level\": 4, \"col\": 12}}, {\"type\": \"chart\", \"data\": {\"chart_name\": \"TOC - Zone Distribution\", \"col\": 12}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\u26a1 Daily Operations\", \"level\": 4, \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Production Priority Board\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Procurement Action List\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Buffer Status Report\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83d\\udd27 Quick Access\", \"level\": 4, \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Managed Items\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Auto Material Requests\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Buffer Logs\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"DBM Analysis Report\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83d\\udccb Recent Buffer Snapshots\", \"level\": 4, \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Buffer Logs\", \"col\": 6}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"TOC Auto Material Requests\", \"col\": 6}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\u2699\\ufe0f Configuration\", \"level\": 4, \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Setup & Settings\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Reports\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Stock Masters\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"\\ud83d\\udcd6 Reference\", \"level\": 4, \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"TOC Formulas & Guide\", \"col\": 6}}, {\"type\": \"card\", \"data\": {\"card_name\": \"System Monitoring\", \"col\": 6}}]",
+  "creation": "2026-03-14 10:00:00",
+  "custom_blocks": [],
+  "docstatus": 0,
+  "doctype": "Workspace",
+  "for_user": "",
+  "hide_custom": 0,
+  "icon": "graph",
+  "idx": 0,
+  "is_hidden": 0,
+  "label": "TOC Buffer Management",
+  "links": [
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "Setup & Settings",
+      "link_count": 0,
+      "onboard": 0,
+      "type": "Card Break"
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "setting-gear",
+      "is_query_report": 0,
+      "label": "TOC Settings",
+      "link_count": 0,
+      "link_to": "TOC Settings",
+      "link_type": "DocType",
+      "onboard": 1,
+      "type": "Link",
+      "description": "Global TOC configuration \u2014 zone thresholds, DBM parameters, DAF, email alerts"
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "stock",
+      "is_query_report": 0,
+      "label": "Stock Settings",
+      "link_count": 0,
+      "link_to": "Stock Settings",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Verify auto_indent is OFF (disabled on install). Default reorder must stay disabled."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "file",
+      "is_query_report": 0,
+      "label": "Item (Configure Buffers)",
+      "link_count": 0,
+      "link_to": "Item",
+      "link_type": "DocType",
+      "onboard": 1,
+      "type": "Link",
+      "description": "Open any Item \u2192 scroll to TOC Buffer Management \u2192 add warehouse buffer rules (ADU, RLT, VF)"
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "organization",
+      "is_query_report": 0,
+      "label": "Warehouse",
+      "link_count": 0,
+      "link_to": "Warehouse",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Warehouse master \u2014 buffer rules reference warehouses defined here"
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "Reports",
+      "link_count": 0,
+      "onboard": 0,
+      "type": "Card Break"
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "dashboard",
+      "is_query_report": 1,
+      "label": "Production Priority Board",
+      "link_count": 0,
+      "link_to": "Production Priority Board",
+      "link_type": "Report",
+      "onboard": 1,
+      "type": "Link",
+      "description": "THE daily report \u2014 all items sorted by BP% (F3). Run VFFS in this order. Has Generate MR + DAF buttons."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "cart",
+      "is_query_report": 1,
+      "label": "Procurement Action List",
+      "link_count": 0,
+      "link_to": "Procurement Action List",
+      "link_type": "Report",
+      "onboard": 1,
+      "type": "Link",
+      "description": "RM/PM focused \u2014 shows PO quantities, freight recommendation, supplier action by zone."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "line-chart",
+      "is_query_report": 1,
+      "label": "Buffer Status Report",
+      "link_count": 0,
+      "link_to": "Buffer Status Report",
+      "link_type": "Report",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Historical buffer trends from TOC Buffer Log \u2014 BP% over time with charts."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "tool",
+      "is_query_report": 1,
+      "label": "DBM Analysis Report",
+      "link_count": 0,
+      "link_to": "DBM Analysis Report",
+      "link_type": "Report",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Dynamic Buffer Management \u2014 TMR/TMG trigger history, buffer size changes."
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "Stock Masters",
+      "link_count": 0,
+      "onboard": 0,
+      "type": "Card Break"
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "stock-entry",
+      "is_query_report": 0,
+      "label": "Material Request",
+      "link_count": 0,
+      "link_to": "Material Request",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "All Material Requests \u2014 filter by custom_toc_recorded_by=By System to see TOC-created MRs."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "file",
+      "is_query_report": 0,
+      "label": "TOC Buffer Log",
+      "link_count": 0,
+      "link_to": "TOC Buffer Log",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Daily buffer snapshots \u2014 used by DBM engine for TMR/TMG analysis."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "stock",
+      "is_query_report": 0,
+      "label": "Bin (Live Stock)",
+      "link_count": 0,
+      "link_to": "Bin",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Real-time stock data \u2014 actual_qty, reserved_qty, ordered_qty. TOC reads from here."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "branch",
+      "is_query_report": 0,
+      "label": "Work Order",
+      "link_count": 0,
+      "link_to": "Work Order",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Open Work Orders = WIP (Work In Progress) component of F2: IP calculation."
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "TOC Formulas & Guide",
+      "link_count": 0,
+      "onboard": 0,
+      "type": "Card Break"
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "TOC User Guide (Full)",
+      "link_count": 0,
+      "link_to": "/toc-user-guide",
+      "link_type": "URL",
+      "icon": "education",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Complete guide with all formulas, glossary, flows, and use cases",
+      "dependencies": ""
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "TOC Settings",
+      "link_count": 0,
+      "link_to": "TOC Settings",
+      "link_type": "DocType",
+      "icon": "setting-gear",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Configure zone thresholds, DBM parameters, alerts",
+      "dependencies": ""
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 1,
+      "label": "Production Priority Board",
+      "link_count": 0,
+      "link_to": "Production Priority Board",
+      "link_type": "Report",
+      "icon": "dashboard",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Daily priority report sorted by BP%",
+      "dependencies": ""
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 1,
+      "label": "Buffer Status Report",
+      "link_count": 0,
+      "link_to": "Buffer Status Report",
+      "link_type": "Report",
+      "icon": "line-chart",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Historical buffer trend analysis",
+      "dependencies": ""
+    },
+    {
+      "hidden": 0,
+      "is_query_report": 0,
+      "label": "System Monitoring",
+      "link_count": 0,
+      "onboard": 0,
+      "type": "Card Break"
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "calendar",
+      "is_query_report": 0,
+      "label": "Scheduled Job Log",
+      "link_count": 0,
+      "link_to": "Scheduled Job Log",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Check if the 7:00 AM daily run executed. Look for chaizup_toc.tasks entries."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "error",
+      "is_query_report": 0,
+      "label": "Error Log",
+      "link_count": 0,
+      "link_to": "Error Log",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Check for TOC-related Python errors. Filter by 'TOC' in method field."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "mail",
+      "is_query_report": 0,
+      "label": "Email Queue",
+      "link_count": 0,
+      "link_to": "Email Queue",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Check if Red zone email alerts were sent. Filter by 'TOC' in subject."
+    },
+    {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "users",
+      "is_query_report": 0,
+      "label": "Role Permission Manager",
+      "link_count": 0,
+      "link_to": "Role Permission Manager",
+      "link_type": "DocType",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Configure TOC Manager and TOC User role permissions."
+    }
+  ],
+  "modified": "2026-03-14 10:00:00",
+  "modified_by": "Administrator",
+  "module": "Chaizup Toc",
+  "name": "TOC Buffer Management",
+  "number_cards": [
+    {
+      "label": "TOC - Items in Red Zone",
+      "number_card_name": "TOC - Items in Red Zone"
+    },
+    {
+      "label": "TOC - Items in Yellow Zone",
+      "number_card_name": "TOC - Items in Yellow Zone"
+    },
+    {
+      "label": "TOC - Items in Green Zone",
+      "number_card_name": "TOC - Items in Green Zone"
+    },
+    {
+      "label": "TOC - Open Material Requests",
+      "number_card_name": "TOC - Open Material Requests"
+    }
+  ],
+  "owner": "Administrator",
+  "parent_page": "",
+  "public": 1,
+  "restrict_to_domain": "",
+  "roles": [],
+  "sequence_id": 25,
+  "shortcuts": [
+    {
+      "color": "#f97316",
+      "icon": "dashboard",
+      "label": "TOC Live Dashboard",
+      "link_to": "toc-dashboard",
+      "type": "Page"
+    },
+    {
+      "color": "#E67E22",
+      "icon": "education",
+      "label": "TOC Complete User Guide",
+      "link_to": "/toc-user-guide",
+      "type": "URL"
+    },
+    {
+      "color": "#E74C3C",
+      "doc_view": "",
+      "icon": "dashboard",
+      "label": "Production Priority Board",
+      "link_to": "Production Priority Board",
+      "restrict_to_domain": "",
+      "stats_filter": "",
+      "type": "Report"
+    },
+    {
+      "color": "#F39C12",
+      "doc_view": "",
+      "icon": "cart",
+      "label": "Procurement Action List",
+      "link_to": "Procurement Action List",
+      "restrict_to_domain": "",
+      "stats_filter": "",
+      "type": "Report"
+    },
+    {
+      "color": "#3498DB",
+      "doc_view": "",
+      "icon": "line-chart",
+      "label": "Buffer Status Report",
+      "link_to": "Buffer Status Report",
+      "restrict_to_domain": "",
+      "stats_filter": "",
+      "type": "Report"
+    },
+    {
+      "color": "#27AE60",
+      "doc_view": "List",
+      "icon": "file",
+      "label": "TOC Managed Items",
+      "link_to": "Item",
+      "restrict_to_domain": "",
+      "stats_filter": "[[\"Item\",\"custom_toc_enabled\",\"=\",1]]",
+      "type": "DocType"
+    },
+    {
+      "color": "#E67E22",
+      "doc_view": "List",
+      "icon": "stock-entry",
+      "label": "TOC Auto Material Requests",
+      "link_to": "Material Request",
+      "restrict_to_domain": "",
+      "stats_filter": "[[\"Material Request\",\"custom_toc_recorded_by\",\"=\",\"By System\"]]",
+      "type": "DocType"
+    },
+    {
+      "color": "#9B59B6",
+      "doc_view": "List",
+      "icon": "file",
+      "label": "TOC Buffer Logs",
+      "link_to": "TOC Buffer Log",
+      "restrict_to_domain": "",
+      "stats_filter": "",
+      "type": "DocType"
+    },
+    {
+      "color": "#1ABC9C",
+      "doc_view": "",
+      "icon": "tool",
+      "label": "DBM Analysis Report",
+      "link_to": "DBM Analysis Report",
+      "restrict_to_domain": "",
+      "stats_filter": "",
+      "type": "Report"
+    }
+  ],
+  "title": "TOC Buffer Management"
+}

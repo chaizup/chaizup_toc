@@ -1,0 +1,412 @@
+<!-- TOC Buffer Management Dashboard — Modern Minimalist (Frappe Native) -->
+
+<style>
+  .toc-dash-root {
+    font-family: var(--font-stack, "Inter", "Helvetica", sans-serif);
+    color: var(--text-color, #1f2937);
+    padding: 15px 0;
+  }
+  .toc-dash-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .toc-dash-card {
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .toc-dash-card:hover {
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    transform: translateY(-2px);
+  }
+  .sc-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .sc-icon-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    font-size: 16px;
+  }
+  .toc-card-red .sc-icon-wrap { background: #fee2e2; color: #dc2626; }
+  .toc-card-yellow .sc-icon-wrap { background: #fef3c7; color: #d97706; }
+  .toc-card-green .sc-icon-wrap { background: #d1fae5; color: #059669; }
+  .toc-card-orange .sc-icon-wrap { background: #ffedd5; color: #ea580c; }
+  .sc-label {
+    font-size: 13px;
+    color: var(--text-muted, #6b7280);
+    font-weight: 500;
+  }
+  .sc-val {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-color, #111827);
+    line-height: 1;
+  }
+  .sc-action {
+    font-size: 12px;
+    color: var(--text-muted, #9ca3af);
+    margin-top: 8px;
+  }
+  .toc-dash-grid {
+    display: grid;
+    grid-template-columns: 3.5fr 1.2fr;
+    gap: 24px;
+  }
+  @media (max-width: 991px) {
+    .toc-dash-grid { grid-template-columns: 1fr; }
+  }
+  .toc-dash-table-wrap {
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    padding: 20px;
+    overflow-x: auto;
+  }
+  .toc-dash-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color, #f3f4f6);
+  }
+  .toc-dash-section-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-color, #111827);
+  }
+  .toc-dash-section-sub {
+    font-size: 12px;
+    color: var(--text-muted, #6b7280);
+  }
+  .toc-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+  .toc-table th {
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text-muted, #6b7280);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+    white-space: nowrap;
+  }
+  .toc-table td {
+    padding: 14px 12px;
+    border-bottom: 1px solid var(--border-color, #f3f4f6);
+    font-size: 13px;
+    vertical-align: middle;
+  }
+  .toc-table tbody tr:hover {
+    background: var(--bg-light-gray, #f8fafc);
+  }
+  .toc-item-link {
+    font-weight: 600;
+    color: var(--text-color, #111827);
+    text-decoration: none;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .toc-item-link:hover { color: var(--primary-color, #2563eb); }
+  .toc-item-sub {
+    font-size: 11px;
+    color: var(--text-muted, #9ca3af);
+  }
+  .toc-num {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12.5px;
+  }
+  .toc-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .toc-pill-red { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .toc-pill-yel { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+  .toc-pill-grn { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .toc-pill-blk { background: #f8fafc; color: #334155; border: 1px solid #e2e8f0; }
+  .toc-bar-track {
+    background: #f1f5f9;
+    border-radius: 99px;
+    height: 8px;
+    width: 100%;
+    min-width: 80px;
+    overflow: hidden;
+  }
+  .toc-bar-fill {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 0.4s ease;
+  }
+  .toc-btn-mr {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border-color, #d1d5db);
+    background: #ffffff;
+    color: var(--text-color, #374151);
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+  .toc-btn-mr:hover { background: #f9fafb; border-color: #9ca3af; }
+  .toc-btn-urgent {
+    background: #fef2f2;
+    color: #dc2626;
+    border-color: #fecaca;
+  }
+  .toc-btn-urgent:hover { background: #fee2e2; border-color: #fca5a5; }
+  .toc-dash-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .toc-dash-panel {
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  }
+  .toc-dash-panel-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-color, #111827);
+  }
+  .toc-dash-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .toc-dash-link {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-radius: 6px;
+    color: var(--text-color, #374151);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.2s;
+  }
+  .toc-dash-link:hover {
+    background: #f1f5f9;
+    color: var(--primary-color, #2563eb);
+    text-decoration: none;
+  }
+  .toc-dash-link span { margin-right: 8px; }
+  .toc-op-row {
+    font-size: 13px;
+    padding: 10px 0;
+    color: var(--text-color, #4b5563);
+    display: flex;
+    align-items: center;
+    border-bottom: 1px dashed var(--border-color, #f3f4f6);
+  }
+  .toc-op-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .toc-op-time {
+    font-family: "SFMono-Regular", monospace;
+    font-weight: 600;
+    color: var(--text-muted, #9ca3af);
+    width: 48px;
+    font-size: 11px;
+  }
+  .toc-op-highlight {
+    font-weight: 500;
+    color: var(--text-color, #111827);
+  }
+  .toc-chart-container {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .toc-chart-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+  .toc-legend-row {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-muted, #4b5563);
+  }
+  .toc-legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .toc-legend-val {
+    margin-left: auto;
+    font-weight: 600;
+    color: var(--text-color, #111827);
+  }
+  .toc-dash-loading {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    color: var(--text-muted, #6b7280);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .toc-dash-spinner {
+    border: 2px solid #e5e7eb;
+    border-left-color: var(--primary-color, #2563eb);
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: toc-spin 0.8s linear infinite;
+    margin-right: 12px;
+  }
+  @keyframes toc-spin { 100% { transform: rotate(360deg); } }
+  .is-loading .toc-dash-grid {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .toc-table-placeholder {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-muted, #9ca3af);
+  }
+</style>
+
+<div class="toc-dash-root" id="toc-dash-root">
+
+  <!-- LOADING -->
+  <div id="toc-loading" class="toc-dash-loading">
+    <div class="toc-dash-spinner"></div>
+    <span>Syncing buffer data...</span>
+  </div>
+
+  <!-- SUMMARY CARDS -->
+  <div class="toc-dash-cards">
+    <div class="toc-dash-card toc-card-red" id="sc-red">
+      <div class="sc-top">
+        <span class="sc-label">Red Zone</span>
+        <div class="sc-icon-wrap">🚨</div>
+      </div>
+      <div class="sc-val">—</div>
+      <div class="sc-action">Produce / Order NOW</div>
+    </div>
+    <div class="toc-dash-card toc-card-yellow" id="sc-yel">
+      <div class="sc-top">
+        <span class="sc-label">Yellow Zone</span>
+        <div class="sc-icon-wrap">⚠️</div>
+      </div>
+      <div class="sc-val">—</div>
+      <div class="sc-action">Plan this week</div>
+    </div>
+    <div class="toc-dash-card toc-card-green" id="sc-grn">
+      <div class="sc-top">
+        <span class="sc-label">Green Zone</span>
+        <div class="sc-icon-wrap">✅</div>
+      </div>
+      <div class="sc-val">—</div>
+      <div class="sc-action">No action needed</div>
+    </div>
+    <div class="toc-dash-card toc-card-orange" id="sc-avg">
+      <div class="sc-top">
+        <span class="sc-label">Avg Buffer Pen.</span>
+        <div class="sc-icon-wrap">📊</div>
+      </div>
+      <div class="sc-val">—</div>
+      <div class="sc-action">Across all items</div>
+    </div>
+  </div>
+
+  <!-- MAIN GRID -->
+  <div class="toc-dash-grid">
+
+    <!-- Priority Table -->
+    <div class="toc-dash-table-wrap" id="toc-table-wrap">
+      <div class="toc-dash-section-header">
+        <div>
+          <div class="toc-dash-section-title">Live Priority Board</div>
+          <div class="toc-dash-section-sub">Sorted by BP% · Highest urgency first</div>
+        </div>
+        <div class="toc-dash-section-sub" id="toc-last-updated" style="text-align:right;">Loading...</div>
+      </div>
+      <table class="toc-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Item</th>
+            <th>Target</th>
+            <th>On-Hand</th>
+            <th>BP%</th>
+            <th>SR%</th>
+            <th>Zone</th>
+            <th style="min-width:120px">Buffer Health</th>
+            <th>Deficit</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="toc-tbody">
+          <tr><td colspan="10" class="toc-table-placeholder">Loading buffers...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="toc-dash-sidebar">
+
+      <div class="toc-dash-panel">
+        <div class="toc-dash-panel-title">Zone Distribution</div>
+        <div id="toc-zone-chart" class="toc-chart-container">
+          <div style="color:#9ca3af;font-size:13px;text-align:center;width:100%">Loading chart…</div>
+        </div>
+      </div>
+
+      <div class="toc-dash-panel">
+        <div class="toc-dash-panel-title">Quick Links</div>
+        <div class="toc-dash-links">
+          <a href="/app/query-report/Production%20Priority%20Board" class="toc-dash-link"><span>📋</span> Production Board</a>
+          <a href="/app/query-report/Procurement%20Action%20List" class="toc-dash-link"><span>🛒</span> Procurement List</a>
+          <a href="/app/query-report/DBM%20Analysis%20Report" class="toc-dash-link"><span>🔧</span> DBM Analysis</a>
+          <a href="/app/item?custom_toc_enabled=1" class="toc-dash-link"><span>📦</span> Managed Items</a>
+          <a href="/app/toc-settings" class="toc-dash-link"><span>⚙️</span> Settings</a>
+          <a href="/toc-user-guide" target="_blank" class="toc-dash-link"><span>📖</span> User Guide</a>
+        </div>
+      </div>
+
+      <div class="toc-dash-panel">
+        <div class="toc-dash-panel-title">Daily Rhythm</div>
+        <div class="toc-op-row"><span class="toc-op-time">06:30</span> Auto ADU update</div>
+        <div class="toc-op-row toc-op-highlight"><span class="toc-op-time">07:00</span> Production Run + MRs</div>
+        <div class="toc-op-row toc-op-highlight"><span class="toc-op-time">07:30</span> Procurement Run</div>
+        <div class="toc-op-row"><span class="toc-op-time">08:00</span> Buffer Snapshot</div>
+        <div class="toc-op-row"><span class="toc-op-time">SUN</span> DBM Auto-Adjust</div>
+      </div>
+
+    </div>
+  </div>
+</div>

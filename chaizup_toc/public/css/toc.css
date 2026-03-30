@@ -1,0 +1,37 @@
+/* ═══════════════════════════════════════════════════════
+   Chaizup TOC — Global Styles (non-dashboard)
+   Dashboard styles are inline in toc_dashboard.html
+   This file covers: form tabs, list view badges, reports
+═══════════════════════════════════════════════════════ */
+
+/* TOC Tab highlight on Item/MR/WO forms */
+.form-tabs .nav-item a[data-fieldname="custom_toc_tab"] {
+  color: #f97316 !important;
+  font-weight: 700 !important;
+}
+
+/* Zone badges in list views */
+.toc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 14px;
+  font-weight: 800;
+  font-size: 11px;
+}
+.toc-badge-green  { background: #d1fae5; color: #059669; }
+.toc-badge-yellow { background: #fef3c7; color: #d97706; }
+.toc-badge-red    { background: #fee2e2; color: #dc2626; }
+.toc-badge-black  { background: #e5e7eb; color: #4b5563; }
+
+/* Report enhancements */
+.report-summary .summary-value {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+/* Print hide */
+@media print {
+  .toc-dash-root { display: none !important; }
+}

@@ -1,0 +1,17 @@
+{
+  "doctype": "Page",
+  "name": "toc-dashboard",
+  "page_name": "toc-dashboard",
+  "title": "TOC Buffer Dashboard",
+  "module": "Chaizup Toc",
+  "standard": "Yes",
+  "roles": [
+    {"role": "System Manager"},
+    {"role": "TOC Manager"},
+    {"role": "TOC User"},
+    {"role": "Stock Manager"},
+    {"role": "Stock User"},
+    {"role": "Purchase Manager"},
+    {"role": "Manufacturing Manager"}
+  ]
+}

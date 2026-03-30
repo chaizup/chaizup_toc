@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <!-- Cup gradient bg -->
+    <linearGradient id="cupBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <!-- Buffer fill gradient - green zone -->
+    <linearGradient id="fillGrn" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <!-- Buffer fill gradient - yellow zone -->
+    <linearGradient id="fillYel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#b45309"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <!-- Buffer fill gradient - red zone -->
+    <linearGradient id="fillRed" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#991b1b"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+    <!-- Orange glow -->
+    <radialGradient id="glowOrng" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f97316" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Circle clip for logo background -->
+    <clipPath id="circleClip">
+      <circle cx="100" cy="100" r="92"/>
+    </clipPath>
+    <!-- Cup clip for liquid -->
+    <clipPath id="cupClip">
+      <path d="M52 88 Q50 140 58 152 Q66 162 100 162 Q134 162 142 152 Q150 140 148 88 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background circle with subtle gradient -->
+  <circle cx="100" cy="100" r="96" fill="url(#cupBg)" stroke="#f97316" stroke-width="2.5" stroke-opacity="0.6"/>
+  <!-- Orange glow overlay -->
+  <circle cx="100" cy="100" r="96" fill="url(#glowOrng)"/>
+
+  <!-- ── STEAM WISPS ── -->
+  <path d="M 74 72 Q 70 62 74 52 Q 78 42 74 32" stroke="#f97316" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M 88 68 Q 84 58 88 48 Q 92 38 88 28" stroke="#f97316" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <path d="M 112 68 Q 116 58 112 48 Q 108 38 112 28" stroke="#f97316" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <path d="M 126 72 Q 130 62 126 52 Q 122 42 126 32" stroke="#f97316" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.7"/>
+
+  <!-- ── CUP BODY (outer shell) ── -->
+  <!-- Saucer -->
+  <ellipse cx="100" cy="163" rx="54" ry="8" fill="#334155" stroke="#475569" stroke-width="1.5"/>
+  <!-- Cup wall -->
+  <path d="M52 88 Q50 140 58 152 Q66 162 100 162 Q134 162 142 152 Q150 140 148 88 Z"
+        fill="#1e293b" stroke="#475569" stroke-width="2"/>
+
+  <!-- ── LIQUID FILL (buffer zones shown as horizontal bands) ── -->
+  <!-- Red zone (bottom ~0-33%) — shown at top of liquid since buffer is penetrated -->
+  <rect x="52" y="130" width="96" height="22" fill="url(#fillRed)" clip-path="url(#cupClip)" opacity="0.9"/>
+  <!-- Yellow zone (33-67%) -->
+  <rect x="52" y="109" width="96" height="21" fill="url(#fillYel)" clip-path="url(#cupClip)" opacity="0.9"/>
+  <!-- Green zone (67-100%) -->
+  <rect x="52" y="88"  width="96" height="21" fill="url(#fillGrn)" clip-path="url(#cupClip)" opacity="0.9"/>
+
+  <!-- Liquid surface highlight -->
+  <ellipse cx="100" cy="88" rx="48" ry="5" fill="#10b981" opacity="0.35"/>
+
+  <!-- Cup rim highlight -->
+  <path d="M52 88 Q100 80 148 88" stroke="#64748b" stroke-width="2" fill="none"/>
+  <!-- Cup rim top -->
+  <path d="M50 86 Q100 78 150 86" stroke="#94a3b8" stroke-width="1.5" fill="none" opacity="0.5"/>
+
+  <!-- ── HANDLE ── -->
+  <path d="M148 102 Q172 102 172 120 Q172 138 148 138"
+        stroke="#475569" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M148 102 Q168 102 168 120 Q168 138 148 138"
+        stroke="#64748b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <!-- ── BP% NEEDLE (little indicator on cup front) ── -->
+  <!-- Small meter arc on cup -->
+  <path d="M 78 125 A 22 22 0 0 1 122 125" stroke="#1e293b" stroke-width="6" fill="none"/>
+  <path d="M 78 125 A 22 22 0 0 1 122 125" stroke="#334155" stroke-width="4" fill="none"/>
+  <!-- Needle pointing to ~77% (red zone) -->
+  <line x1="100" y1="125" x2="88" y2="108" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="100" cy="125" r="3" fill="#f97316"/>
+
+  <!-- ── ZONE DOT LEGEND (bottom of cup) ── -->
+  <circle cx="80" cy="148" r="4" fill="#10b981"/>
+  <circle cx="100" cy="148" r="4" fill="#f59e0b"/>
+  <circle cx="120" cy="148" r="4" fill="#ef4444"/>
+
+  <!-- ── "TOC" MICRO LABEL (subtle) ── -->
+  <text x="100" y="176" text-anchor="middle" font-family="'JetBrains Mono',monospace" font-size="10" font-weight="700" fill="#f97316" letter-spacing="3" opacity="0.85">TOC</text>
+</svg>

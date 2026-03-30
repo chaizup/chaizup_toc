@@ -1,0 +1,224 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "creation": "2026-03-14 10:00:00",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "issingle": 1,
+  "module": "Chaizup Toc",
+  "name": "TOC Settings",
+  "owner": "Administrator",
+  "fields": [
+    {
+      "fieldname": "zone_section",
+      "fieldtype": "Section Break",
+      "label": "Zone Thresholds",
+      "description": "F3: Buffer Penetration % boundaries for Green \u2192 Yellow \u2192 Red \u2192 Black zones."
+    },
+    {
+      "fieldname": "red_zone_threshold",
+      "fieldtype": "Float",
+      "label": "Red Zone Threshold (%)",
+      "default": "67",
+      "reqd": 1,
+      "description": "F3: BP% \u2265 this value = Red Zone (produce/order IMMEDIATELY). Default: 67%"
+    },
+    {
+      "fieldname": "yellow_zone_threshold",
+      "fieldtype": "Float",
+      "label": "Yellow Zone Threshold (%)",
+      "default": "33",
+      "reqd": 1,
+      "description": "F3: BP% \u2265 this value = Yellow Zone (plan replenishment). Default: 33%"
+    },
+    {
+      "fieldname": "col_zone",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "auto_generate_mr",
+      "fieldtype": "Check",
+      "label": "Auto-Generate Material Requests",
+      "default": "1",
+      "description": "When checked, the daily scheduler automatically creates Material Requests for Red/Yellow items."
+    },
+    {
+      "fieldname": "mr_zones",
+      "fieldtype": "Select",
+      "label": "Generate MR for Zones",
+      "options": "Red and Black Only\nRed, Black, and Yellow",
+      "default": "Red, Black, and Yellow",
+      "description": "Which buffer zones should trigger automatic Material Request creation."
+    },
+    {
+      "fieldname": "notify_on_red",
+      "fieldtype": "Check",
+      "label": "Email Alert on Red Zone",
+      "default": "1",
+      "description": "Send email notification when items enter Red or Black zone."
+    },
+    {
+      "fieldname": "red_alert_roles",
+      "fieldtype": "Small Text",
+      "label": "Alert Recipient Roles",
+      "default": "Stock Manager\nPurchase Manager",
+      "description": "Newline-separated role names. Users with these roles receive Red zone email alerts."
+    },
+    {
+      "fieldname": "dbm_section",
+      "fieldtype": "Section Break",
+      "label": "Dynamic Buffer Management (DBM)",
+      "description": "F7/F8: Auto-adjustment of buffer sizes based on observed behaviour."
+    },
+    {
+      "fieldname": "enable_dbm",
+      "fieldtype": "Check",
+      "label": "Enable DBM Auto-Adjustment",
+      "default": "1",
+      "description": "When checked, buffers auto-adjust weekly via TMR (increase) and TMG (decrease)."
+    },
+    {
+      "fieldname": "tmr_red_pct_of_rlt",
+      "fieldtype": "Float",
+      "label": "TMR: Red % of RLT",
+      "default": "20",
+      "reqd": 1,
+      "description": "F7 TMR Trigger: If stock in Red > this % of RLT in one cycle \u2192 increase buffer. Default: 20%"
+    },
+    {
+      "fieldname": "tmg_cycles_required",
+      "fieldtype": "Int",
+      "label": "TMG: Green Cycles Required",
+      "default": "3",
+      "reqd": 1,
+      "description": "F8 TMG Trigger: Stock must be in Green for this many full RLT cycles \u2192 decrease buffer. Default: 3"
+    },
+    {
+      "fieldname": "col_dbm",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "dbm_adjustment_pct",
+      "fieldtype": "Float",
+      "label": "DBM Adjustment %",
+      "default": "33",
+      "reqd": 1,
+      "description": "F7/F8: TMR increases by +this%, TMG decreases by \u2212this%. Default: 33%"
+    },
+    {
+      "fieldname": "max_tmr_consecutive",
+      "fieldtype": "Int",
+      "label": "Max Consecutive TMR Increases",
+      "default": "3",
+      "reqd": 1,
+      "description": "Safeguard: Max consecutive TMR increases before requiring manual review. Prevents runaway inflation."
+    },
+    {
+      "fieldname": "min_buffer_floor",
+      "fieldtype": "Float",
+      "label": "Minimum Buffer Floor",
+      "default": "50",
+      "reqd": 1,
+      "description": "Safeguard: TMG will never shrink a buffer below this value. Prevents buffer collapse."
+    },
+    {
+      "fieldname": "calc_section",
+      "fieldtype": "Section Break",
+      "label": "Calculation Defaults",
+      "description": "Default values used when configuring new buffer rules."
+    },
+    {
+      "fieldname": "default_vf",
+      "fieldtype": "Float",
+      "label": "Default Variability Factor",
+      "default": "1.5",
+      "reqd": 1,
+      "description": "F1: Default VF for new buffer rules. 1.0-1.3=stable, 1.3-1.6=moderate, 1.6-2.0=volatile."
+    },
+    {
+      "fieldname": "adu_lookback_days",
+      "fieldtype": "Int",
+      "label": "ADU Lookback Days",
+      "default": "90",
+      "reqd": 1,
+      "description": "F1: Number of days to look back when auto-calculating Average Daily Usage. Default: 90 days."
+    },
+    {
+      "fieldname": "col_calc",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "default_daf",
+      "fieldtype": "Float",
+      "label": "Current Global DAF",
+      "default": "1.0",
+      "description": "F6: Demand Adjustment Factor. 1.0=normal. Diwali=1.6. Summer=0.7. Applied to ALL buffers."
+    },
+    {
+      "fieldname": "daf_event_name",
+      "fieldtype": "Data",
+      "label": "Current DAF Event",
+      "description": "Name of the active seasonal event (e.g. 'Diwali 2026', 'Summer Slowdown'). Informational only."
+    },
+    {
+      "fieldname": "inventory_classification_section",
+      "fieldtype": "Section Break",
+      "label": "Inventory Classification",
+      "description": "CONFIGURE FIRST before enabling items. Defines which warehouses count as on-hand stock, WIP, or are excluded entirely (Scrap, Expiry, Wastage). Also defines how item groups map to buffer types (FG/SFG/RM/PM)."
+    },
+    {
+      "fieldname": "warehouse_rules",
+      "fieldtype": "Table",
+      "label": "Warehouse Classification",
+      "options": "TOC Warehouse Rule",
+      "description": "Classify every warehouse in your company. Inventory = usable on-hand stock. WIP = in-process (adds to WIP in F2). Excluded = never counted (Scrap, Expiry, Wastage, QC Hold, Demo). Leave empty to use the warehouse defined on each item's buffer rule (backward-compatible)."
+    },
+    {
+      "fieldname": "col_classification",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "item_group_rules",
+      "fieldtype": "Table",
+      "label": "Item Group → Buffer Type",
+      "options": "TOC Item Group Rule",
+      "description": "Map item groups to buffer types. Items with a manual buffer type set (on the Item form) always take precedence. These rules auto-assign FG/SFG/RM/PM for items without a manual type. Lower priority number = wins on conflict. Enable Include Sub-Groups to apply a rule to all child groups."
+    },
+    {
+      "fieldname": "demo_section",
+      "fieldtype": "Section Break",
+      "label": "Demo Data (Admin Only)",
+      "collapsible": 1,
+      "description": "Create/delete test data to verify all TOC triggers work correctly."
+    },
+    {
+      "fieldname": "demo_data_manifest",
+      "fieldtype": "Long Text",
+      "label": "Demo Data Manifest",
+      "read_only": 1,
+      "hidden": 1,
+      "description": "JSON list of all demo doc IDs created. Used for cleanup."
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1
+    },
+    {
+      "role": "Stock Manager",
+      "read": 1,
+      "write": 1
+    },
+    {
+      "role": "TOC Manager",
+      "read": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "track_changes": 1
+}

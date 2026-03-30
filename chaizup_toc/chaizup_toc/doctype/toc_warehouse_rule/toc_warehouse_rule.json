@@ -1,0 +1,53 @@
+{
+  "actions": [],
+  "creation": "2026-03-30 10:00:00",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "istable": 1,
+  "module": "Chaizup Toc",
+  "name": "TOC Warehouse Rule",
+  "owner": "Administrator",
+  "fields": [
+    {
+      "fieldname": "warehouse",
+      "fieldtype": "Link",
+      "label": "Warehouse",
+      "options": "Warehouse",
+      "reqd": 1,
+      "in_list_view": 1,
+      "columns": 3,
+      "description": "Select the warehouse to classify. Add one row per warehouse in your company."
+    },
+    {
+      "fieldname": "company",
+      "fieldtype": "Data",
+      "label": "Company",
+      "read_only": 1,
+      "fetch_from": "warehouse.company",
+      "in_list_view": 1,
+      "columns": 2,
+      "description": "Auto-fetched from the selected warehouse."
+    },
+    {
+      "fieldname": "warehouse_purpose",
+      "fieldtype": "Select",
+      "label": "Purpose",
+      "options": "\nInventory\nWIP\nExcluded",
+      "reqd": 1,
+      "in_list_view": 1,
+      "columns": 2,
+      "bold": 1,
+      "description": "Inventory = usable on-hand stock (counts in F2). WIP = in-process stock (adds to WIP component of F2). Excluded = never counted — use for Scrap, Expiry, Wastage, QC Hold, Demo warehouses."
+    },
+    {
+      "fieldname": "notes",
+      "fieldtype": "Small Text",
+      "label": "Notes",
+      "description": "Optional: explain why this warehouse has this purpose. E.g. 'Scrap from VFFS Line 1' or 'QC Quarantine — stock not yet cleared'."
+    }
+  ],
+  "permissions": [],
+  "sort_field": "modified",
+  "sort_order": "ASC",
+  "track_changes": 0
+}

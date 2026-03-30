@@ -1,0 +1,3 @@
+chaizup_toc.patches.v1_0.fix_date_filters
+chaizup_toc.patches.v1_0.fix_workspace_icon
+chaizup_toc.patches.v1_0.fix_old_field_refs

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <clipPath id="cc">
+      <path d="M16 26 Q15 44 18 49 Q21 52 32 52 Q43 52 46 49 Q49 44 48 26 Z"/>
+    </clipPath>
+  </defs>
+  <!-- Background rounded square -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <rect width="64" height="64" rx="14" fill="#f97316" fill-opacity="0.08"/>
+
+  <!-- Steam -->
+  <path d="M23 22 Q21 18 23 14" stroke="#f97316" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M32 21 Q30 17 32 13" stroke="#f97316" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.6"/>
+  <path d="M41 22 Q43 18 41 14" stroke="#f97316" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.8"/>
+
+  <!-- Cup -->
+  <path d="M16 26 Q15 44 18 49 Q21 52 32 52 Q43 52 46 49 Q49 44 48 26 Z"
+        fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+
+  <!-- Zone bars (liquid) -->
+  <rect x="16" y="42" width="32" height="8"  fill="#ef4444" clip-path="url(#cc)" opacity="0.9"/>
+  <rect x="16" y="34" width="32" height="8"  fill="#f59e0b" clip-path="url(#cc)" opacity="0.9"/>
+  <rect x="16" y="26" width="32" height="8"  fill="#10b981" clip-path="url(#cc)" opacity="0.9"/>
+
+  <!-- Rim -->
+  <path d="M16 26 Q32 22 48 26" stroke="#64748b" stroke-width="1.5" fill="none"/>
+
+  <!-- Handle -->
+  <path d="M48 32 Q56 32 56 38 Q56 44 48 44" stroke="#475569" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Saucer -->
+  <ellipse cx="32" cy="52" rx="18" ry="3" fill="#334155" stroke="#475569" stroke-width="1"/>
+
+  <!-- Orange border glow -->
+  <rect width="64" height="64" rx="14" fill="none" stroke="#f97316" stroke-width="1.5" stroke-opacity="0.5"/>
+</svg>

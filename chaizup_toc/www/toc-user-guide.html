@@ -1,0 +1,345 @@
+{% extends "templates/web.html" %}
+{% block title %}TOC Buffer Management — Complete Guide{% endblock %}
+{% block head_include %}
+<style>
+*{box-sizing:border-box}
+.tg{max-width:1060px;margin:0 auto;padding:24px 20px 80px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1e293b;line-height:1.7}
+.tg h1{font-size:2rem;font-weight:900;color:#0f172a;margin:40px 0 12px;padding-bottom:10px;border-bottom:3px solid #f97316}
+.tg h2{font-size:1.35rem;font-weight:800;color:#f97316;margin:32px 0 10px}
+.tg h3{font-size:1.1rem;font-weight:700;color:#334155;margin:20px 0 8px}
+.tg p,.tg li{font-size:15px;color:#475569}
+.tg strong{color:#0f172a}
+.tg a{color:#2563eb;text-decoration:underline}
+.tg table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+.tg th{background:#1e293b;color:#fff;padding:10px 14px;text-align:left;font-weight:700;font-size:13px}
+.tg td{padding:10px 14px;border-bottom:1px solid #e2e8f0;vertical-align:top}
+.tg tr:nth-child(even){background:#f8fafc}
+.tg tr:hover{background:#f1f5f9}
+.zb{display:inline-block;padding:3px 12px;border-radius:20px;font-weight:800;font-size:12px}
+.zg{background:#dcfce7;color:#16a34a}.zy{background:#fef9c3;color:#ca8a04}
+.zr{background:#fee2e2;color:#dc2626}.zk{background:#e5e7eb;color:#4b5563}
+.fb{background:#fff7ed;border-left:4px solid #f97316;padding:14px 18px;margin:14px 0;border-radius:0 8px 8px 0;font-family:"SF Mono",Consolas,monospace;font-size:14px;color:#9a3412}
+.ib{background:#eff6ff;border-left:4px solid #3b82f6;padding:14px 18px;margin:14px 0;border-radius:0 8px 8px 0}
+.wb{background:#fefce8;border-left:4px solid #eab308;padding:14px 18px;margin:14px 0;border-radius:0 8px 8px 0}
+.fl{background:#f8fafc;border:2px solid #cbd5e1;padding:18px;border-radius:10px;margin:16px 0;font-family:"SF Mono",Consolas,monospace;font-size:13px;line-height:2.2;color:#334155}
+.fa{color:#f97316;font-weight:800}
+.nav{background:#1e293b;padding:16px 20px;border-radius:10px;margin:0 0 24px;display:flex;flex-wrap:wrap;gap:6px}
+.nav a{color:#93c5fd;text-decoration:none;font-size:13px;font-weight:600;padding:4px 10px;border-radius:6px;transition:all .15s}
+.nav a:hover{background:rgba(255,255,255,.1);color:#fff}
+</style>
+{% endblock %}
+{% block page_content %}
+<div class="tg">
+
+<h1 style="border:none;margin-top:0">TOC Buffer Management — Complete Guide</h1>
+<p style="font-size:17px;color:#64748b;margin-bottom:24px">
+The single source of truth. Everything you need: jargon definitions, formulas, document flows, report guides, and step-by-step instructions. Any layman can navigate this system after reading this page.
+</p>
+
+<div class="nav">
+<a href="#glossary">Glossary</a>
+<a href="#formulas">Formulas</a>
+<a href="#zones">Zones</a>
+<a href="#setup">Setup Guide</a>
+<a href="#daily">Daily Flow</a>
+<a href="#doctypes">DocType Connections</a>
+<a href="#mr">Material Request</a>
+<a href="#wo">Work Order</a>
+<a href="#reports">Reports</a>
+<a href="#adu">ADU Explained</a>
+<a href="#bom">BOM &amp; SFG</a>
+<a href="#dbm">DBM</a>
+<a href="#daf">DAF</a>
+<a href="#demo">Demo Data</a>
+<a href="#faq">FAQ</a>
+<a href="#navigate">Where to Find</a>
+</div>
+
+<!-- ═══════════ WHAT IS TOC ═══════════ -->
+<h1>What Is This System?</h1>
+<p>This app <strong>replaces</strong> ERPNext's default "Auto Material Request" with <strong>Theory of Constraints (TOC) Buffer Management</strong>.</p>
+<div class="ib">
+<strong>The one-line version:</strong> Instead of guessing how much to make/buy (forecasting), TOC watches what was actually consumed and replenishes exactly that amount. Every day. Automatically.
+</div>
+<p>When you install this app, the default ERPNext reorder system is <strong>automatically disabled</strong>. The TOC engine takes over completely.</p>
+
+<!-- ═══════════ GLOSSARY ═══════════ -->
+<h1 id="glossary">Complete Glossary — Every Term Explained</h1>
+<p>Read this first. After this, every screen in the app will make sense.</p>
+<table>
+<tr><th style="width:80px">Term</th><th style="width:180px">Full Form</th><th>What It Means (Plain English)</th><th style="width:200px">Real Example</th></tr>
+<tr><td><strong>TOC</strong></td><td>Theory of Constraints</td><td>Find your ONE biggest bottleneck. Fix it first. Everything else serves the bottleneck.</td><td>Your VFFS packaging machine is the bottleneck — all scheduling revolves around it.</td></tr>
+<tr><td><strong>Buffer</strong></td><td>Safety Stock Cushion</td><td>Planned stock held so you NEVER run out. Not "excess inventory" — it's <em>protection</em>.</td><td>Keep 900 units of Masala Tea 1kg as safety net.</td></tr>
+<tr><td><strong>ADU</strong></td><td>Average Daily Usage</td><td>How many units you consume or ship per day on average. Rolling average over 30–365 days.</td><td>You ship 200 units daily to distributors. ADU = 200.</td></tr>
+<tr><td><strong>RLT</strong></td><td>Replenishment Lead Time</td><td>Total DAYS from "we need more" until stock is on the shelf ready. Includes ALL steps.</td><td>FG: Blend + Pack + QC + Move = 3 days. RM Tea Dust: PO to receipt = 10 days.</td></tr>
+<tr><td><strong>VF</strong></td><td>Variability Factor</td><td>Safety multiplier. More unpredictable demand or supply = higher VF. Range: 1.0 to 2.0.</td><td>Sugar (reliable supplier) = 1.3. Cardamom (seasonal, volatile) = 1.7.</td></tr>
+<tr><td><strong>IP</strong></td><td>Inventory Position</td><td>TRUE available stock. Not just what is on the shelf — includes what is being made, excludes what is already promised to customers.</td><td>On-Hand 180 + WIP 50 − Backorders 30 = IP 200.</td></tr>
+<tr><td><strong>BP%</strong></td><td>Buffer Penetration %</td><td>How EMPTY the buffer is. Higher = more urgent. <strong>THE most important number in the entire system.</strong></td><td>Target 900, IP 200 → BP% = 77.8% → RED ZONE.</td></tr>
+<tr><td><strong>SR%</strong></td><td>Stock Remaining %</td><td>How FULL the buffer is. Opposite of BP%. They always add to 100%. Like calling a glass half-empty vs half-full.</td><td>Same example: SR% = 22.2%. Only 22% left in tank.</td></tr>
+<tr><td><strong>T/CU</strong></td><td>Throughput per Constraint Unit</td><td>Rupees earned per minute of bottleneck machine time. Used as a tie-breaker when two items have equal BP%.</td><td>Masala 1kg = ₹6,303/min. Cardamom 200g = ₹1,960/min. If both are Red, run Masala first.</td></tr>
+<tr><td><strong>DBM</strong></td><td>Dynamic Buffer Management</td><td>Buffers automatically adjust themselves weekly. TMR increases when too much Red. TMG decreases when too much Green.</td><td>Buffer keeps hitting Red → system auto-increases it by 33%.</td></tr>
+<tr><td><strong>TMR</strong></td><td>Too Much Red</td><td>Buffer too small — stock keeps falling into Red zone. The system increases the buffer to fix this.</td><td>Target 900 × 1.33 = new Target 1,197.</td></tr>
+<tr><td><strong>TMG</strong></td><td>Too Much Green</td><td>Buffer too large — stock is always Green. Cash is locked up unnecessarily. System shrinks the buffer cautiously.</td><td>Target 9,750 × 0.67 = new Target 6,533.</td></tr>
+<tr><td><strong>DAF</strong></td><td>Demand Adjustment Factor</td><td>Temporary multiplier for KNOWN events: festivals, promotions, seasons. You set it manually.</td><td>Diwali = 1.6× (buffer +60%). Summer = 0.7× (buffer −30%).</td></tr>
+<tr><td><strong>FG</strong></td><td>Finished Goods</td><td>Packed, labelled, QC-passed products ready to ship to customers.</td><td>Masala Tea 1kg pouches, sealed and in warehouse.</td></tr>
+<tr><td><strong>SFG</strong></td><td>Semi-Finished Goods</td><td>Intermediate product — made but not yet packed into final form.</td><td>Masala Premix Blend sitting in bulk bins — not yet in pouches.</td></tr>
+<tr><td><strong>RM</strong></td><td>Raw Materials</td><td>Ingredients you PURCHASE from suppliers.</td><td>Tea dust, sugar, milk powder, cardamom, ginger extract.</td></tr>
+<tr><td><strong>PM</strong></td><td>Packaging Materials</td><td>Materials that wrap or seal the final product. You PURCHASE these.</td><td>Printed pouches, corrugated cartons, labels, tape.</td></tr>
+<tr><td><strong>VFFS</strong></td><td>Vertical Form Fill Seal</td><td>The packaging machine (your constraint/bottleneck). Forms pouches from film, fills powder, heat-seals.</td><td>Runs at about 35 pouches per minute. Every idle minute loses money.</td></tr>
+<tr><td><strong>WIP</strong></td><td>Work In Progress</td><td>Items currently being manufactured — not on the shelf yet but coming soon.</td><td>50 units currently on the VFFS line being packed right now.</td></tr>
+<tr><td><strong>BOM</strong></td><td>Bill of Materials</td><td>Recipe: what raw materials and sub-assemblies are needed to make one unit of product.</td><td>1kg Masala Tea BOM: 950g premix blend + 50g tea dust + 1 pouch.</td></tr>
+<tr><td><strong>MR</strong></td><td>Material Request</td><td>ERPNext document that formally requests either procurement (Purchase) or production (Manufacture).</td><td>TOC auto-creates MRs at 7:00 AM for items in Red or Yellow zone.</td></tr>
+<tr><td><strong>WO</strong></td><td>Work Order</td><td>ERPNext production order. Created from a Manufacture-type Material Request.</td><td>Work Order to produce 700 units of Masala Tea 1kg.</td></tr>
+<tr><td><strong>PO</strong></td><td>Purchase Order</td><td>ERPNext order sent to supplier. Created from a Purchase-type Material Request.</td><td>PO to tea dust supplier for 4,900 kg of CTC tea dust.</td></tr>
+</table>
+
+<!-- ═══════════ FORMULAS ═══════════ -->
+<h1 id="formulas">All Formulas</h1>
+<table>
+<tr><th>#</th><th>Name</th><th>Formula</th><th>Plain English</th><th>Where in ERPNext</th></tr>
+<tr><td><strong>F1</strong></td><td>Target Buffer</td><td><div class="fb" style="margin:0">ADU × RLT × VF</div></td><td>How much stock to hold as the maximum buffer size</td><td>Item → TOC Setting tab → Buffer Rules table</td></tr>
+<tr><td><strong>F2a</strong></td><td>IP (FG/SFG)</td><td><div class="fb" style="margin:0">On-Hand + WIP − Backorders</div></td><td>True available stock for finished goods</td><td>Reads: Bin.actual_qty + open Work Orders − Bin.reserved_qty</td></tr>
+<tr><td><strong>F2b</strong></td><td>IP (RM/PM)</td><td><div class="fb" style="margin:0">On-Hand + On-Order − Committed</div></td><td>True available stock for raw materials</td><td>Reads: Bin.actual_qty + Bin.ordered_qty − Bin.reserved_qty</td></tr>
+<tr><td><strong>F3</strong></td><td>Buffer Pen. %</td><td><div class="fb" style="margin:0">(Target − IP) ÷ Target × 100</div></td><td>How empty is the buffer? Higher number = more urgent</td><td>Every report, dashboard, Material Request</td></tr>
+<tr><td><strong>F4</strong></td><td>Order Qty</td><td><div class="fb" style="margin:0">Target − IP</div></td><td>Exact amount to produce or buy. No more, no less.</td><td>Material Request → items → qty field</td></tr>
+<tr><td><strong>F5</strong></td><td>T/CU</td><td><div class="fb" style="margin:0">(Price − TVC) × Speed</div></td><td>Rupees earned per constraint minute. Tie-breaker only.</td><td>Item → TOC Setting → T/CU field (auto-calculated)</td></tr>
+</table>
+
+<!-- ═══════════ ZONES ═══════════ -->
+<h1 id="zones">The Zone System — When to Act</h1>
+<table>
+<tr><th>Zone</th><th>BP% Range</th><th>SR% Range</th><th>What It Means</th><th>What You Must Do</th></tr>
+<tr><td><span class="zb zg">GREEN</span></td><td>0 – 33%</td><td>67 – 100%</td><td>Buffer mostly full. Everything is fine.</td><td><strong>Do NOTHING.</strong> Focus your energy on Red items instead.</td></tr>
+<tr><td><span class="zb zy">YELLOW</span></td><td>33 – 67%</td><td>33 – 67%</td><td>Buffer half consumed. Normal range.</td><td>Plan replenishment. The system creates a standard MR.</td></tr>
+<tr><td><span class="zb zr">RED</span></td><td>67 – 100%</td><td>0 – 33%</td><td>Critically low! Less than one-third of buffer remains.</td><td><strong>PRODUCE or ORDER IMMEDIATELY.</strong> Express freight for RM.</td></tr>
+<tr><td><span class="zb zk">BLACK</span></td><td>100%+</td><td>0%</td><td>STOCKOUT. Zero stock. Customers waiting.</td><td><strong>EMERGENCY.</strong> Call alternate suppliers. Escalate to management.</td></tr>
+</table>
+
+<!-- ═══════════ SETUP ═══════════ -->
+<h1 id="setup">First-Time Setup — Step by Step</h1>
+<div class="fl">
+<strong>Step 1:</strong> Install the chaizup_toc app <span class="fa">→</span> default auto Material Request is DISABLED automatically<br>
+<strong>Step 2:</strong> Open any <strong>Item</strong> <span class="fa">→</span> click the <strong>"TOC Setting"</strong> tab at the top of the form<br>
+<strong>Step 3:</strong> Check <strong>"Enable TOC"</strong><br>
+<strong>Step 4:</strong> Select <strong>Buffer Type</strong>: FG / SFG / RM / PM<br>
+<strong>Step 5:</strong> Choose ONE: <strong>"Auto Purchase TOC"</strong> (for items you BUY) OR <strong>"Auto Manufacturing TOC"</strong> (for items you MAKE)<br>
+<strong>Step 6:</strong> <strong>ADU:</strong> Either check "Custom ADU" and type your value manually, OR select a Period and let the system auto-calculate daily<br>
+<strong>Step 7:</strong> (FG items only) Fill <strong>T/CU fields</strong>: Selling Price, TVC, Constraint Speed <span class="fa">→</span> T/CU auto-calculates<br>
+<strong>Step 8:</strong> (FG/SFG items) Link <strong>Default BOM</strong> for component availability checking<br>
+<strong>Step 9:</strong> Add <strong>Buffer Rules</strong>: one row per warehouse <span class="fa">→</span> enter RLT and VF <span class="fa">→</span> Target auto-calculates<br>
+<strong>Step 10:</strong> Save <span class="fa">→</span> Done! System runs automatically every day at 7:00 AM.
+</div>
+
+<!-- ═══════════ DAILY FLOW ═══════════ -->
+<h1 id="daily">Daily Automatic Flow — What Happens Every Day</h1>
+<div class="fl">
+<strong>06:30 AM</strong> <span class="fa">→</span> <strong>ADU Auto-Update</strong><br>
+&nbsp;&nbsp;Calculates Average Daily Usage for every TOC-enabled item<br>
+&nbsp;&nbsp;Reads: Delivery Notes (FG) / Stock Entries (RM/PM/SFG)<br>
+&nbsp;&nbsp;<span style="color:#dc2626">SKIPS items where "Custom ADU" is checked</span><br><br>
+
+<strong>07:00 AM</strong> <span class="fa">→</span> <strong>Production Priority Run</strong><br>
+&nbsp;&nbsp;For EVERY TOC item: calculates IP (F2) → BP% (F3) → Zone → Order Qty (F4)<br>
+&nbsp;&nbsp;Sorts ALL items: highest BP% first, T/CU (F5) as tie-breaker<br>
+&nbsp;&nbsp;Creates Material Requests for Yellow + Red + Black zone items<br>
+&nbsp;&nbsp;Tags each MR: "Recorded By = By System", Zone, BP%<br><br>
+
+<strong>07:30 AM</strong> <span class="fa">→</span> <strong>Procurement Alert</strong><br>
+&nbsp;&nbsp;Checks RM + PM buffers specifically<br>
+&nbsp;&nbsp;Emails Purchase Managers if any item is in Red or Black zone<br><br>
+
+<strong>08:00 AM</strong> <span class="fa">→</span> <strong>Buffer Snapshot</strong><br>
+&nbsp;&nbsp;Logs every item's buffer state to TOC Buffer Log<br>
+&nbsp;&nbsp;This data is used by DBM engine for weekly TMR/TMG analysis<br><br>
+
+<strong>Sunday 08:00 AM</strong> <span class="fa">→</span> <strong>DBM Weekly Check</strong><br>
+&nbsp;&nbsp;TMR: If item spent > 20% of RLT in Red → buffer increases by 33%<br>
+&nbsp;&nbsp;TMG: If item stayed Green for 3 full cycles → buffer decreases by 33%
+</div>
+
+<!-- ═══════════ DOCTYPE CONNECTIONS ═══════════ -->
+<h1 id="doctypes">How Documents Connect — The Full Picture</h1>
+
+<h2 id="mr">Material Request — How TOC Creates It</h2>
+<div class="fl">
+TOC Engine runs at 7:00 AM<br>
+<span class="fa">→</span> Calculates BP% for every enabled Item<br>
+<span class="fa">→</span> Is BP% ≥ 33%? (Yellow or worse)<br>
+<span class="fa">→</span> YES: Creates <strong>Material Request</strong><br>
+&nbsp;&nbsp;&nbsp;&bull; Type = "Purchase" (if Auto Purchase TOC is checked on Item)<br>
+&nbsp;&nbsp;&nbsp;&bull; Type = "Manufacture" (if Auto Manufacturing TOC is checked on Item)<br>
+&nbsp;&nbsp;&nbsp;&bull; Qty = Target Buffer − Inventory Position (Formula F4)<br>
+&nbsp;&nbsp;&nbsp;&bull; "Recorded By [TOC App]" = "By System"<br>
+&nbsp;&nbsp;&nbsp;&bull; Zone, BP%, Target, IP all recorded on the MR<br>
+<span class="fa">→</span> NO: Skip this item. Buffer is healthy (Green zone).
+</div>
+<div class="ib">
+<strong>Where to see TOC-created MRs:</strong> <a href="/app/material-request?custom_toc_recorded_by=By+System">Material Request list → filter "Recorded By = By System"</a><br>
+<strong>"Recorded By" field explained:</strong> "By System" = auto-created by TOC engine. "By User" = manually created by a human.
+</div>
+
+<h2 id="wo">Work Order — How It Connects</h2>
+<div class="fl">
+Material Request (Type: Manufacture) is created by TOC<br>
+<span class="fa">→</span> User opens the MR → clicks <strong>"Make → Work Order"</strong><br>
+<span class="fa">→</span> Work Order created with quantity from the MR<br>
+<span class="fa">→</span> Production team starts manufacturing on VFFS<br>
+<span class="fa">→</span> Stock Entry (type: Manufacture) completes the WO<br>
+<span class="fa">→</span> Bin.actual_qty INCREASES for the FG item<br>
+<span class="fa">→</span> Next day: TOC recalculates → BP% drops → zone improves
+</div>
+
+<h2>Purchase Order — How It Connects</h2>
+<div class="fl">
+Material Request (Type: Purchase) is created by TOC<br>
+<span class="fa">→</span> User opens the MR → clicks <strong>"Make → Purchase Order"</strong><br>
+<span class="fa">→</span> PO sent to supplier → supplier delivers goods<br>
+<span class="fa">→</span> <strong>Purchase Receipt</strong> received → Bin.actual_qty INCREASES for RM/PM<br>
+<span class="fa">→</span> Next day: TOC recalculates → BP% drops → zone improves
+</div>
+
+<h2>Real-Time Triggers — What Updates Buffers Instantly</h2>
+<table>
+<tr><th>When This Happens</th><th>ERPNext Event</th><th>TOC Reacts By</th></tr>
+<tr><td>Any stock moves (Stock Entry)</td><td>Stock Ledger Entry → after_insert</td><td>Rechecks buffer for that item. Browser alert if enters Red.</td></tr>
+<tr><td>Sales Order submitted</td><td>Sales Order → on_submit</td><td>reserved_qty goes up → IP drops → buffer may worsen.</td></tr>
+<tr><td>Sales Order cancelled</td><td>Sales Order → on_cancel</td><td>reserved_qty goes down → IP improves → buffer may recover.</td></tr>
+<tr><td>Work Order submitted</td><td>Work Order → on_submit</td><td>WIP increases → IP improves for FG item.</td></tr>
+<tr><td>Purchase Order submitted</td><td>Purchase Order → on_submit</td><td>ordered_qty increases → IP improves for RM/PM item.</td></tr>
+</table>
+
+<!-- ═══════════ REPORTS ═══════════ -->
+<h1 id="reports">Reports — Which One, When, Why</h1>
+<table>
+<tr><th>Report</th><th>Who Opens It</th><th>When</th><th>What Question It Answers</th></tr>
+<tr><td><strong><a href="/app/query-report/Production%20Priority%20Board">Production Priority Board</a></strong></td><td>Production Supervisor, Plant Manager</td><td>Every morning</td><td>"What should the VFFS run first today?" All items sorted by BP%, highest first.</td></tr>
+<tr><td><strong><a href="/app/query-report/Procurement%20Action%20List">Procurement Action List</a></strong></td><td>Purchase Manager</td><td>Every morning</td><td>"Which raw materials do I need to order urgently?" RM+PM only.</td></tr>
+<tr><td><strong><a href="/app/query-report/Buffer%20Status%20Report">Buffer Status Report</a></strong></td><td>Supply Chain Manager</td><td>Weekly review</td><td>"How have buffers been trending over time?" Historical BP% chart.</td></tr>
+<tr><td><strong><a href="/app/query-report/DBM%20Analysis%20Report">DBM Analysis Report</a></strong></td><td>TOC Manager</td><td>Monthly review</td><td>"Are buffers auto-adjusting correctly?" TMR/TMG trigger counts.</td></tr>
+<tr><td><strong><a href="/app/toc-dashboard">TOC Dashboard</a></strong></td><td>Everyone</td><td>Anytime</td><td>"Quick overview of all zones right now." Live cards + table + chart.</td></tr>
+</table>
+
+<!-- ═══════════ ADU ═══════════ -->
+<h1 id="adu">ADU — Where It Calculates, How It Works</h1>
+<div class="ib">
+<strong>WHERE:</strong> Item → <strong>"TOC Setting"</strong> tab → Section 2 "Average Daily Usage"<br>
+<strong>WHEN:</strong> Every day at <strong>6:30 AM</strong> by the scheduler<br>
+<strong>FORMULA:</strong> Total qty consumed in period ÷ Number of days in period
+</div>
+<table>
+<tr><th>Item Type</th><th>What Data Is Read</th><th>ERPNext Source</th></tr>
+<tr><td>FG (Finished Goods)</td><td>How many units were <strong>shipped to customers</strong></td><td>Delivery Note Item → qty (submitted docs only)</td></tr>
+<tr><td>RM (Raw Materials)</td><td>How many units were <strong>consumed in production</strong></td><td>Stock Entry Detail → qty (Material Issue / Manufacture types)</td></tr>
+<tr><td>PM (Packaging)</td><td>Same as RM — consumed in production</td><td>Stock Entry Detail → qty</td></tr>
+<tr><td>SFG (Semi-Finished)</td><td>How many SFG units were <strong>consumed when packing FG</strong></td><td>Stock Entry Detail → qty (where SFG was the source)</td></tr>
+</table>
+<div class="wb">
+<strong>"Custom ADU" checkbox:</strong> If you check "Custom ADU (Manual Entry)" on the Item, the 6:30 AM scheduler will <strong>SKIP</strong> that item entirely. Your manually-entered ADU value is never overwritten. Use this when there is no consumption history in the system yet.
+</div>
+
+<!-- ═══════════ BOM ═══════════ -->
+<h1 id="bom">BOM and Multi-Level SFG</h1>
+<p>One FG can have a BOM with <strong>multiple SFGs + multiple RMs + PMs</strong>. Each SFG can itself have a BOM with more components. The system walks the full BOM tree (up to 5 levels deep).</p>
+<div class="fl">
+FG BOM: Masala Tea 1kg<br>
+├── SFG: Masala Premix Blend (0.95 kg)<br>
+│&nbsp;&nbsp;&nbsp;├── RM: Tea Dust CTC (0.6 kg)<br>
+│&nbsp;&nbsp;&nbsp;├── RM: Sugar (0.2 kg)<br>
+│&nbsp;&nbsp;&nbsp;└── RM: Milk Powder (0.15 kg)<br>
+├── RM: Tea Dust CTC (0.05 kg)<br>
+└── PM: 1kg Printed Pouch (1 pc)
+</div>
+<p><strong>Setup:</strong> Item → TOC Setting → Section 4 → link Default BOM → check "Check BOM Availability". Click the "Check BOM" button under the TOC button group to see component availability.</p>
+
+<!-- ═══════════ DBM ═══════════ -->
+<h1 id="dbm">DBM — Dynamic Buffer Management</h1>
+<table>
+<tr><th>Trigger</th><th>Condition</th><th>What Happens</th><th>Speed</th></tr>
+<tr><td><span class="zb zr">TMR (Too Much Red)</span></td><td>Days in Red zone > 20% of RLT</td><td>Buffer × 1.33 (increase 33%)</td><td>FAST — stockout protection is urgent</td></tr>
+<tr><td><span class="zb zg">TMG (Too Much Green)</span></td><td>Green for 3 complete RLT cycles</td><td>Buffer × 0.67 (decrease 33%)</td><td>SLOW — reduce excess cautiously</td></tr>
+</table>
+<div class="wb">
+<strong>Safeguards built in:</strong> Maximum 3 consecutive TMR increases (then manual review needed). Buffer never shrinks below minimum floor (default 50 units). The asymmetry is deliberate: cost of stockout is far greater than cost of holding extra stock.
+</div>
+
+<!-- ═══════════ DAF ═══════════ -->
+<h1 id="daf">DAF — Seasonal Demand Adjustment</h1>
+<table>
+<tr><th>Event</th><th>DAF Multiplier</th><th>Effect on 900-unit buffer</th></tr>
+<tr><td>Diwali Festival</td><td><strong>1.6×</strong></td><td>→ 1,440 units (+60%)</td></tr>
+<tr><td>Trade Promotion</td><td><strong>1.8×</strong></td><td>→ 1,620 units (+80%)</td></tr>
+<tr><td>Normal Operations</td><td><strong>1.0×</strong></td><td>→ 900 units (no change)</td></tr>
+<tr><td>Monsoon Dip</td><td><strong>0.85×</strong></td><td>→ 765 units (−15%)</td></tr>
+<tr><td>Summer Slowdown</td><td><strong>0.7×</strong></td><td>→ 630 units (−30%)</td></tr>
+</table>
+<p>Apply via: <a href="/app/query-report/Production%20Priority%20Board">Production Priority Board</a> → Actions → "Apply DAF".</p>
+
+<!-- ═══════════ DEMO DATA ═══════════ -->
+<h1 id="demo">Demo Data — Test Everything With One Click</h1>
+<div class="ib">
+<strong>Admin only.</strong> Go to <a href="/app/toc-dashboard">TOC Dashboard</a> → <strong>Actions menu</strong> → <strong>"🧪 Create Demo Data"</strong>.
+</div>
+<p>This creates a complete test dataset to verify all TOC triggers work correctly:</p>
+<table>
+<tr><th>Item Created</th><th>Type</th><th>Stock</th><th>Target</th><th>Expected Zone</th></tr>
+<tr><td>TOC-DEMO-FG-MASALA-1KG</td><td>FG (Manufacture)</td><td>200</td><td>900</td><td><span class="zb zr">RED</span> (BP% 78%)</td></tr>
+<tr><td>TOC-DEMO-FG-GINGER-500G</td><td>FG (Manufacture)</td><td>450</td><td>810</td><td><span class="zb zy">YELLOW</span> (BP% 44%)</td></tr>
+<tr><td>TOC-DEMO-FG-CARDAMOM-200G</td><td>FG (Manufacture)</td><td>1,100</td><td>1,260</td><td><span class="zb zg">GREEN</span> (BP% 13%)</td></tr>
+<tr><td>TOC-DEMO-SFG-MASALA-BLEND</td><td>SFG (Manufacture)</td><td>200</td><td>293</td><td><span class="zb zy">YELLOW</span> (BP% 32%)</td></tr>
+<tr><td>TOC-DEMO-RM-TEA-DUST</td><td>RM (Purchase)</td><td>1,800</td><td>7,200</td><td><span class="zb zr">RED</span> (BP% 75%)</td></tr>
+<tr><td>TOC-DEMO-RM-SUGAR</td><td>RM (Purchase)</td><td>8,000</td><td>9,750</td><td><span class="zb zg">GREEN</span> (BP% 18%)</td></tr>
+<tr><td>TOC-DEMO-PM-POUCH-1KG</td><td>PM (Purchase)</td><td>3,000</td><td>5,400</td><td><span class="zb zy">YELLOW</span> (BP% 44%)</td></tr>
+</table>
+<p>Also creates: a BOM linking FG-MASALA to SFG-BLEND + RM-TEA + PM-POUCH, and 11 Delivery Notes for ADU history.</p>
+<p><strong>To clean up:</strong> Actions → <strong>"🗑️ Delete Demo Data"</strong> — removes everything that was created, tracked by exact document IDs.</p>
+<p>All demo documents are prefixed with <code>TOC-DEMO-</code> so you can easily spot them.</p>
+
+<!-- ═══════════ FAQ ═══════════ -->
+<h1 id="faq">Frequently Asked Questions</h1>
+
+<h3>Where does ADU auto-calculate?</h3>
+<p>Item → "TOC Setting" tab → Section 2. The scheduler runs at 6:30 AM daily. The result is written to "ADU Value [TOC App]" on the Item.</p>
+
+<h3>What if I just started and have no transaction history?</h3>
+<p>Check "Custom ADU" on the Item and type your estimated daily usage manually. The scheduler will not overwrite your value. Once you have 30+ days of real data, uncheck it to switch to auto-calculation.</p>
+
+<h3>Can an item be both purchased AND manufactured?</h3>
+<p>No. You must choose ONE: "Auto Purchase TOC" (for items you buy from suppliers) OR "Auto Manufacturing TOC" (for items you produce in-house). The system enforces this — you cannot check both.</p>
+
+<h3>What does "Recorded By" mean on Material Request and Work Order?</h3>
+<p><strong>"By System"</strong> = auto-created by the TOC engine at 7:00 AM based on buffer calculations. <strong>"By User"</strong> = manually created by a person. System-generated MRs follow buffer priority sorting.</p>
+
+<h3>How do I test if everything works?</h3>
+<p>Go to <a href="/app/toc-dashboard">TOC Dashboard</a> → Actions → <strong>"🧪 Create Demo Data"</strong> (Administrator only). This creates 7 test items across all scenarios. Click <strong>"🗑️ Delete Demo Data"</strong> to clean up afterwards.</p>
+
+<h3>What happens to the default ERPNext auto reorder?</h3>
+<p>It is <strong>automatically disabled</strong> when this app is installed. The TOC engine completely replaces it. If you uninstall the app, the default reorder is re-enabled as a safety net.</p>
+
+<h3>What is the keyboard shortcut?</h3>
+<p><strong>Ctrl+Shift+T</strong> from anywhere in ERPNext opens the TOC workspace instantly.</p>
+
+<!-- ═══════════ NAVIGATION MAP ═══════════ -->
+<h1 id="navigate">Where to Find Everything — Navigation Map</h1>
+<table>
+<tr><th>I want to...</th><th>Go here</th><th>How to get there</th></tr>
+<tr><td>See today's production priority</td><td><a href="/app/query-report/Production%20Priority%20Board">Production Priority Board</a></td><td>Sidebar → TOC Buffer Management → Production Priority Board</td></tr>
+<tr><td>See what materials to order</td><td><a href="/app/query-report/Procurement%20Action%20List">Procurement Action List</a></td><td>Sidebar → TOC Buffer Management → Procurement Action List</td></tr>
+<tr><td>Check one item's buffer status</td><td>Item form → TOC button → Buffer Status</td><td>Open any Item → click "TOC" button group → "Buffer Status"</td></tr>
+<tr><td>Configure TOC for an item</td><td>Item → "TOC Setting" tab</td><td>Open any Item → click "TOC Setting" tab at the top</td></tr>
+<tr><td>Change zone thresholds</td><td><a href="/app/toc-settings">TOC Settings</a></td><td>Search "TOC Settings" or sidebar → Configuration card</td></tr>
+<tr><td>See the live dashboard</td><td><a href="/app/toc-dashboard">TOC Dashboard</a></td><td>Sidebar → TOC Buffer Management → first shortcut</td></tr>
+<tr><td>View buffer trends over time</td><td><a href="/app/query-report/Buffer%20Status%20Report">Buffer Status Report</a></td><td>Sidebar → TOC Buffer Management → Buffer Status Report</td></tr>
+<tr><td>Check if DBM is auto-adjusting</td><td><a href="/app/query-report/DBM%20Analysis%20Report">DBM Analysis Report</a></td><td>Sidebar → TOC Buffer Management → DBM Analysis Report</td></tr>
+<tr><td>See all TOC-generated MRs</td><td><a href="/app/material-request?custom_toc_recorded_by=By+System">Material Request (filtered)</a></td><td>Quick Access → TOC Auto Material Requests</td></tr>
+<tr><td>See daily buffer snapshots</td><td><a href="/app/toc-buffer-log">TOC Buffer Log</a></td><td>Quick Access → TOC Buffer Logs</td></tr>
+<tr><td>Check if scheduled jobs ran</td><td><a href="/app/scheduled-job-log">Scheduled Job Log</a></td><td>Search → filter by "chaizup_toc"</td></tr>
+<tr><td>Create test data</td><td>Dashboard → Actions → Create Demo Data</td><td>Administrator only. Creates all 7 test scenarios.</td></tr>
+<tr><td>Read this guide</td><td><a href="/toc-user-guide">This page</a></td><td>Sidebar → TOC Complete User Guide shortcut</td></tr>
+</table>
+
+<div style="margin-top:40px;padding:20px;background:#f8fafc;border-radius:10px;text-align:center;color:#94a3b8;font-size:13px">
+Chaizup TOC Buffer Management v1.0.0 — March 2026<br>
+Keyboard shortcut: <strong>Ctrl+Shift+T</strong> → opens TOC workspace instantly
+</div>
+</div>
+{% endblock %}

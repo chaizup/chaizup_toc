@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <clipPath id="cupClipW">
+      <path d="M52 88 Q50 140 58 152 Q66 162 100 162 Q134 162 142 152 Q150 140 148 88 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Steam wisps -->
+  <path d="M 74 72 Q 70 62 74 52 Q 78 42 74 32" stroke="white" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M 88 68 Q 84 58 88 48 Q 92 38 88 28" stroke="white" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.55"/>
+  <path d="M 112 68 Q 116 58 112 48 Q 108 38 112 28" stroke="white" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.55"/>
+  <path d="M 126 72 Q 130 62 126 52 Q 122 42 126 32" stroke="white" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+
+  <!-- Saucer -->
+  <ellipse cx="100" cy="163" rx="54" ry="8" fill="white" fill-opacity="0.2" stroke="white" stroke-width="1.5" stroke-opacity="0.5"/>
+  <!-- Cup wall -->
+  <path d="M52 88 Q50 140 58 152 Q66 162 100 162 Q134 162 142 152 Q150 140 148 88 Z"
+        fill="white" fill-opacity="0.1" stroke="white" stroke-width="2" stroke-opacity="0.8"/>
+
+  <!-- Liquid zones — white alpha -->
+  <rect x="52" y="130" width="96" height="22" fill="white" fill-opacity="0.5" clip-path="url(#cupClipW)"/>
+  <rect x="52" y="109" width="96" height="21" fill="white" fill-opacity="0.35" clip-path="url(#cupClipW)"/>
+  <rect x="52" y="88"  width="96" height="21" fill="white" fill-opacity="0.2" clip-path="url(#cupClipW)"/>
+
+  <!-- Liquid surface -->
+  <ellipse cx="100" cy="88" rx="48" ry="5" fill="white" opacity="0.2"/>
+  <!-- Cup rim -->
+  <path d="M52 88 Q100 80 148 88" stroke="white" stroke-width="2" fill="none" opacity="0.6"/>
+
+  <!-- Handle -->
+  <path d="M148 102 Q172 102 172 120 Q172 138 148 138"
+        stroke="white" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.6"/>
+  <path d="M148 102 Q168 102 168 120 Q168 138 148 138"
+        stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9"/>
+
+  <!-- Needle -->
+  <path d="M 78 125 A 22 22 0 0 1 122 125" stroke="white" stroke-width="3" fill="none" opacity="0.3"/>
+  <line x1="100" y1="125" x2="88" y2="108" stroke="white" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="100" cy="125" r="3" fill="white"/>
+
+  <!-- Zone dots -->
+  <circle cx="80" cy="148" r="4" fill="white" opacity="0.5"/>
+  <circle cx="100" cy="148" r="4" fill="white" opacity="0.7"/>
+  <circle cx="120" cy="148" r="4" fill="white" opacity="0.9"/>
+
+  <text x="100" y="176" text-anchor="middle" font-family="'JetBrains Mono',monospace" font-size="10" font-weight="700" fill="white" letter-spacing="3" opacity="0.9">TOC</text>
+</svg>

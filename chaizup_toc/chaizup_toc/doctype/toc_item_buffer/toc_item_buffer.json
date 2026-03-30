@@ -1,0 +1,68 @@
+{
+  "actions": [],
+  "creation": "2026-03-14 10:00:00",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "istable": 1,
+  "module": "Chaizup Toc",
+  "name": "TOC Item Buffer",
+  "owner": "Administrator",
+  "fields": [
+    {"fieldname": "warehouse", "fieldtype": "Link", "label": "Warehouse",
+     "options": "Warehouse", "reqd": 1, "in_list_view": 1, "columns": 2,
+     "description": "Target warehouse for this buffer rule. One row per warehouse."},
+
+    {"fieldname": "adu", "fieldtype": "Float", "label": "ADU",
+     "reqd": 1, "in_list_view": 1, "columns": 1,
+     "description": "F1: Average Daily Usage — rolling 90-day average of daily consumption (units/day). Export from Delivery Notes."},
+
+    {"fieldname": "rlt", "fieldtype": "Float", "label": "RLT (days)",
+     "reqd": 1, "in_list_view": 1, "columns": 1,
+     "description": "F1: Replenishment Lead Time in days. FG=blend+pack+QC+move. RM=PO to GRN. Average last 10 cycles."},
+
+    {"fieldname": "variability_factor", "fieldtype": "Float", "label": "VF",
+     "reqd": 1, "in_list_view": 1, "columns": 1, "default": "1.5",
+     "description": "F1: Variability Factor. 1.0-1.3=stable supplier/demand. 1.3-1.6=moderate. 1.6-2.0=volatile/seasonal."},
+
+    {"fieldname": "target_buffer", "fieldtype": "Float", "label": "Target Buffer",
+     "read_only": 1, "in_list_view": 1, "columns": 1, "bold": 1,
+     "description": "F1: Auto-calculated = ADU × RLT × VF. This is the maximum buffer stock to hold."},
+
+    {"fieldname": "daf", "fieldtype": "Float", "label": "DAF",
+     "default": "1.0", "in_list_view": 1, "columns": 1,
+     "description": "F6: Demand Adjustment Factor. 1.0=normal. Diwali=1.6. Summer=0.7. Overrides global DAF if set."},
+
+    {"fieldname": "adjusted_buffer", "fieldtype": "Float", "label": "Adjusted Buffer",
+     "read_only": 1,
+     "description": "F6: = Target Buffer × DAF. Used when DAF ≠ 1.0. This is the EFFECTIVE buffer size."},
+
+    {"fieldname": "red_zone_qty", "fieldtype": "Float", "label": "Red Zone (< qty)",
+     "read_only": 1,
+     "description": "Auto-calculated: Buffer × 33%. Stock below this = Red Zone = PRODUCE NOW."},
+
+    {"fieldname": "yellow_zone_qty", "fieldtype": "Float", "label": "Yellow Zone (< qty)",
+     "read_only": 1,
+     "description": "Auto-calculated: Buffer × 66%. Stock below this but above Red = Yellow Zone = plan replenishment."},
+
+    {"fieldname": "section_dbm", "fieldtype": "Section Break", "label": "DBM Tracking", "collapsible": 1},
+
+    {"fieldname": "tmr_count", "fieldtype": "Int", "label": "TMR Count",
+     "default": "0", "read_only": 1,
+     "description": "F7: Consecutive Too-Much-Red increases. Safeguard blocks at max (default 3)."},
+
+    {"fieldname": "tmg_green_days", "fieldtype": "Int", "label": "Consecutive Green Days",
+     "default": "0", "read_only": 1,
+     "description": "F8: Consecutive days in Green zone. TMG triggers at 3 × RLT days."},
+
+    {"fieldname": "last_dbm_date", "fieldtype": "Date", "label": "Last DBM Evaluation",
+     "read_only": 1, "description": "Date of last DBM (TMR/TMG) check."},
+
+    {"fieldname": "enabled", "fieldtype": "Check", "label": "Active",
+     "default": "1", "in_list_view": 1, "columns": 1,
+     "description": "Uncheck to temporarily disable this buffer rule without deleting it."}
+  ],
+  "permissions": [],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "track_changes": 0
+}
