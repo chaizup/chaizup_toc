@@ -5,18 +5,24 @@ Reads from built-in ERPNext Bin + Work Order + Item DocTypes.
 Custom Fields on Item hold buffer config.
 Child table 'TOC Item Buffer' holds per-warehouse rules.
 
-ERPNext Data Sources:
-  ┌──────────────────┬─────────────┬───────────────┐
-  │ TOC Concept      │ DocType     │ Field         │
-  ├──────────────────┼─────────────┼───────────────┤
-  │ On-Hand          │ Bin         │ actual_qty    │
-  │ WIP (FG)         │ Work Order  │ qty-produced  │
-  │ Backorders (FG)  │ Bin         │ reserved_qty  │
-  │ On-Order (RM)    │ Bin         │ ordered_qty   │
-  │ Committed (RM)   │ Bin         │ reserved_qty  │
-  │ ADU, RLT, VF     │ Item child  │ TOC Item Buf  │
-  │ Buffer Type      │ Item        │ custom field  │
-  └──────────────────┴─────────────┴───────────────┘
+Universal IP Formula (F2) — same for ALL item types:
+  IP = On-Hand + WIP + On-Order − Backorders − Committed
+
+Every item checks every transaction source. An item may be both manufactured
+AND purchased; both sold AND consumed as a component — whichever transactions
+exist for an item contribute to its IP. Unused sources simply return 0.
+
+  ┌─────────────────────┬─────────────────┬──────────────────────────────────────┐
+  │ TOC Concept         │ DocType         │ Field / Query                        │
+  ├─────────────────────┼─────────────────┼──────────────────────────────────────┤
+  │ On-Hand             │ Bin             │ actual_qty                           │
+  │ WIP (supply)        │ Work Order      │ qty − produced_qty (own WOs)         │
+  │ On-Order (supply)   │ Bin             │ ordered_qty (open PO qty)            │
+  │ Backorders (demand) │ Bin             │ reserved_qty (Sales Order demand)    │
+  │ Committed (demand)  │ Work Order Item │ required_qty − transferred_qty       │
+  │ ADU, RLT, VF        │ Item child      │ TOC Item Buffer                      │
+  │ Buffer Type         │ Item            │ custom_toc_buffer_type               │
+  └─────────────────────┴─────────────────┴──────────────────────────────────────┘
 """
 
 import frappe
@@ -72,16 +78,37 @@ def get_zone_action(zone, buffer_type="FG"):
 # INVENTORY POSITION CALCULATORS
 # ═══════════════════════════════════════════════════════
 
-def get_fg_position(item_code, warehouse, settings=None):
+def get_inventory_position(item_code, warehouse, settings=None):
     """
-    F2a: FG Inventory Position = On-Hand + WIP − Backorders
+    Universal F2: IP = On-Hand + WIP + On-Order − Backorders − Committed
 
-    When TOC Settings has Warehouse Classification rules:
-      - On-Hand: SUM of Bin.actual_qty across all Inventory-classified warehouses
-      - WIP:     Work Orders targeting Inventory/WIP warehouses
-                 + Bin.actual_qty in WIP-classified warehouses
-      - Backorders: SUM of Bin.reserved_qty across Inventory warehouses
-    Fallback (no warehouse rules): single warehouse lookup (original behavior).
+    Checks ALL supply and demand transactions for every item regardless of
+    buffer type. An item may be both manufactured AND purchased; it may be
+    both sold AND consumed as a component. Every source is always queried —
+    unused ones simply return 0 and have no effect on the result.
+
+      Supply (adds to IP):
+        + WIP      — open Work Orders WHERE production_item = this item
+                     (qty − produced_qty). Zero if item is never manufactured.
+        + On-Order — Bin.ordered_qty (open Purchase Order quantity).
+                     Zero if item is never purchased.
+
+      Demand (reduces IP):
+        − Backorders — Bin.reserved_qty (Sales Order qty not yet shipped).
+                       Zero if item is never sold.
+        − Committed  — SUM(GREATEST(required_qty − transferred_qty, 0)) from
+                       tabWork Order Item for all open WOs that consume this
+                       item as a component. Zero if item is never in a BOM.
+
+    Warehouse-aware mode (when TOC Settings warehouse_rules is configured):
+      - On-Hand / Backorders: Inventory-classified warehouses only
+      - WIP WOs: filtered by fg_warehouse IN (Inventory + WIP warehouses)
+      - WIP bins: Bin.actual_qty in WIP-classified warehouses
+      - On-Order: Bin.ordered_qty across Inventory + WIP warehouses
+      - Committed WO items: filtered by source_warehouse IN (Inventory warehouses)
+
+    Fallback (no warehouse_rules): single warehouse Bin lookup + global WO/WOI
+    queries (original backward-compatible behavior).
     """
     if settings is None:
         settings = _get_settings()
@@ -89,80 +116,83 @@ def get_fg_position(item_code, warehouse, settings=None):
     wh = _get_warehouse_lists(settings)
 
     if wh["inventory"]:
-        on_hand = _sum_bin_field(item_code, wh["inventory"], "actual_qty")
+        on_hand   = _sum_bin_field(item_code, wh["inventory"], "actual_qty")
+        on_order  = _sum_bin_field(item_code, wh["inventory"] + wh["wip"], "ordered_qty")
         backorders = _sum_bin_field(item_code, wh["inventory"], "reserved_qty")
 
-        # Work Orders destined for Inventory or WIP warehouses
+        # WIP: open Work Orders producing this item (own production)
         wo_target_whs = wh["inventory"] + wh["wip"]
-        placeholders = ", ".join(["%s"] * len(wo_target_whs))
+        wo_ph = ", ".join(["%s"] * len(wo_target_whs))
         wip_from_wo = flt(frappe.db.sql(
             f"""SELECT COALESCE(SUM(qty - produced_qty), 0)
                 FROM `tabWork Order`
                 WHERE production_item = %s AND docstatus = 1
-                AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
-                AND fg_warehouse IN ({placeholders})""",
+                  AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
+                  AND fg_warehouse IN ({wo_ph})""",
             [item_code] + wo_target_whs
         )[0][0])
+        # WIP bins: stock already moved to WIP warehouse (e.g. SFG staged for next stage)
+        wip_bins = _sum_bin_field(item_code, wh["wip"], "actual_qty") if wh["wip"] else 0.0
+        wip = wip_from_wo + wip_bins
 
-        # Dedicated WIP warehouse bins (for companies without Work Orders)
-        wip_from_bins = _sum_bin_field(item_code, wh["wip"], "actual_qty") if wh["wip"] else 0.0
-        wip = wip_from_wo + wip_from_bins
+        # Committed: all open WOs consuming this item, drawing from Inventory warehouses
+        inv_ph = ", ".join(["%s"] * len(wh["inventory"]))
+        committed = flt(frappe.db.sql(
+            f"""SELECT COALESCE(SUM(GREATEST(woi.required_qty - woi.transferred_qty, 0)), 0)
+                FROM `tabWork Order Item` woi
+                JOIN `tabWork Order` wo ON wo.name = woi.parent
+                WHERE woi.item_code = %s
+                  AND wo.docstatus = 1
+                  AND wo.status NOT IN ('Completed', 'Stopped', 'Cancelled')
+                  AND woi.source_warehouse IN ({inv_ph})""",
+            [item_code] + wh["inventory"]
+        )[0][0])
     else:
-        # Fallback: single warehouse (original behavior — backward-compatible)
-        bin_data = frappe.db.get_value("Bin",
-            {"item_code": item_code, "warehouse": warehouse},
-            ["actual_qty", "reserved_qty"], as_dict=True
-        ) or {"actual_qty": 0, "reserved_qty": 0}
-        on_hand = flt(bin_data.get("actual_qty"))
-        backorders = flt(bin_data.get("reserved_qty"))
-        wip = flt(frappe.db.sql("""
-            SELECT COALESCE(SUM(qty - produced_qty), 0)
-            FROM `tabWork Order`
-            WHERE production_item = %s AND docstatus = 1
-            AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
-        """, item_code)[0][0])
-
-    return {"on_hand": on_hand, "wip": wip, "backorders": backorders,
-            "ip": on_hand + wip - backorders}
-
-
-def get_sfg_position(item_code, warehouse, settings=None):
-    """
-    F2 (SFG): Same as FG — blending Work Orders behave identically to production WOs.
-    """
-    return get_fg_position(item_code, warehouse, settings)
-
-
-def get_rm_position(item_code, warehouse, settings=None):
-    """
-    F2b: RM/PM Inventory Position = On-Hand + On-Order − Committed
-
-    When TOC Settings has Warehouse Classification rules:
-      - On-Hand:  SUM Bin.actual_qty across Inventory warehouses
-      - On-Order: SUM Bin.ordered_qty across Inventory + WIP warehouses
-      - Committed: SUM Bin.reserved_qty across Inventory warehouses
-    Fallback (no warehouse rules): single warehouse lookup (original behavior).
-    """
-    if settings is None:
-        settings = _get_settings()
-
-    wh = _get_warehouse_lists(settings)
-
-    if wh["inventory"]:
-        on_hand = _sum_bin_field(item_code, wh["inventory"], "actual_qty")
-        on_order = _sum_bin_field(item_code, wh["inventory"] + wh["wip"], "ordered_qty")
-        committed = _sum_bin_field(item_code, wh["inventory"], "reserved_qty")
-    else:
+        # Fallback: single warehouse mode
         bin_data = frappe.db.get_value("Bin",
             {"item_code": item_code, "warehouse": warehouse},
             ["actual_qty", "ordered_qty", "reserved_qty"], as_dict=True
         ) or {"actual_qty": 0, "ordered_qty": 0, "reserved_qty": 0}
-        on_hand = flt(bin_data.get("actual_qty"))
-        on_order = flt(bin_data.get("ordered_qty"))
-        committed = flt(bin_data.get("reserved_qty"))
+        on_hand    = flt(bin_data.get("actual_qty"))
+        on_order   = flt(bin_data.get("ordered_qty"))
+        backorders = flt(bin_data.get("reserved_qty"))
 
-    return {"on_hand": on_hand, "on_order": on_order, "committed": committed,
-            "ip": on_hand + on_order - committed}
+        wip = flt(frappe.db.sql("""
+            SELECT COALESCE(SUM(qty - produced_qty), 0)
+            FROM `tabWork Order`
+            WHERE production_item = %s AND docstatus = 1
+              AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
+        """, item_code)[0][0])
+
+        committed = flt(frappe.db.sql("""
+            SELECT COALESCE(SUM(GREATEST(woi.required_qty - woi.transferred_qty, 0)), 0)
+            FROM `tabWork Order Item` woi
+            JOIN `tabWork Order` wo ON wo.name = woi.parent
+            WHERE woi.item_code = %s
+              AND wo.docstatus = 1
+              AND wo.status NOT IN ('Completed', 'Stopped', 'Cancelled')
+        """, item_code)[0][0])
+
+    ip = on_hand + wip + on_order - backorders - committed
+    return {
+        "on_hand": on_hand,
+        "wip": wip,
+        "on_order": on_order,
+        "backorders": backorders,
+        "committed": committed,
+        "ip": ip,
+    }
+
+
+# Backward-compatible aliases — all delegate to get_inventory_position
+def get_fg_position(item_code, warehouse, settings=None):
+    return get_inventory_position(item_code, warehouse, settings)
+
+def get_sfg_position(item_code, warehouse, settings=None):
+    return get_inventory_position(item_code, warehouse, settings)
+
+def get_rm_position(item_code, warehouse, settings=None):
+    return get_inventory_position(item_code, warehouse, settings)
 
 
 # ═══════════════════════════════════════════════════════
@@ -241,14 +271,8 @@ def _calculate_single(item, rule, settings):
         return None
 
     btype = item.custom_toc_buffer_type
-    # F2: Get inventory position (settings passed for warehouse classification)
-    if btype == "FG":
-        pos = get_fg_position(item.name, rule.warehouse, settings)
-    elif btype == "SFG":
-        pos = get_sfg_position(item.name, rule.warehouse, settings)
-    else:
-        pos = get_rm_position(item.name, rule.warehouse, settings)
-
+    # F2: Universal inventory position — all transaction types checked for every item
+    pos = get_inventory_position(item.name, rule.warehouse, settings)
     ip = flt(pos["ip"])
 
     # F3: Buffer Penetration % and Stock Remaining %
@@ -277,10 +301,15 @@ def _calculate_single(item, rule, settings):
         "company": company,
         "buffer_type": btype,
         "mr_type": "Manufacture" if item.custom_toc_auto_manufacture else "Purchase",
-        # Position
+        # Position — all four components always present
         "on_hand": pos.get("on_hand", 0),
-        "wip_or_on_order": pos.get("wip", pos.get("on_order", 0)),
-        "backorders_or_committed": pos.get("backorders", pos.get("committed", 0)),
+        "wip": pos.get("wip", 0),
+        "on_order": pos.get("on_order", 0),
+        "backorders": pos.get("backorders", 0),
+        "committed": pos.get("committed", 0),
+        # Combined convenience fields (supply side / demand side)
+        "wip_or_on_order": pos.get("wip", 0) + pos.get("on_order", 0),
+        "backorders_or_committed": pos.get("backorders", 0) + pos.get("committed", 0),
         "inventory_position": round(ip, 2),
         # Buffer status
         "target_buffer": target,

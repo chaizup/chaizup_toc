@@ -17,6 +17,8 @@ frappe.pages["toc-dashboard"].on_page_load = function (wrapper) {
   page.add_inner_button(__("Refresh Data"), () => dash.load()).addClass("btn-primary-dark");
 
   // ── Menu items ──
+  page.add_menu_item(__("Full Kitting Report"), () =>
+    frappe.set_route("kitting-report"));
   page.add_menu_item(__("TOC Settings"), () =>
     frappe.set_route("Form", "TOC Settings", "TOC Settings"));
   page.add_menu_item(__("Production Priority Board"), () =>

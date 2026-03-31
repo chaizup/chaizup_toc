@@ -1,0 +1,406 @@
+<!-- Full Kitting Report — Enterprise Grade, Frappe Native -->
+<style>
+/* ── Base ── */
+.kit-root {
+  font-family: var(--font-stack, "Inter", sans-serif);
+  color: var(--text-color, #1f2937);
+  padding: 14px 0 60px;
+}
+
+/* ── Summary Cards ── */
+.kit-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.kit-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  position: relative;
+  overflow: hidden;
+}
+.kit-card-val {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  margin: 6px 0 4px;
+}
+.kit-card-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.kit-card-icon {
+  position: absolute;
+  right: 16px; top: 14px;
+  font-size: 22px; opacity: .5;
+}
+.kit-card-none   { border-top: 3px solid #ef4444; }
+.kit-card-partial{ border-top: 3px solid #f59e0b; }
+.kit-card-full   { border-top: 3px solid #10b981; }
+.kit-card-total  { border-top: 3px solid #6366f1; }
+
+/* ── Bulk actions bar ── */
+.kit-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.kit-btn {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border-color, #d1d5db);
+  background: #fff;
+  color: var(--text-color, #374151);
+  transition: all .18s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kit-btn:hover { background: #f9fafb; border-color: #9ca3af; }
+.kit-btn-primary {
+  background: var(--primary-color, #2563eb);
+  color: #fff;
+  border-color: var(--primary-color, #2563eb);
+}
+.kit-btn-primary:hover { opacity: .88; }
+.kit-btn-danger { background:#fef2f2; color:#dc2626; border-color:#fecaca; }
+.kit-btn-danger:hover { background:#fee2e2; }
+.kit-btn-teal { background:#f0fdfa; color:#0f766e; border-color:#99f6e4; }
+.kit-btn-teal:hover { background:#ccfbf1; }
+.kit-btn-mfg { background:#f5f3ff; color:#7c3aed; border-color:#ddd6fe; }
+.kit-btn-mfg:hover { background:#ede9fe; }
+
+/* ── Main table ── */
+.kit-table-wrap {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  overflow-x: auto;
+}
+.kit-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border-color, #f3f4f6);
+}
+.kit-table-title { font-size: 15px; font-weight: 600; }
+.kit-table-sub   { font-size: 12px; color: var(--text-muted, #6b7280); }
+
+table.kit-tbl {
+  width: 100%; border-collapse: collapse; text-align: left;
+}
+.kit-tbl th {
+  padding: 9px 12px;
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  white-space: nowrap;
+  background: #fafafa;
+}
+.kit-tbl td {
+  padding: 12px 12px;
+  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  font-size: 13px;
+  vertical-align: middle;
+}
+.kit-tbl tbody tr { cursor: pointer; transition: background .1s; }
+.kit-tbl tbody tr:hover { background: #f8fafc; }
+.kit-tbl tbody tr.kit-row-active { background: #eff6ff; }
+.kit-num {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12.5px;
+}
+
+/* Type badges */
+.kit-type {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 2px 8px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+}
+.kit-type-FG  { background:#ede9fe; color:#6d28d9; }
+.kit-type-SFG { background:#e0f2fe; color:#0369a1; }
+.kit-type-RM  { background:#fef9c3; color:#92400e; }
+.kit-type-PM  { background:#fce7f3; color:#9d174d; }
+
+/* Kit status pill */
+.kit-status-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 20px;
+  font-size: 11.5px; font-weight: 600;
+}
+.kit-status-full    { background:#d1fae5; color:#065f46; }
+.kit-status-partial { background:#fef3c7; color:#92400e; }
+.kit-status-none    { background:#fee2e2; color:#991b1b; }
+.kit-status-no_demand { background:#f1f5f9; color:#64748b; }
+
+/* Progress mini bar */
+.kit-mini-bar { height: 5px; border-radius: 99px; background: #e5e7eb; width: 80px; }
+.kit-mini-fill { height: 100%; border-radius: 99px; }
+
+/* ── Drill-Down Panel ── */
+.kit-drill-panel {
+  margin-top: 20px;
+  background: var(--card-bg, #fff);
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(99,102,241,.08);
+  overflow: hidden;
+}
+.kit-drill-header {
+  background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%);
+  padding: 18px 22px;
+  border-bottom: 1px solid #ddd6fe;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.kit-drill-title { font-size: 16px; font-weight: 700; color: #1e1b4b; }
+.kit-drill-sub   { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.kit-drill-stats {
+  display: flex; gap: 24px; flex-wrap: wrap;
+}
+.kit-stat { text-align: center; }
+.kit-stat-val { font-size: 22px; font-weight: 700; line-height: 1; }
+.kit-stat-lbl { font-size: 11px; color: #6b7280; margin-top: 2px; }
+
+.kit-drill-actions {
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  display: flex; gap: 10px; flex-wrap: wrap;
+  background: #fafafe;
+}
+
+/* ── Component Tree ── */
+.kit-tree { padding: 16px 22px; }
+.kit-tree-header {
+  font-size: 12px; font-weight: 600;
+  color: var(--text-muted, #6b7280);
+  text-transform: uppercase; letter-spacing: .5px;
+  margin-bottom: 12px;
+}
+.kit-comp-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 90px 90px 90px 130px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: 7px;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+  transition: background .12s;
+}
+.kit-comp-row:hover { background: #f8fafc; border-color: #e5e7eb; }
+.kit-comp-row.kit-comp-sfg { background: #fafafe; border-color: #e0e7ff; }
+.kit-comp-row.kit-comp-shortage {
+  background: #fff8f8;
+  border-color: #fecaca;
+}
+
+.kit-comp-indent { display: flex; align-items: center; justify-content: flex-end; }
+.kit-comp-indent-line {
+  width: 16px; height: 2px; background: #e5e7eb;
+  border-radius: 1px; margin-right: 4px;
+}
+.kit-comp-item { min-width: 0; }
+.kit-comp-name {
+  font-weight: 600; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kit-comp-code { font-size: 11px; color: #9ca3af; margin-top: 1px; }
+.kit-comp-num {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12.5px; text-align: right;
+}
+.kit-comp-num.shortage-val { color: #dc2626; font-weight: 700; }
+.kit-comp-num.ok-val { color: #059669; }
+
+/* Stage badge */
+.kit-stage {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 5px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.kit-stage-green  { background: #d1fae5; color: #065f46; }
+.kit-stage-blue   { background: #dbeafe; color: #1d4ed8; }
+.kit-stage-teal   { background: #ccfbf1; color: #0f766e; }
+.kit-stage-orange { background: #fef3c7; color: #92400e; }
+.kit-stage-red    { background: #fee2e2; color: #991b1b; }
+
+/* Documents sub-panel */
+.kit-docs-toggle {
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--primary-color, #2563eb);
+  padding: 2px 4px; border-radius: 4px;
+  transition: background .1s;
+}
+.kit-docs-toggle:hover { background: #eff6ff; }
+.kit-doc-list {
+  grid-column: 1 / -1;
+  padding: 8px 36px;
+  display: none;
+}
+.kit-doc-list.open { display: block; }
+.kit-doc-item {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 10px; padding: 7px 12px; margin-bottom: 4px;
+  background: #f8fafc; border-radius: 6px;
+  font-size: 12px; border: 1px solid #e5e7eb;
+}
+.kit-doc-link { font-weight: 600; color: var(--primary-color, #2563eb); text-decoration: none; }
+.kit-doc-link:hover { text-decoration: underline; }
+.kit-doc-meta { color: #6b7280; }
+.kit-doc-status {
+  padding: 1px 7px; border-radius: 3px; font-size: 10.5px; font-weight: 600;
+}
+
+/* Collapse/expand SFG chain */
+.kit-sfg-children {
+  padding-left: 24px;
+  border-left: 2px solid #e0e7ff;
+  margin-left: 20px;
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+.kit-sfg-toggle {
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: #6366f1; padding: 0; font-weight: 600;
+}
+
+/* ── Empty / Loading states ── */
+.kit-placeholder {
+  text-align: center; padding: 60px 20px;
+  color: var(--text-muted, #9ca3af); font-size: 14px;
+}
+.kit-spinner {
+  border: 2px solid #e5e7eb;
+  border-left-color: var(--primary-color, #2563eb);
+  border-radius: 50%; width: 18px; height: 18px;
+  animation: kit-spin .7s linear infinite;
+  display: inline-block; vertical-align: middle; margin-right: 8px;
+}
+@keyframes kit-spin { 100% { transform: rotate(360deg); } }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .kit-comp-row {
+    grid-template-columns: 20px 1fr 70px 70px 80px 110px auto;
+  }
+  .kit-drill-stats { gap: 14px; }
+}
+@media (max-width: 640px) {
+  .kit-comp-row {
+    grid-template-columns: 1fr;
+  }
+  .kit-comp-num, .kit-comp-indent { display: none; }
+}
+</style>
+
+<div class="kit-root" id="kit-root">
+
+  <!-- SUMMARY CARDS -->
+  <div class="kit-cards">
+    <div class="kit-card kit-card-none">
+      <div class="kit-card-icon">🔴</div>
+      <div class="kit-card-label">Cannot Kit</div>
+      <div class="kit-card-val" id="kc-none">—</div>
+    </div>
+    <div class="kit-card kit-card-partial">
+      <div class="kit-card-icon">🟡</div>
+      <div class="kit-card-label">Partial Kit</div>
+      <div class="kit-card-val" id="kc-partial">—</div>
+    </div>
+    <div class="kit-card kit-card-full">
+      <div class="kit-card-icon">🟢</div>
+      <div class="kit-card-label">Full Kit Ready</div>
+      <div class="kit-card-val" id="kc-full">—</div>
+    </div>
+    <div class="kit-card kit-card-total">
+      <div class="kit-card-icon">📦</div>
+      <div class="kit-card-label">Total Items</div>
+      <div class="kit-card-val" id="kc-total">—</div>
+    </div>
+  </div>
+
+  <!-- BULK ACTION BAR -->
+  <div class="kit-bulk-bar" id="kit-bulk-bar" style="display:none">
+    <button class="kit-btn kit-btn-teal" id="btn-bulk-purchase">
+      🛒 Create All Purchase MRs
+    </button>
+    <button class="kit-btn kit-btn-mfg" id="btn-bulk-wo">
+      ⚙️ Create All Work Orders
+    </button>
+    <span id="kit-bulk-info" style="font-size:12px;color:#6b7280;margin-left:4px"></span>
+  </div>
+
+  <!-- MAIN TABLE -->
+  <div class="kit-table-wrap">
+    <div class="kit-table-header">
+      <div>
+        <div class="kit-table-title">Full Kitting Board</div>
+        <div class="kit-table-sub" id="kit-last-updated">Loading...</div>
+      </div>
+      <div class="kit-table-sub" id="kit-period-label" style="text-align:right"></div>
+    </div>
+    <table class="kit-tbl">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Type</th>
+          <th>Item</th>
+          <th title="Previous month + current month pending SOs">Total SO Pending</th>
+          <th title="SOs with delivery date in previous month not yet dispatched">Prev Month SO</th>
+          <th title="SOs with delivery date in current month not yet dispatched">Curr Month SO</th>
+          <th title="Delivery Notes posted this month">Curr Dispatched</th>
+          <th title="Delivery Notes posted last month">Prev Dispatched</th>
+          <th>In Stock</th>
+          <th title="Max(0, Total Pending − In Stock)">Prod Required</th>
+          <th title="Manufacture Stock Entries this month">Actual Produced</th>
+          <th title="Max(0, Prod Required − Actual Produced)">Should Produce</th>
+          <th>Kit Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="kit-tbody">
+        <tr><td colspan="14" class="kit-placeholder">
+          <span class="kit-spinner"></span> Loading kitting data...
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- DRILL-DOWN PANEL -->
+  <div id="kit-drill-panel" class="kit-drill-panel" style="display:none">
+    <!-- header filled by JS -->
+    <div id="kit-drill-header" class="kit-drill-header"></div>
+    <!-- action buttons filled by JS -->
+    <div id="kit-drill-actions" class="kit-drill-actions"></div>
+    <!-- BOM tree filled by JS -->
+    <div class="kit-tree">
+      <div class="kit-tree-header">Full BOM Chain — Stock · Shortage · Supply Stage</div>
+      <div id="kit-tree-body"></div>
+    </div>
+    <!-- Own WOs + MRs for the FG item -->
+    <div id="kit-fg-docs" style="padding: 0 22px 20px"></div>
+  </div>
+
+</div>

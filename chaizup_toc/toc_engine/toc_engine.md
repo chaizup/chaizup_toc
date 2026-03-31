@@ -10,8 +10,7 @@ Pure business logic for Theory of Constraints buffer management. No web framewor
 | Formula | Expression | Description |
 |---------|-----------|-------------|
 | F1 | `Target = ADU × RLT × VF` | Target buffer size |
-| F2a (FG/SFG) | `IP = On-Hand + WIP − Backorders` | Inventory Position for Finished/Semi-Finished Goods |
-| F2b (RM/PM) | `IP = On-Hand + On-Order − Committed` | Inventory Position for Raw/Packaging Materials |
+| F2 (all types) | `IP = On-Hand + WIP + On-Order − Backorders − Committed` | Universal IP — all transaction sources checked for every item |
 | F3 | `BP% = (Target − IP) / Target × 100` | Buffer Penetration % (urgency) |
 | F3 alt | `SR% = IP / Target × 100` | Stock Remaining % (health) |
 | F4 | `Order Qty = Target − IP` | How much to replenish |
@@ -24,15 +23,19 @@ Pure business logic for Theory of Constraints buffer management. No web framewor
 
 ## ERPNext Data Sources
 
-| TOC Concept | DocType | Field |
-|-------------|---------|-------|
-| On-Hand | Bin | `actual_qty` |
-| WIP (FG) | Work Order | `qty - produced_qty` |
-| Backorders (FG) | Bin | `reserved_qty` |
-| On-Order (RM) | Bin | `ordered_qty` |
-| Committed (RM) | Bin | `reserved_qty` |
-| ADU, RLT, VF | Item child | `TOC Item Buffer` |
-| Buffer Type | Item | `custom_toc_buffer_type` |
+| TOC Concept | DocType | Field | When non-zero |
+|-------------|---------|-------|---------------|
+| On-Hand | Bin | `actual_qty` | Always |
+| WIP (supply) | Work Order | `qty − produced_qty` | Item is manufactured (own WOs) |
+| On-Order (supply) | Bin | `ordered_qty` | Item is purchased (open POs) |
+| Backorders (demand) | Bin | `reserved_qty` | Item is sold (Sales Order demand) |
+| Committed (demand) | Work Order Item | `required_qty − transferred_qty` | Item used as component in WOs |
+| ADU, RLT, VF | Item child | `TOC Item Buffer` | Always |
+| Buffer Type | Item | `custom_toc_buffer_type` | Always |
+
+All four transaction sources are checked for **every item** regardless of buffer type.
+A typically-produced item that is also sometimes purchased will have both `wip > 0` and `on_order > 0`.
+An SFG that is occasionally sold will have `backorders > 0` counted against it.
 
 ---
 
@@ -70,27 +73,27 @@ SQL SUM of one Bin field across a list of warehouses. Used by all position calcu
 #### `_resolve_buffer_type(item_code, item_group, settings)`
 Resolves FG/SFG/RM/PM for items without a manual `custom_toc_buffer_type`. Checks `settings.item_group_rules` in priority order, then walks up the ERPNext Item Group hierarchy for rules with `include_sub_groups=1`. Returns `None` if no match (item is skipped with Error Log).
 
-### Inventory Position Calculators
+### Inventory Position Calculator
 
-#### `get_fg_position(item_code, warehouse, settings=None)`
-F2a: `IP = On-Hand + WIP − Backorders`
+#### `get_inventory_position(item_code, warehouse, settings=None)`
+Universal F2: `IP = On-Hand + WIP + On-Order − Backorders − Committed`
+
+Single function used for **all item types**. All four transaction sources are always queried — unused ones return 0.
+
+An item may be both manufactured AND purchased, both sold AND consumed as a WO component. The buffer type label does not limit which transactions are included.
 
 **Warehouse-aware** (when `warehouse_rules` configured):
-- On-Hand = SUM `Bin.actual_qty` across Inventory warehouses
-- WIP = Work Orders with `fg_warehouse IN (Inventory+WIP)` + `Bin.actual_qty` in WIP warehouses
-- Backorders = SUM `Bin.reserved_qty` across Inventory warehouses
+- On-Hand / Backorders: Inventory-classified warehouses only
+- WIP: Work Orders with `fg_warehouse IN (Inventory+WIP)` + `Bin.actual_qty` in WIP warehouses
+- On-Order: `Bin.ordered_qty` across Inventory + WIP warehouses
+- Committed: `tabWork Order Item` filtered by `source_warehouse IN (Inventory warehouses)`
 
-**Fallback** (empty rules): single Bin lookup + global Work Orders (original behavior).
+**Fallback** (empty rules): single Bin lookup + global WO/WOI queries (original behavior).
 
-#### `get_sfg_position(item_code, warehouse, settings=None)`
-Delegates to `get_fg_position` — blending Work Orders behave identically.
+Returns: `{on_hand, wip, on_order, backorders, committed, ip}`
 
-#### `get_rm_position(item_code, warehouse, settings=None)`
-F2b: `IP = On-Hand + On-Order − Committed`
-
-**Warehouse-aware**: on_hand + committed from Inventory; on_order from Inventory+WIP.
-
-**Fallback**: single Bin lookup.
+#### `get_fg_position` / `get_sfg_position` / `get_rm_position`
+Backward-compatible aliases — all delegate to `get_inventory_position`.
 
 ### Main Calculation Engine
 
@@ -122,8 +125,12 @@ Calculates buffer status for one item+warehouse:
     "item_code", "item_name", "stock_uom", "warehouse", "company",
     "buffer_type",                  # FG / SFG / RM / PM
     "mr_type",                      # "Manufacture" or "Purchase"
-    "on_hand", "wip_or_on_order", "backorders_or_committed",
-    "inventory_position",           # F2 result
+    # All four IP components (universal — non-zero only when transactions exist)
+    "on_hand", "wip", "on_order", "backorders", "committed",
+    # Combined convenience fields
+    "wip_or_on_order",              # wip + on_order (total supply pipeline)
+    "backorders_or_committed",      # backorders + committed (total demand)
+    "inventory_position",           # F2 result = on_hand+wip+on_order−backorders−committed
     "target_buffer",                # F1 or adjusted by DAF
     "bp_pct", "sr_pct",             # F3
     "zone", "zone_color", "zone_action",

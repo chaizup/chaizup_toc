@@ -8,6 +8,7 @@ All Python-callable API methods exposed to the Frappe frontend (JS `frappe.call`
 | File | Role |
 |------|------|
 | `toc_api.py` | Core buffer query + action APIs |
+| `kitting_api.py` | Full kitting report — demand/supply/BOM analysis, WO/MR creation |
 | `permissions.py` | App-level and DocType-level permission helpers |
 | `demo_data.py` | Admin-only test data creation/deletion |
 
@@ -112,6 +113,36 @@ Returns `{ exists: bool, count: int, manifest: dict }`.
 | RM-TEA-DUST (stock 1800, target 7200) | 75% | 🔴 Red |
 | RM-SUGAR (stock 8000, target 9750) | 18% | 🟢 Green |
 | PM-POUCH-1KG (stock 3000, target 5400) | 44% | 🟡 Yellow |
+
+---
+
+---
+
+## `kitting_api.py` — Full Kitting Report
+
+### URL Pattern
+```
+/api/method/chaizup_toc.api.kitting_api.<function_name>
+```
+
+### Methods
+
+#### `get_kitting_summary(company, month, year, buffer_type)`
+Main table data — one row per TOC-enabled FG/SFG item. Batch SQL for demand/supply.
+- **Columns:** SO pending (prev+curr month), dispatched, stock, prod required, actual produced, should produce, kit status.
+- **Kit status** = BOM tree walk, `kit_qty = min(stock/per_unit_required)` across all leaf components.
+- Returns sorted: Cannot Kit first → Partial → Full → No Demand.
+
+#### `get_item_kitting_detail(item_code, required_qty)`
+Full drill-down — multi-level BOM tree with per-component stock, shortage, stage + all linked open documents (WOs, POs, MRs with owner + date).
+
+#### `create_purchase_requests(items_json, company)`
+One-click: creates a single Purchase Material Request covering all RM/PM shortages.
+- **Restricted to:** Stock Manager / Purchase Manager / TOC Manager / System Manager
+
+#### `create_work_order_from_kitting(item_code, qty, company, bom)`
+One-click: creates a Work Order. Auto-detects active BOM if not provided.
+- **Restricted to:** Stock Manager / Manufacturing Manager / TOC Manager / System Manager
 
 ---
 

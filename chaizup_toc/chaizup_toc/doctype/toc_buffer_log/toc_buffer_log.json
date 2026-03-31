@@ -57,10 +57,15 @@
      "description": "The Material Request auto-generated for this snapshot (if any)."}
   ],
   "permissions": [
-    {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1},
-    {"role": "Stock Manager", "read": 1, "report": 1, "export": 1},
-    {"role": "TOC Manager", "read": 1, "write": 1, "create": 1, "report": 1, "export": 1},
-    {"role": "TOC User", "read": 1, "report": 1}
+    {"role": "System Manager",        "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1},
+    {"role": "TOC Manager",           "read": 1, "write": 1, "create": 1,               "report": 1, "export": 1},
+    {"role": "TOC User",              "read": 1,                                         "report": 1, "export": 1},
+    {"role": "Stock Manager",         "read": 1,                                         "report": 1, "export": 1},
+    {"role": "Stock User",            "read": 1,                                         "report": 1},
+    {"role": "Purchase Manager",      "read": 1,                                         "report": 1, "export": 1},
+    {"role": "Purchase User",         "read": 1,                                         "report": 1},
+    {"role": "Manufacturing Manager", "read": 1,                                         "report": 1, "export": 1},
+    {"role": "Manufacturing User",    "read": 1,                                         "report": 1}
   ],
   "sort_field": "log_date",
   "sort_order": "DESC",

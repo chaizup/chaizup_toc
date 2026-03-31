@@ -5,6 +5,7 @@
 | Page Name | Route | Description |
 |-----------|-------|-------------|
 | `toc-dashboard` | `/app/toc-dashboard` | Live buffer priority dashboard |
+| `kitting-report` | `/app/kitting-report` | Full kitting board — demand, supply, BOM chain, one-click WO/MR |
 
 ## Frappe Page Structure
 Each page folder contains:

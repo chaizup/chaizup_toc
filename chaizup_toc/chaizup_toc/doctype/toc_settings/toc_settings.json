@@ -201,22 +201,13 @@
     }
   ],
   "permissions": [
-    {
-      "role": "System Manager",
-      "read": 1,
-      "write": 1,
-      "create": 1
-    },
-    {
-      "role": "Stock Manager",
-      "read": 1,
-      "write": 1
-    },
-    {
-      "role": "TOC Manager",
-      "read": 1,
-      "write": 1
-    }
+    {"role": "System Manager",        "read": 1, "write": 1, "create": 1},
+    {"role": "TOC Manager",           "read": 1, "write": 1},
+    {"role": "TOC User",              "read": 1},
+    {"role": "Stock Manager",         "read": 1},
+    {"role": "Stock User",            "read": 1},
+    {"role": "Purchase Manager",      "read": 1},
+    {"role": "Manufacturing Manager", "read": 1}
   ],
   "sort_field": "modified",
   "sort_order": "DESC",

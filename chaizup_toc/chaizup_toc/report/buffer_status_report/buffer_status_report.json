@@ -10,6 +10,14 @@
   "report_name": "Buffer Status Report",
   "report_type": "Script Report",
   "roles": [
-    {"role": "Stock Manager"}, {"role": "TOC Manager"}, {"role": "TOC User"}, {"role": "System Manager"}
+    {"role": "System Manager"},
+    {"role": "TOC Manager"},
+    {"role": "TOC User"},
+    {"role": "Stock Manager"},
+    {"role": "Stock User"},
+    {"role": "Purchase Manager"},
+    {"role": "Purchase User"},
+    {"role": "Manufacturing Manager"},
+    {"role": "Manufacturing User"}
   ]
 }

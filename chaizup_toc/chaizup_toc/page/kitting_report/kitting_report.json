@@ -1,8 +1,8 @@
 {
   "doctype": "Page",
-  "name": "toc-dashboard",
-  "page_name": "toc-dashboard",
-  "title": "TOC Buffer Dashboard",
+  "name": "kitting-report",
+  "page_name": "kitting-report",
+  "title": "Full Kitting Report",
   "module": "Chaizup Toc",
   "standard": "Yes",
   "roles": [
