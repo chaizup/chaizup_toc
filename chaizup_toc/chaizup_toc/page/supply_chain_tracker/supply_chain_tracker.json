@@ -1,0 +1,19 @@
+{
+  "doctype": "Page",
+  "name": "supply-chain-tracker",
+  "page_name": "supply-chain-tracker",
+  "title": "Supply Chain Tracker",
+  "module": "Chaizup Toc",
+  "standard": "Yes",
+  "roles": [
+    {"role": "System Manager"},
+    {"role": "TOC Manager"},
+    {"role": "TOC User"},
+    {"role": "Stock Manager"},
+    {"role": "Stock User"},
+    {"role": "Purchase Manager"},
+    {"role": "Purchase User"},
+    {"role": "Manufacturing Manager"},
+    {"role": "Manufacturing User"}
+  ]
+}

@@ -155,7 +155,7 @@ def daily_buffer_snapshot():
                 log.zone = b["zone"]; log.order_qty_suggested = b["order_qty"]
                 log.flags.ignore_permissions = True; log.insert()
             except Exception:
-                pass
+                frappe.log_error(frappe.get_traceback(), f"TOC Snapshot: {b['item_code']}")
         frappe.db.commit()
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC Snapshot FAILED")

@@ -14,15 +14,21 @@ from frappe import _
 
 
 @frappe.whitelist()
-def get_priority_board(buffer_type=None, company=None, warehouse=None):
+def get_priority_board(buffer_type=None, company=None, warehouse=None, item_code=None):
     """
     Returns the full Production/Procurement Priority Board.
     Sorted by BP% desc (most urgent first), T/CU as tie-breaker (F5).
 
+    Args:
+        item_code: filter to a single item (used by Item form "Buffer Status" button)
+
     Access: Stock User, Stock Manager, TOC User, TOC Manager, System Manager
     """
     from chaizup_toc.toc_engine.buffer_calculator import calculate_all_buffers
-    return calculate_all_buffers(buffer_type=buffer_type, company=company, warehouse=warehouse)
+    return calculate_all_buffers(
+        buffer_type=buffer_type, company=company,
+        warehouse=warehouse, item_code=item_code,
+    )
 
 
 @frappe.whitelist()
@@ -102,11 +108,9 @@ def apply_global_daf(daf_value, event_name=None):
             "adjusted_buffer": adjusted,
         })
 
-    # Update TOC Settings
-    frappe.db.set_value("TOC Settings", "TOC Settings", {
-        "default_daf": daf,
-        "daf_event_name": event_name or "",
-    })
+    # Update TOC Settings (Singleton — must use set_single_value)
+    frappe.db.set_single_value("TOC Settings", "default_daf", daf)
+    frappe.db.set_single_value("TOC Settings", "daf_event_name", event_name or "")
 
     frappe.db.commit()
     return {"updated_rules": len(rules), "daf": daf, "event": event_name}

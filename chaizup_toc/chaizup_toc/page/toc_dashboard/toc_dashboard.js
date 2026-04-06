@@ -296,11 +296,11 @@ class TOCDashboard {
        (Deficit: ${this._fmt(qty)})<br>
        <span style="color:#6b7280;font-size:13px">Note:</span>
        <span style="color:#6b7280;font-size:12px">This generates MRs for <b>all</b>
-       Red/Yellow ${bufferType} items — not just this one.</span>`,
+       Red/Black/Yellow ${bufferType} items — not just this one.</span>`,
       () => {
         frappe.call({
           method: "chaizup_toc.api.toc_api.trigger_manual_run",
-          args: { buffer_type: bufferType, zone_filter: JSON.stringify(["Red","Yellow"]) },
+          args: { buffer_type: bufferType, zone_filter: JSON.stringify(["Red","Black","Yellow"]) },
           callback(r) {
             if (r.message && r.message.status === "success") {
               frappe.show_alert({

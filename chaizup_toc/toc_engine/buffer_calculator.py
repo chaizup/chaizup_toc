@@ -285,7 +285,7 @@ def _calculate_single(item, rule, settings):
 
     # Check BOM component availability if this FG/SFG has a BOM linked
     sfg_status = None
-    if btype == "FG" and item.custom_toc_default_bom:
+    if btype in ("FG", "SFG") and item.custom_toc_default_bom:
         try:
             sfg_status = check_bom_availability(item.name, order_qty, rule.warehouse)
         except Exception:

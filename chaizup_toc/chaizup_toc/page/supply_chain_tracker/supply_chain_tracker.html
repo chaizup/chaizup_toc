@@ -1,0 +1,195 @@
+<div class="sct-root" id="sct-root">
+
+  <!-- Command Bar -->
+  <div class="sct-command-bar" id="sct-command-bar">
+    <div class="sct-search-wrap">
+      <span class="sct-search-icon">🔍</span>
+      <input type="text" class="sct-search-input" id="sct-search"
+             placeholder="Search item, doc number, supplier…">
+      <button class="sct-search-clear" id="sct-search-clear" title="Clear">✕</button>
+    </div>
+
+    <div class="sct-view-btns">
+      <button class="sct-view-btn active" data-view="tracker" id="sct-btn-tracker">
+        <span>≡</span> Tracker
+      </button>
+      <button class="sct-view-btn" data-view="pipeline" id="sct-btn-pipeline">
+        <span>⇒</span> Pipeline
+      </button>
+    </div>
+
+    <button class="sct-filter-toggle" id="sct-filter-toggle">
+      <span>⚙</span> Filters
+      <span class="sct-filter-badge" id="sct-filter-badge">0</span>
+    </button>
+
+    <select class="sct-days-select" id="sct-days-select" title="Look-back window">
+      <option value="14">14 days</option>
+      <option value="30" selected>30 days</option>
+      <option value="60">60 days</option>
+      <option value="90">90 days</option>
+      <option value="180">180 days</option>
+    </select>
+  </div>
+
+  <!-- Filter Panel -->
+  <div class="sct-filter-panel" id="sct-filter-panel">
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Buffer Type</div>
+      <div class="sct-filter-pills">
+        <span class="sct-fpill active" data-f="type" data-v="All">All</span>
+        <span class="sct-fpill" data-f="type" data-v="FG">FG</span>
+        <span class="sct-fpill" data-f="type" data-v="SFG">SFG</span>
+        <span class="sct-fpill" data-f="type" data-v="RM">RM</span>
+        <span class="sct-fpill" data-f="type" data-v="PM">PM</span>
+      </div>
+    </div>
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Zone</div>
+      <div class="sct-filter-pills">
+        <span class="sct-fpill active"          data-f="zone" data-v="All">All</span>
+        <span class="sct-fpill zone-Red"    data-f="zone" data-v="Red">🔴 Red</span>
+        <span class="sct-fpill zone-Yellow" data-f="zone" data-v="Yellow">🟡 Yellow</span>
+        <span class="sct-fpill zone-Green"  data-f="zone" data-v="Green">🟢 Green</span>
+        <span class="sct-fpill zone-Black"  data-f="zone" data-v="Black">⚫ Black</span>
+      </div>
+    </div>
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Document Type</div>
+      <div class="sct-filter-pills">
+        <span class="sct-fpill active" data-f="doctype" data-v="All">All</span>
+        <span class="sct-fpill" data-f="doctype" data-v="MR">MR</span>
+        <span class="sct-fpill" data-f="doctype" data-v="RFQ">RFQ</span>
+        <span class="sct-fpill" data-f="doctype" data-v="PP">Prod. Plan</span>
+        <span class="sct-fpill" data-f="doctype" data-v="SQ">SQ</span>
+        <span class="sct-fpill" data-f="doctype" data-v="WO">Work Order</span>
+        <span class="sct-fpill" data-f="doctype" data-v="PO">PO</span>
+        <span class="sct-fpill" data-f="doctype" data-v="JC">Job Card</span>
+        <span class="sct-fpill" data-f="doctype" data-v="PR">Receipt</span>
+        <span class="sct-fpill" data-f="doctype" data-v="SE">Stock Entry</span>
+      </div>
+    </div>
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Supplier</div>
+      <input type="text" class="sct-filter-input" id="sct-f-supplier"
+             placeholder="Supplier name…" list="sct-supplier-list">
+      <datalist id="sct-supplier-list"></datalist>
+    </div>
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Warehouse</div>
+      <input type="text" class="sct-filter-input" id="sct-f-warehouse"
+             placeholder="Warehouse…" list="sct-warehouse-list">
+      <datalist id="sct-warehouse-list"></datalist>
+    </div>
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Special</div>
+      <label class="sct-filter-check">
+        <input type="checkbox" id="sct-f-overdue"> Overdue only
+      </label>
+      <label class="sct-filter-check" style="margin-top:4px">
+        <input type="checkbox" id="sct-f-auto"> TOC Auto-generated only
+      </label>
+      <label class="sct-filter-check" style="margin-top:4px">
+        <input type="checkbox" id="sct-f-noaction"> Items with no open MR
+      </label>
+    </div>
+    <div class="sct-filter-actions">
+      <button class="sct-btn-apply" id="sct-btn-apply">Apply</button>
+      <button class="sct-btn-reset" id="sct-btn-reset">Reset</button>
+    </div>
+  </div>
+
+  <!-- Summary Strip -->
+  <div class="sct-summary-strip" id="sct-summary-strip">
+    <div class="sct-stat clickable" data-zone="Red" title="Click to filter Red/Stockout">
+      <span class="sct-stat-icon">🚨</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-red">—</span>
+        <span class="sct-stat-lbl">Red / Stockout</span>
+      </div>
+    </div>
+    <div class="sct-stat clickable" data-zone="Yellow" title="Click to filter Yellow">
+      <span class="sct-stat-icon">⚠️</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-yellow">—</span>
+        <span class="sct-stat-lbl">Yellow Zone</span>
+      </div>
+    </div>
+    <div class="sct-stat clickable" data-zone="Green" title="Click to filter Green">
+      <span class="sct-stat-icon">✅</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-green">—</span>
+        <span class="sct-stat-lbl">Green Zone</span>
+      </div>
+    </div>
+    <div class="sct-stat">
+      <span class="sct-stat-icon">📋</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-mrs">—</span>
+        <span class="sct-stat-lbl">Open MRs</span>
+      </div>
+    </div>
+    <div class="sct-stat">
+      <span class="sct-stat-icon">🏭</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-wos">—</span>
+        <span class="sct-stat-lbl">Active Work Orders</span>
+      </div>
+    </div>
+    <div class="sct-stat">
+      <span class="sct-stat-icon">🛒</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-pos">—</span>
+        <span class="sct-stat-lbl">Open Purchase Orders</span>
+      </div>
+    </div>
+    <div class="sct-stat" id="sct-s-overdue-stat">
+      <span class="sct-stat-icon">🔥</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-overdue">—</span>
+        <span class="sct-stat-lbl">Items w/ Overdue Docs</span>
+      </div>
+    </div>
+    <div class="sct-stat" style="margin-left:auto">
+      <span class="sct-stat-icon">📦</span>
+      <div class="sct-stat-body">
+        <span class="sct-stat-val" id="sct-s-items">—</span>
+        <span class="sct-stat-lbl">Items Tracked</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="sct-content">
+    <div id="sct-loading" class="sct-loading">
+      <div class="sct-spinner"></div>
+      <span>Loading supply chain data…</span>
+    </div>
+
+    <!-- Tracker View (default) -->
+    <div class="sct-tracker-wrap active" id="sct-tracker-wrap">
+      <!-- Populated by JS -->
+    </div>
+
+    <!-- Pipeline View -->
+    <div class="sct-pipeline-wrap" id="sct-pipeline-wrap">
+      <div class="sct-pipeline-scroll" id="sct-pipeline-scroll">
+        <svg id="sct-svg-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Panel -->
+  <div class="sct-panel" id="sct-panel">
+    <div class="sct-panel-header">
+      <div class="sct-panel-header-info">
+        <div class="sct-panel-title"    id="sct-panel-title">—</div>
+        <div class="sct-panel-subtitle" id="sct-panel-subtitle">—</div>
+      </div>
+      <div class="sct-panel-close" id="sct-panel-close">✕</div>
+    </div>
+    <div class="sct-panel-body"    id="sct-panel-body"></div>
+    <div class="sct-panel-actions" id="sct-panel-actions"></div>
+  </div>
+
+</div>

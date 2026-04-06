@@ -501,7 +501,7 @@ def _component_stage(item_code, shortage, item_type):
         FROM   `tabMaterial Request Item` mri
         JOIN   `tabMaterial Request` mr ON mr.name = mri.parent
         WHERE  mri.item_code = %s
-          AND  mr.docstatus = 1
+          AND  mr.docstatus < 2
           AND  mr.status NOT IN ('Cancelled','Stopped')
         ORDER BY mr.creation DESC LIMIT 5
     """, item_code, as_dict=True)
@@ -543,7 +543,7 @@ def _open_mrs_for_item(item_code):
                mr.owner, DATE_FORMAT(mr.creation,'%%d %%b %%Y') AS raised_on
         FROM   `tabMaterial Request Item` mri
         JOIN   `tabMaterial Request` mr ON mr.name = mri.parent
-        WHERE  mri.item_code = %s AND mr.docstatus = 1
+        WHERE  mri.item_code = %s AND mr.docstatus < 2
           AND  mr.status NOT IN ('Cancelled','Stopped')
         ORDER BY mr.creation DESC LIMIT 10
     """, item_code, as_dict=True)

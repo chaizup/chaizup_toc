@@ -1,35 +1,191 @@
-# `chaizup_toc/` — App Module Folder
+# chaizup_toc/ — Frappe Module Folder
 
-This folder is the Frappe **module** folder — same name as the app. It contains all DocTypes, Pages, Reports, and Workspaces that are tracked in Frappe's module registry.
+This folder is the **Frappe module folder** — the innermost `chaizup_toc/` in the triple-nested structure. It contains every Frappe-managed artifact: DocTypes, Pages, Reports, and Workspaces.
 
-## Module Name
-`Chaizup Toc` (as used in `module` field of all DocType JSONs and fixtures)
+```
+apps/chaizup_toc/          ← Git repository root
+    chaizup_toc/           ← Python package (installed by pip)
+        chaizup_toc/       ← Frappe module folder (THIS FOLDER)
+            doctype/       ← DocType definitions
+            page/          ← Desk pages
+            report/        ← Script reports
+            workspace/     ← Workspace definitions
+```
 
-## Subfolders
+---
 
-| Folder | Contents |
-|--------|---------|
-| `doctype/` | Custom DocTypes: TOC Buffer Log, TOC Item Buffer, TOC Settings |
-| `page/` | Frappe Desk Pages: toc-dashboard |
-| `report/` | Script Reports: Production Priority Board, Procurement Action List, Buffer Status Report, DBM Analysis |
-| `workspace/` | Frappe Workspace: TOC Buffer Management |
+## Module Identity
 
-## Module Registry
-Registered in `modules.txt`:
+**Module name**: `Chaizup Toc`
+
+This exact string (with capital C, T, and the space) must appear in:
+- Every DocType JSON: `"module": "Chaizup Toc"`
+- Every Report JSON: `"module": "Chaizup Toc"`
+- Every Page JSON: `"module": "Chaizup Toc"`
+- Every Workspace JSON: `"module": "Chaizup Toc"`
+- `modules.txt`: `Chaizup Toc`
+- Fixture filters: `[["module", "=", "Chaizup Toc"]]`
+
+A mismatch causes DocTypes to not be found during migrate, or fixtures to not be exported.
+
+---
+
+## Module Registration
+
+Registered in `chaizup_toc/modules.txt`:
 ```
 Chaizup Toc
 ```
 
-## How Frappe Uses This
-- Frappe scans this folder for DocType JSONs during `bench migrate`.
-- All DocTypes, Reports, Pages, and Workspaces inside this folder are auto-discovered.
-- The `module` field in JSON files must match `"Chaizup Toc"` exactly.
+Frappe reads `modules.txt` to know which modules this app provides. Each module maps to a folder in the Python package with the same snake_case name (`chaizup_toc` → `chaizup_toc/`).
 
-## Important Note: Double-Nested Folder
-The app has an identical-name nesting:
+---
+
+## What Frappe Discovers Here
+
+During `bench migrate`, Frappe scans this folder structure:
+
 ```
-apps/chaizup_toc/          ← Git repo root
-    chaizup_toc/           ← Python package
-        chaizup_toc/       ← Module folder (THIS folder)
+bench migrate scans:
+  chaizup_toc/doctype/*/  → Creates/updates DocType records
+  chaizup_toc/page/*/     → Creates/updates Page records
+  chaizup_toc/report/*/   → Creates/updates Report records
+  chaizup_toc/workspace/* → Creates/updates Workspace records
 ```
-This is standard Frappe app structure. The outermost is the repo, the middle is the installed Python package, and this folder is the Frappe module.
+
+All JSON files are read and their contents are inserted/updated in the site's database. Python controller files are loaded as Python modules.
+
+---
+
+## Subfolders
+
+### doctype/ — Custom DocTypes
+
+Five DocTypes providing the data model for the TOC system:
+
+| DocType | Type | Role |
+|---------|------|------|
+| TOC Buffer Log | Standard | Daily snapshot archive |
+| TOC Item Buffer | Child Table | Per-warehouse buffer rules on Item |
+| TOC Settings | Singleton | App-wide configuration |
+| TOC Warehouse Rule | Child Table | Warehouse classification (Inventory/WIP/Excluded) |
+| TOC Item Group Rule | Child Table | Item group → buffer type auto-mapping |
+
+Also includes `Custom Field` and `Property Setter` fixtures that extend built-in ERPNext DocTypes (Item, Material Request, Work Order).
+
+Full documentation: `doctype/doctype.md`
+
+### page/ — Desk Pages
+
+Two interactive operational interfaces:
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| toc_dashboard | `/app/toc-dashboard` | Live auto-refreshing buffer dashboard |
+| kitting_report | `/app/kitting-report` | Production readiness and BOM component status |
+
+Full documentation: `page/page.md`
+
+### report/ — Script Reports
+
+Four Script Reports for daily operations and analysis:
+
+| Report | Purpose |
+|--------|---------|
+| production_priority_board | What to produce today (FG/SFG) — sorted by BP% |
+| procurement_action_list | What to buy today (RM/PM) — with freight recommendations |
+| buffer_status_report | Historical buffer trends from TOC Buffer Log |
+| dbm_analysis_report | DBM health check — which buffers need manual review |
+
+Full documentation: `report/report.md`
+
+### workspace/ — Workspaces
+
+One Frappe Workspace providing the module homepage:
+
+| Workspace | Description |
+|-----------|-------------|
+| toc_buffer_management | Sidebar module page with Number Cards, shortcuts, and configuration links |
+
+Full documentation: `workspace/workspace.md`
+
+---
+
+## File Count Summary
+
+```
+doctype/         5 DocTypes × 3 files each = 15 Python+JSON files
+                 + 5 markdown docs
+page/            2 Pages × 3 files each = 6 HTML+JS+JSON files
+                 + 2 markdown docs (+ page/page.md index)
+report/          4 Reports × 3 files each = 12 Python+JS+JSON files
+                 + 4 markdown docs (+ report/report.md index)
+workspace/       1 Workspace × 1 JSON file
+                 + 1 markdown doc (+ workspace/workspace.md index)
+```
+
+---
+
+## Naming Convention
+
+All folders and files use `snake_case` matching the DocType/Report/Page name with spaces replaced by underscores:
+
+```
+"TOC Buffer Log"  →  toc_buffer_log/
+"Production Priority Board"  →  production_priority_board/
+"TOC Buffer Management"  →  toc_buffer_management/
+```
+
+The JSON `name` field uses the human-readable name (with spaces and title case). The folder name uses snake_case. Frappe derives the folder name from the `name` field automatically when creating new artifacts.
+
+---
+
+## Adding New Artifacts
+
+### New DocType
+
+```bash
+bench --site your-site new-doctype "My New DocType" --module "Chaizup Toc"
+# Creates: chaizup_toc/chaizup_toc/doctype/my_new_doctype/
+# Files:   my_new_doctype.json, my_new_doctype.py, test_my_new_doctype.py
+```
+
+Or manually create the folder and files following the existing pattern.
+
+### New Script Report
+
+```bash
+bench --site your-site new-report "My Report" --module "Chaizup Toc" --type "Script Report"
+# Creates: chaizup_toc/chaizup_toc/report/my_report/
+# Files:   my_report.json, my_report.py, my_report.js
+```
+
+### New Page
+
+Manually create folder and three files (JSON, HTML, JS). Register in `hooks.py → page_js` if needed for global JS loading.
+
+---
+
+## Key Integration Points
+
+This module folder is the center of a web of dependencies:
+
+```
+chaizup_toc/ (this folder)
+  │
+  ├── is called by: hooks.py scheduler_events → tasks/daily_tasks.py
+  ├── is called by: hooks.py doc_events → overrides/*.py
+  ├── exposes APIs via: api/toc_api.py, api/kitting_api.py (@frappe.whitelist)
+  │
+  ├── reads from ERPNext:
+  │     Bin, Work Order, Purchase Order, Sales Order, Delivery Note,
+  │     Material Request, Stock Entry, BOM, BOM Item
+  │
+  └── writes to ERPNext:
+        Material Request (auto-generated by mr_generator)
+        Work Order (auto-generated by kitting_api)
+        TOC Buffer Log (daily snapshots by daily_tasks)
+        TOC Item Buffer.target_buffer (DBM updates by dbm_engine)
+```
+
+The module folder's artifacts are the public face of the app. The business logic lives in the sibling folders (`toc_engine/`, `api/`, `tasks/`, `overrides/`) which are plain Python modules, not Frappe artifacts.

@@ -76,9 +76,10 @@ scheduler_events = {
         "0 8 * * *": [
             "chaizup_toc.tasks.daily_tasks.daily_buffer_snapshot"
         ],
-        # ── 08:00 AM Sunday: Weekly DBM Evaluation ──
-        # Checks TMR/TMG triggers, auto-adjusts buffers
-        "0 8 * * 0": [
+        # ── 09:00 AM Sunday: Weekly DBM Evaluation ──
+        # Runs 1 hour after daily_buffer_snapshot (08:00 AM) to ensure
+        # today's log entries are committed before DBM reads them.
+        "0 9 * * 0": [
             "chaizup_toc.tasks.daily_tasks.weekly_dbm_check"
         ],
     }
