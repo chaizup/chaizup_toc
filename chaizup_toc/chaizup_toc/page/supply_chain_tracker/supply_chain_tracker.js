@@ -63,6 +63,7 @@ class SupplyChainTracker {
     };
 
     this.viewMode = "tracker";   // "tracker" | "pipeline"
+    this._bomCache = new Map();  // item_code → BOM items array (null = no BOM)
 
     // Pipeline stages config — flow: item | both | buy | mfg | out
     this.stages = [
@@ -763,6 +764,20 @@ class SupplyChainTracker {
     document.getElementById("sct-panel-actions").innerHTML    = this._panelActions(node);
     document.getElementById("sct-panel").classList.add("open");
 
+    // Wire up data-nav-id click handlers (avoids inline onclick XSS)
+    document.querySelectorAll("#sct-panel-body [data-nav-id], #sct-panel-actions [data-nav-id]").forEach(el => {
+      el.addEventListener("click", () => this._pipelineSelect(el.dataset.navId));
+    });
+    // Wire up data-route-item handlers
+    document.querySelectorAll("#sct-panel-actions [data-route-item]").forEach(el => {
+      el.addEventListener("click", () =>
+        frappe.set_route("query-report", "Production Priority Board", { item_code: el.dataset.routeItem })
+      );
+    });
+    // Wire up panel close button
+    const closeBtn = document.querySelector("#sct-panel-actions [data-close-panel]");
+    if (closeBtn) closeBtn.addEventListener("click", () => { this._closePanel(); });
+
     // Async: try to load BOM for manufactured items
     if (node.stage === "items" || node.sub_type === "output") {
       this._loadBomBlock(node.item_code || node.doc_name);
@@ -771,7 +786,34 @@ class SupplyChainTracker {
 
   _loadBomBlock(item_code) {
     if (!item_code) return;
-    // Fetch default BOM, then its items
+
+    const _insertBlock = (items, bomName) => {
+      const bodyEl = document.getElementById("sct-panel-body");
+      if (!bodyEl) return;
+      // Don't duplicate
+      if (bodyEl.querySelector(".sct-bom-block")) return;
+      const bomBlock = document.createElement("div");
+      bomBlock.className = "sct-bom-block";
+      bomBlock.innerHTML = `
+        <div class="sct-bom-title">🔩 BOM — ${frappe.utils.escape_html(bomName)}</div>
+        ${items.map(i => `
+          <div class="sct-bom-row">
+            <span class="sct-bom-item">${frappe.utils.escape_html(i.item_code)} <small style="color:var(--stone-400)">${frappe.utils.escape_html(i.item_name || "")}</small></span>
+            <span class="sct-bom-qty">${frappe.utils.escape_html(String(i.qty))} ${frappe.utils.escape_html(i.uom || "")}</span>
+          </div>`).join("")}
+      `;
+      const firstSection = bodyEl.querySelector(".sct-panel-section, .sct-toc-box");
+      if (firstSection) bodyEl.insertBefore(bomBlock, firstSection);
+      else              bodyEl.appendChild(bomBlock);
+    };
+
+    // Cache hit: null = no BOM exists, array = BOM items
+    if (this._bomCache.has(item_code)) {
+      const cached = this._bomCache.get(item_code);
+      if (cached) _insertBlock(cached.items, cached.bomName);
+      return;
+    }
+
     frappe.call({
       method: "frappe.client.get_list",
       args: {
@@ -781,7 +823,10 @@ class SupplyChainTracker {
         limit_page_length: 1,
       },
       callback: (r) => {
-        if (!r.message || !r.message.length) return;
+        if (!r.message || !r.message.length) {
+          this._bomCache.set(item_code, null);
+          return;
+        }
         const bomName = r.message[0].name;
         frappe.call({
           method: "frappe.client.get_list",
@@ -792,26 +837,12 @@ class SupplyChainTracker {
             limit_page_length: 20,
           },
           callback: (r2) => {
-            if (!r2.message || !r2.message.length) return;
-            const bodyEl = document.getElementById("sct-panel-body");
-            if (!bodyEl) return;
-            const bomBlock = document.createElement("div");
-            bomBlock.className = "sct-bom-block";
-            bomBlock.innerHTML = `
-              <div class="sct-bom-title">🔩 BOM — ${bomName}</div>
-              ${r2.message.map(i => `
-                <div class="sct-bom-row">
-                  <span class="sct-bom-item">${i.item_code} <small style="color:var(--stone-400)">${i.item_name || ""}</small></span>
-                  <span class="sct-bom-qty">${i.qty} ${i.uom || ""}</span>
-                </div>`).join("")}
-            `;
-            // Insert before first sct-panel-section or at top
-            const firstSection = bodyEl.querySelector(".sct-panel-section, .sct-toc-box");
-            if (firstSection) {
-              bodyEl.insertBefore(bomBlock, firstSection);
-            } else {
-              bodyEl.appendChild(bomBlock);
+            if (!r2.message || !r2.message.length) {
+              this._bomCache.set(item_code, null);
+              return;
             }
+            this._bomCache.set(item_code, { bomName, items: r2.message });
+            _insertBlock(r2.message, bomName);
           },
         });
       },
@@ -819,6 +850,7 @@ class SupplyChainTracker {
   }
 
   _closePanel() {
+    this._clearSelection();
     document.getElementById("sct-panel").classList.remove("open");
   }
 
@@ -903,14 +935,14 @@ class SupplyChainTracker {
         <div class="sct-panel-section">
           <div class="sct-panel-section-title">Connected Documents</div>
           ${connected.upstream.map(n => `
-            <div class="sct-panel-row" style="cursor:pointer" onclick="window.sctApp._pipelineSelect('${n.id}')">
+            <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
               <span class="sct-panel-row-key" style="color:#34d399">← From</span>
-              <span class="sct-panel-row-val">${n.doc_name} <small style="color:var(--stone-400)">(${n.doctype})</small></span>
+              <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
             </div>`).join("")}
           ${connected.downstream.map(n => `
-            <div class="sct-panel-row" style="cursor:pointer" onclick="window.sctApp._pipelineSelect('${n.id}')">
+            <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
               <span class="sct-panel-row-key" style="color:#f59e0b">→ To</span>
-              <span class="sct-panel-row-val">${n.doc_name} <small style="color:var(--stone-400)">(${n.doctype})</small></span>
+              <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
             </div>`).join("")}
         </div>`);
     }
@@ -926,8 +958,7 @@ class SupplyChainTracker {
     }
     if (node.stage === "items" || node.stage === "output") {
       actions.push(`
-        <span class="sct-panel-btn sct-panel-btn-default"
-              onclick="frappe.set_route('query-report','Production Priority Board',{item_code:'${node.doc_name}'})">
+        <span class="sct-panel-btn sct-panel-btn-default" data-route-item="${frappe.utils.escape_html(node.doc_name)}">
           📊 Priority Board
         </span>`);
       actions.push(`<a href="/app/item/${encodeURIComponent(node.doc_name)}" target="_blank" class="sct-panel-btn sct-panel-btn-default">📦 Item Master</a>`);
@@ -939,7 +970,7 @@ class SupplyChainTracker {
       actions.push(`<a href="/app/purchase-order" target="_blank" class="sct-panel-btn sct-panel-btn-default">🛒 Purchase Order List</a>`);
     }
     // Always show a close button at the bottom
-    actions.push(`<span class="sct-panel-btn sct-panel-btn-primary" onclick="window.sctApp._closePanel();window.sctApp._clearSelection()">✕ Close</span>`);
+    actions.push(`<span class="sct-panel-btn sct-panel-btn-primary" data-close-panel>✕ Close</span>`);
     return actions.join("") || `<span style="font-size:12px;color:var(--stone-400)">No quick actions</span>`;
   }
 
@@ -1087,7 +1118,6 @@ class SupplyChainTracker {
       if (fZone !== "All" && track.zone !== fZone) return false;
       if (fOverdue && track.overdue_count === 0) return false;
       if (fNoaction && track.documents.some(d => d.stage === "material_request" && !d.is_closed)) return false;
-      if (fNoaction && track.documents.length === 0) return true;
 
       if (q) {
         const searchStr = `${track.item_code} ${track.item_name} ${track.warehouse} ${track.item_group}`.toLowerCase();

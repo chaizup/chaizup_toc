@@ -79,7 +79,7 @@ def get_pipeline_data(
     mrs  = _fetch_material_requests(item_codes, from_date, supplier)
     rfqs = _fetch_rfqs(item_codes, from_date, supplier)
     pps  = _fetch_production_plans(item_codes, from_date)
-    wos  = _fetch_work_orders(item_codes, from_date)
+    wos  = _fetch_work_orders(item_codes)
     rfq_names = list({r["name"] for r in rfqs})
     sqs  = _fetch_supplier_quotations(rfq_names, supplier)
     wo_names  = list({w["name"] for w in wos})
@@ -319,7 +319,7 @@ def _fetch_supplier_quotations(rfq_names, supplier=None):
     """, args, as_dict=True)
 
 
-def _fetch_work_orders(item_codes, from_date):
+def _fetch_work_orders(item_codes):
     if not item_codes:
         return []
     ph = _ph(item_codes)
@@ -332,10 +332,9 @@ def _fetch_work_orders(item_codes, from_date):
         WHERE production_item IN ({ph})
           AND docstatus < 2
           AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
-          AND (planned_start_date >= %s OR planned_start_date IS NULL)
         ORDER BY creation DESC
         LIMIT 300
-    """, tuple(item_codes) + (from_date,), as_dict=True)
+    """, tuple(item_codes), as_dict=True)
 
 
 def _fetch_purchase_orders(item_codes, from_date, supplier=None):
