@@ -295,9 +295,8 @@ def _create_item(config, company, warehouse, manifest):
         "stock_uom": config.get("uom", "Nos"),
         "is_stock_item": 1,
         "include_item_in_manufacturing": 1 if config["btype"] in ("FG", "SFG") else 0,
-        # TOC fields
+        # TOC fields (buffer type is auto-resolved from item group rules in TOC Settings)
         "custom_toc_enabled": 1,
-        "custom_toc_buffer_type": config["btype"],
         "custom_toc_auto_purchase": config.get("auto_pur", 0),
         "custom_toc_auto_manufacture": config.get("auto_mfg", 0),
         "custom_toc_adu_value": config.get("adu", 0),

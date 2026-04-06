@@ -1071,7 +1071,7 @@ class SupplyChainTracker {
         add("Status",         node.status);
         add("Item",           node.item_code);
         add("Received",       node.qty);
-        add("Accepted",       node.accepted_qty);
+        add("Accepted",       node.received_qty);
         add("Rejected",       node.rejected_qty > 0 ? node.rejected_qty : "");
         add("Date",           node.posting_date);
         add("Purchase Order", node.po_ref);

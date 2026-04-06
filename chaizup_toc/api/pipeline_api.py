@@ -483,7 +483,7 @@ def _fetch_purchase_receipts(po_names, supplier=None):
     return frappe.db.sql(f"""
         SELECT DISTINCT
             pr.name, pr.supplier, pr.status, pr.posting_date, pr.creation,
-            pri.item_code, pri.purchase_order, pri.qty, pri.accepted_qty,
+            pri.item_code, pri.purchase_order, pri.qty, pri.received_qty,
             pri.rejected_qty
         FROM `tabPurchase Receipt` pr
         JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name
@@ -811,7 +811,7 @@ def _compute_next_action(bt, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, ses):
             if overdue_pos:
                 return f"⚠ {len(overdue_pos)} PO(s) overdue — follow up with supplier"
             return "Awaiting goods delivery"
-        if not all(p.get("accepted_qty", 0) >= p.get("qty", 0) for p in prs):
+        if not all(p.get("received_qty", 0) >= p.get("qty", 0) for p in prs):
             return "Goods partially received — pending balance"
         return "Fully received — buffer replenished"
 
@@ -990,7 +990,7 @@ def _pr_node(pr):
         "sub_type": "pr", "doc_name": pr["name"], "label": pr["name"],
         "description": pr.get("supplier", ""), "supplier": pr.get("supplier", ""),
         "item_code": pr.get("item_code", ""), "qty": _r(pr.get("qty")),
-        "accepted_qty": _r(pr.get("accepted_qty")), "rejected_qty": _r(pr.get("rejected_qty")),
+        "received_qty": _r(pr.get("received_qty")), "rejected_qty": _r(pr.get("rejected_qty")),
         "status": pr.get("status", ""), "posting_date": _str(pr.get("posting_date")),
         "po_ref": pr.get("purchase_order", ""),
         **_age(pr.get("creation"), pr.get("posting_date")),
