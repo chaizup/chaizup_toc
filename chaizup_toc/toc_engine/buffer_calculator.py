@@ -21,7 +21,7 @@ exist for an item contribute to its IP. Unused sources simply return 0.
   │ Backorders (demand) │ Bin             │ reserved_qty (Sales Order demand)    │
   │ Committed (demand)  │ Work Order Item │ required_qty − transferred_qty       │
   │ ADU, RLT, VF        │ Item child      │ TOC Item Buffer                      │
-  │ Buffer Type         │ Item            │ custom_toc_buffer_type               │
+  │ Buffer Type         │ TOC Settings    │ item_group_rules (TOC Item Group Rule)│
   └─────────────────────┴─────────────────┴──────────────────────────────────────┘
 """
 
@@ -209,33 +209,30 @@ def calculate_all_buffers(buffer_type=None, company=None, warehouse=None, item_c
     settings = _get_settings()
 
     # Build filters for Items with TOC enabled.
-    # NOTE: buffer_type is NOT added to the SQL filter here because items may have
-    # no custom_toc_buffer_type set and rely on item_group_rules for resolution.
-    # Python-level filtering is applied after type resolution below.
+    # NOTE: buffer_type filter is applied in Python after resolving via item_group_rules;
+    # it cannot be pushed to SQL because the type lives in TOC Settings, not on the Item.
     item_filters = {"custom_toc_enabled": 1, "disabled": 0}
     if item_code:
         item_filters["name"] = item_code
 
     items = frappe.get_all("Item", filters=item_filters,
-        fields=["name", "item_name", "item_group", "stock_uom", "custom_toc_buffer_type",
+        fields=["name", "item_name", "item_group", "stock_uom",
                 "custom_toc_auto_purchase", "custom_toc_auto_manufacture", "custom_toc_selling_price", "custom_toc_tvc",
                 "custom_toc_constraint_speed", "custom_toc_tcu", "custom_toc_default_bom"])
 
     results = []
     for item in items:
-        # Resolve buffer_type: item-level setting wins; fall back to item group rules
-        btype = item.custom_toc_buffer_type
+        # Buffer type is always resolved from TOC Settings → Item Group Rules
+        btype = _resolve_buffer_type(item.name, item.item_group, settings)
         if not btype:
-            btype = _resolve_buffer_type(item.name, item.item_group, settings)
-            if not btype:
-                frappe.log_error(
-                    f"Item {item.name} has TOC enabled but no buffer_type set and no matching "
-                    f"Item Group rule in TOC Settings. Item skipped.",
-                    "TOC Buffer Type Unresolved"
-                )
-                continue
-            # Attach resolved type so _calculate_single can use it
-            item.custom_toc_buffer_type = btype
+            frappe.log_error(
+                f"Item {item.name} has TOC enabled but no matching Item Group rule "
+                f"in TOC Settings → Item Group Rules. Item skipped.",
+                "TOC Buffer Type Unresolved"
+            )
+            continue
+        # Attach resolved type so _calculate_single can use it
+        item.custom_toc_buffer_type = btype
 
         # Apply buffer_type filter after resolution
         if buffer_type and btype != buffer_type:
@@ -399,10 +396,13 @@ def check_realtime_alert(item_code, warehouse=None):
 
 def _is_toc_item(item_code, buffer_type=None):
     """Check if an item has TOC buffer management enabled."""
-    filters = {"name": item_code, "custom_toc_enabled": 1}
+    if not frappe.db.exists("Item", {"name": item_code, "custom_toc_enabled": 1}):
+        return False
     if buffer_type:
-        filters["custom_toc_buffer_type"] = buffer_type
-    return frappe.db.exists("Item", filters)
+        item_group = frappe.db.get_value("Item", item_code, "item_group") or ""
+        resolved = _resolve_buffer_type(item_code, item_group, _get_settings())
+        return resolved == buffer_type
+    return True
 
 
 def _get_settings():
@@ -473,9 +473,6 @@ def _resolve_buffer_type(item_code, item_group, settings):
       1. Exact item_group match (lowest priority number wins on tie)
       2. Parent group match if include_sub_groups = 1 (walks hierarchy upward)
       3. Returns None — item will be skipped, Error Log entry written
-
-    Item-level custom_toc_buffer_type always takes precedence over this function;
-    callers should check it BEFORE calling here.
     """
     rules = getattr(settings, "item_group_rules", None) or []
     if not rules:
@@ -555,7 +552,8 @@ def _walk_bom(bom_name, parent_qty, multiplier, warehouse, results, depth, max_d
 
     for bi in bom_items:
         required = flt(bi.stock_qty or bi.qty) * multiplier * parent_qty
-        item_type = frappe.db.get_value("Item", bi.item_code, "custom_toc_buffer_type") or ""
+        _ig = frappe.db.get_value("Item", bi.item_code, "item_group") or ""
+        item_type = _resolve_buffer_type(bi.item_code, _ig, _get_settings()) or ""
         is_toc = frappe.db.get_value("Item", bi.item_code, "custom_toc_enabled")
 
         # Get current stock

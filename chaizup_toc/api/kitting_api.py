@@ -18,6 +18,7 @@ from datetime import date
 
 import frappe
 from frappe.utils import cint, flt, today
+from chaizup_toc.toc_engine.buffer_calculator import _resolve_buffer_type, _get_settings
 
 
 # ═══════════════════════════════════════════════════════
@@ -48,11 +49,17 @@ def get_kitting_summary(company=None, month=None, year=None, buffer_type=None):
     else:
         type_filter = valid_types
 
-    items = frappe.get_all("Item",
-        filters={"custom_toc_enabled": 1, "disabled": 0,
-                 "custom_toc_buffer_type": ["in", type_filter]},
-        fields=["name", "item_name", "item_group", "stock_uom",
-                "custom_toc_buffer_type", "custom_toc_default_bom"])
+    _settings = _get_settings()
+    all_items = frappe.get_all("Item",
+        filters={"custom_toc_enabled": 1, "disabled": 0},
+        fields=["name", "item_name", "item_group", "stock_uom", "custom_toc_default_bom"])
+    # Filter by resolved buffer type (item group rules, not item-level field)
+    items = []
+    for _i in all_items:
+        _bt = _resolve_buffer_type(_i.name, _i.item_group, _settings)
+        if _bt in type_filter:
+            _i["resolved_buffer_type"] = _bt
+            items.append(_i)
 
     if not items:
         return []
@@ -86,7 +93,7 @@ def get_kitting_summary(company=None, month=None, year=None, buffer_type=None):
             "item_name"               : item.item_name,
             "item_group"              : item.item_group,
             "stock_uom"               : item.stock_uom,
-            "buffer_type"             : item.custom_toc_buffer_type,
+            "buffer_type"             : item.get("resolved_buffer_type", ""),
             "bom"                     : item.custom_toc_default_bom or "",
             # Demand
             "total_so_pending"        : round(total_p, 2),
@@ -351,11 +358,12 @@ def _walk_bom(bom_name, parent_qty, results, depth, max_depth):
 
         item_meta = frappe.db.get_value(
             "Item", bi.item_code,
-            ["item_name", "custom_toc_buffer_type",
+            ["item_name", "item_group",
              "custom_toc_default_bom", "custom_toc_enabled"],
             as_dict=True) or {}
 
-        itype = item_meta.get("custom_toc_buffer_type") or _infer_type(bi.item_code)
+        _ig = item_meta.get("item_group") or ""
+        itype = _resolve_buffer_type(bi.item_code, _ig, _get_settings()) or _infer_type(bi.item_code)
 
         in_stock = flt(frappe.db.sql(
             "SELECT COALESCE(SUM(actual_qty),0) FROM `tabBin` WHERE item_code=%s",

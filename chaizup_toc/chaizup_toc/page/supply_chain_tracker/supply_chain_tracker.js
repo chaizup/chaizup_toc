@@ -182,6 +182,7 @@ class SupplyChainTracker {
         </div>
         <div class="sct-track-item-sub">
           ${track.buffer_type ? `<span class="sct-doc-tag tag-item">${track.buffer_type}</span>` : ""}
+          ${!track.toc_enabled ? `<span class="sct-tag-non-toc">Non-TOC</span>` : ""}
           ${track.item_group  ? `<span style="font-size:10px;color:var(--stone-400);margin-left:4px">${track.item_group}</span>` : ""}
           ${track.warehouse   ? `<span style="font-size:10px;color:var(--stone-400);margin-left:4px">📍 ${track.warehouse}</span>` : ""}
         </div>
@@ -496,8 +497,8 @@ class SupplyChainTracker {
         </div>`;
     }
 
-    // Item / output chips
-    if ((node.stage === "items" || node.sub_type === "output") && node.on_hand !== undefined) {
+    // Item / output chips (only for TOC-managed items — non-TOC have no buffer data)
+    if ((node.stage === "items" || node.sub_type === "output") && node.toc_enabled) {
       extras += `
         <div class="sct-chip-row">
           <span class="sct-chip">OH: <b>${node.on_hand}</b></span>
@@ -506,6 +507,10 @@ class SupplyChainTracker {
             ? `<span class="sct-chip warn">Def: <b>${node.order_qty}</b></span>`
             : ""}
         </div>`;
+    }
+    // Non-TOC badge on item cards in pipeline view
+    if (node.stage === "items" && !node.toc_enabled) {
+      extras += `<div style="margin-top:4px"><span class="sct-tag-non-toc">Non-TOC</span></div>`;
     }
 
     // PO pending
@@ -867,6 +872,19 @@ class SupplyChainTracker {
         </div>`);
     }
 
+    // Non-TOC notice
+    if ((node.stage === "items" || node.stage === "output") && !node.toc_enabled) {
+      parts.push(`
+        <div class="sct-toc-box" style="border-color:#d1d5db;background:#f9fafb">
+          <div class="sct-toc-box-title" style="color:#6b7280">ℹ TOC Buffer Not Configured</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">
+            This item is tracked from live transactions but is not yet managed
+            under TOC buffer rules. Enable TOC on the Item master to see buffer
+            zone, BP%, and automated replenishment triggers.
+          </div>
+        </div>`);
+    }
+
     // TOC buffer box
     if (node.zone) {
       const bp   = node.bp_pct ?? 0;
@@ -1077,10 +1095,12 @@ class SupplyChainTracker {
         add("Buffer Type", node.buffer_type);
         add("Item Group",  node.item_group);
         add("Warehouse",   node.warehouse);
-        add("On-Hand",     node.on_hand);
-        add("Target (F1)", node.target_buffer);
-        add("IP (F2)",     node.inventory_position);
-        add("Deficit (F4)", node.order_qty > 0 ? node.order_qty : "");
+        if (node.toc_enabled) {
+          add("On-Hand",     node.on_hand);
+          add("Target (F1)", node.target_buffer);
+          add("IP (F2)",     node.inventory_position);
+          add("Deficit (F4)", node.order_qty > 0 ? node.order_qty : "");
+        }
         break;
     }
     return f;
@@ -1258,8 +1278,8 @@ class SupplyChainTracker {
     });
 
     document.getElementById("sct-btn-apply")?.addEventListener("click", () => {
-      this.f.supplier  = document.getElementById("sct-f-supplier")?.value  || "";
-      this.f.warehouse = document.getElementById("sct-f-warehouse")?.value || "";
+      this.f.supplier  = document.getElementById("sct-f-supplier")?.value.trim()  || "";
+      this.f.warehouse = document.getElementById("sct-f-warehouse")?.value.trim() || "";
       this.f.overdue   = document.getElementById("sct-f-overdue")?.checked  || false;
       this.f.auto      = document.getElementById("sct-f-auto")?.checked     || false;
       this.f.noaction  = document.getElementById("sct-f-noaction")?.checked || false;
@@ -1273,7 +1293,14 @@ class SupplyChainTracker {
       document.querySelectorAll(".sct-fpill").forEach(p => {
         p.classList.toggle("active", p.dataset.v === "All");
       });
-      ["sct-f-supplier","sct-f-warehouse"].forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+      // Clear custom dropdowns
+      ["sct-dd-supplier", "sct-dd-warehouse"].forEach(id => {
+        const wrap = document.getElementById(id);
+        if (!wrap) return;
+        const inp = wrap.querySelector(".sct-dd-input");
+        if (inp) { inp.value = ""; inp.classList.remove("has-value"); }
+        wrap.classList.remove("has-value", "open");
+      });
       ["sct-f-overdue","sct-f-auto","sct-f-noaction"].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       this.render();
     });
@@ -1304,13 +1331,152 @@ class SupplyChainTracker {
       method: "chaizup_toc.api.pipeline_api.get_filter_options",
       callback: (r) => {
         if (!r.message) return;
-        const { suppliers, warehouses } = r.message;
-        const sup = document.getElementById("sct-supplier-list");
-        const wh  = document.getElementById("sct-warehouse-list");
-        (suppliers  || []).forEach(s => { const o = document.createElement("option"); o.value = s; sup?.appendChild(o); });
-        (warehouses || []).forEach(w => { const o = document.createElement("option"); o.value = w; wh?.appendChild(o); });
+        const { suppliers = [], warehouses = [] } = r.message;
+        this._initSearchDropdown("sct-dd-supplier",  "sct-f-supplier",  suppliers);
+        this._initSearchDropdown("sct-dd-warehouse", "sct-f-warehouse", warehouses);
       },
     });
+  }
+
+  /**
+   * Initialise a custom searchable dropdown.
+   * The committed value is always readable from the input's .value property.
+   *
+   * @param {string}   wrapperId  – id of the .sct-dd wrapper element
+   * @param {string}   inputId    – id of the text input inside it
+   * @param {string[]} items      – full option list
+   */
+  _initSearchDropdown(wrapperId, inputId, items) {
+    const wrap   = document.getElementById(wrapperId);
+    const input  = document.getElementById(inputId);
+    const list   = wrap?.querySelector(".sct-dd-list");
+    const clear  = wrap?.querySelector(".sct-dd-clear");
+    if (!wrap || !input || !list) return;
+
+    // Internal state
+    let focusIdx  = -1;
+    let open      = false;
+    let committed = "";   // the value that has been formally selected
+
+    const _highlight = (text, query) => {
+      if (!query) return frappe.utils.escape_html(text);
+      const idx = text.toLowerCase().indexOf(query.toLowerCase());
+      if (idx === -1) return frappe.utils.escape_html(text);
+      return frappe.utils.escape_html(text.slice(0, idx))
+        + `<mark>${frappe.utils.escape_html(text.slice(idx, idx + query.length))}</mark>`
+        + frappe.utils.escape_html(text.slice(idx + query.length));
+    };
+
+    const _render = (q) => {
+      const q_lower = (q || "").toLowerCase().trim();
+      const matched = q_lower
+        ? items.filter(s => s.toLowerCase().includes(q_lower)).slice(0, 80)
+        : items.slice(0, 80);
+
+      list.innerHTML = "";
+      focusIdx = -1;
+
+      if (!matched.length) {
+        list.innerHTML = `<div class="sct-dd-empty">${q_lower ? "No matches found" : "No options available"}</div>`;
+        return;
+      }
+
+      matched.forEach((item, i) => {
+        const el = document.createElement("div");
+        el.className = "sct-dd-item" + (item === committed ? " selected" : "");
+        el.setAttribute("role", "option");
+        el.innerHTML = _highlight(item, q_lower);
+        el.addEventListener("mousedown", (e) => {
+          e.preventDefault();   // don't blur input
+          _select(item);
+        });
+        list.appendChild(el);
+      });
+    };
+
+    const _open = () => {
+      if (open) return;
+      open = true;
+      wrap.classList.add("open");
+      _render(input.value);
+    };
+
+    const _close = () => {
+      if (!open) return;
+      open = false;
+      wrap.classList.remove("open");
+      focusIdx = -1;
+      // If user typed something that doesn't match a committed value, revert
+      if (input.value !== committed) {
+        input.value = committed;
+        input.classList.toggle("has-value", !!committed);
+        wrap.classList.toggle("has-value", !!committed);
+      }
+    };
+
+    const _select = (val) => {
+      committed = val;
+      input.value = val;
+      input.classList.add("has-value");
+      wrap.classList.add("has-value");
+      _close();
+    };
+
+    const _clearValue = () => {
+      committed = "";
+      input.value = "";
+      input.classList.remove("has-value");
+      wrap.classList.remove("has-value");
+      _close();
+    };
+
+    const _moveFocus = (dir) => {
+      const rows = list.querySelectorAll(".sct-dd-item");
+      if (!rows.length) return;
+      rows[focusIdx]?.classList.remove("focused");
+      focusIdx = Math.max(0, Math.min(rows.length - 1, focusIdx + dir));
+      rows[focusIdx].classList.add("focused");
+      rows[focusIdx].scrollIntoView({ block: "nearest" });
+    };
+
+    // ── Event listeners ─────────────────────────────────────────────────────
+    input.addEventListener("focus", () => _open());
+    input.addEventListener("input", () => {
+      wrap.classList.toggle("has-value", !!input.value);
+      _render(input.value);
+      if (!open) _open();
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown")  { e.preventDefault(); _open(); _moveFocus(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); _moveFocus(-1); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        const focused = list.querySelector(".sct-dd-item.focused");
+        if (focused) _select(focused.textContent.trim());
+        else if (open) _close();
+      }
+      else if (e.key === "Escape") { _close(); input.blur(); }
+    });
+
+    // Close when clicking outside
+    document.addEventListener("mousedown", (e) => {
+      if (!wrap.contains(e.target)) _close();
+    }, { capture: true });
+
+    // Clear button
+    clear?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      _clearValue();
+      input.focus();
+    });
+
+    // Pre-populate if a value is already committed (e.g., after reset flow)
+    if (committed) {
+      input.value = committed;
+      input.classList.add("has-value");
+      wrap.classList.add("has-value");
+    }
   }
 
   // ── Summary strip ──────────────────────────────────────────────────────────

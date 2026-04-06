@@ -7,9 +7,34 @@ import frappe
 from frappe.utils import flt
 
 
+def _resolve_buffer_type_for_item(doc):
+    """
+    Resolve buffer type from TOC Settings → Item Group Rules.
+    Sets doc.custom_toc_buffer_type (hidden field) so depends_on
+    conditions on BOM/T/CU sections continue to work correctly.
+    """
+    try:
+        from chaizup_toc.toc_engine.buffer_calculator import _resolve_buffer_type, _get_settings
+        settings = _get_settings()
+        btype = _resolve_buffer_type(doc.name, doc.item_group, settings)
+        doc.custom_toc_buffer_type = btype or ""
+        return btype or ""
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC: buffer type resolution failed on item validate")
+        return doc.get("custom_toc_buffer_type") or ""
+
+
 def on_item_validate(doc, method):
     if not doc.custom_toc_enabled:
         return
+
+    # Auto-resolve buffer type from TOC Settings → Item Group Rules
+    btype = _resolve_buffer_type_for_item(doc)
+    if not btype:
+        frappe.msgprint(
+            f"No buffer type rule found for item group '{doc.item_group}' in "
+            "TOC Settings → Item Group Rules. Please add a matching rule.",
+            indicator="orange", alert=True)
 
     # R1: If Custom ADU is checked, make ADU editable; otherwise read-only
     # (handled in JS — here we just validate the value)
@@ -34,8 +59,8 @@ def on_item_validate(doc, method):
                 "TOC will monitor this item but will NOT auto-create Material Requests.",
                 indicator="orange", alert=True)
 
-    # F5: T/CU calculation for FG
-    if doc.custom_toc_buffer_type == "FG":
+    # F5: T/CU calculation for FG (uses auto-resolved btype)
+    if btype == "FG":
         price = flt(doc.custom_toc_selling_price)
         tvc = flt(doc.custom_toc_tvc)
         speed = flt(doc.custom_toc_constraint_speed)

@@ -17,6 +17,7 @@ R4 CLARITY: ADU is calculated here at 6:30 AM. It reads:
 
 import frappe
 from frappe.utils import today, add_days, flt, now_datetime
+from chaizup_toc.toc_engine.buffer_calculator import _resolve_buffer_type, _get_settings
 
 
 def daily_adu_update():
@@ -35,11 +36,12 @@ def daily_adu_update():
 
         items = frappe.get_all("Item",
             filters={"custom_toc_enabled": 1, "disabled": 0},
-            fields=["name", "custom_toc_buffer_type", "custom_toc_adu_period", "custom_toc_custom_adu"])
+            fields=["name", "item_group", "custom_toc_adu_period", "custom_toc_custom_adu"])
 
         period_map = {"Last 30 Days": 30, "Last 90 Days": 90, "Last 180 Days": 180, "Last 365 Days": 365}
         updated = 0
         skipped = 0
+        _settings = _get_settings()
 
         for item in items:
             # R1: Skip if Custom ADU is checked — user entered manual value
@@ -50,7 +52,7 @@ def daily_adu_update():
             try:
                 days = period_map.get(item.custom_toc_adu_period or "Last 90 Days", 90)
                 from_date = add_days(today(), -days)
-                btype = item.custom_toc_buffer_type
+                btype = _resolve_buffer_type(item.name, item.item_group, _settings) or ""
                 adu = 0.0
 
                 if btype == "FG":

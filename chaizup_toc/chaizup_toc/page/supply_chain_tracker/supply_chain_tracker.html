@@ -71,15 +71,27 @@
     </div>
     <div class="sct-filter-group">
       <div class="sct-filter-group-label">Supplier</div>
-      <input type="text" class="sct-filter-input" id="sct-f-supplier"
-             placeholder="Supplier name…" list="sct-supplier-list">
-      <datalist id="sct-supplier-list"></datalist>
+      <div class="sct-dd" id="sct-dd-supplier">
+        <div class="sct-dd-trigger">
+          <input type="text" class="sct-dd-input" id="sct-f-supplier"
+                 placeholder="Search supplier…" autocomplete="off" spellcheck="false">
+          <button class="sct-dd-clear" id="sct-dd-supplier-clear" tabindex="-1" aria-label="Clear">✕</button>
+          <span class="sct-dd-arrow" aria-hidden="true">▾</span>
+        </div>
+        <div class="sct-dd-list" id="sct-dd-supplier-list" role="listbox"></div>
+      </div>
     </div>
     <div class="sct-filter-group">
       <div class="sct-filter-group-label">Warehouse</div>
-      <input type="text" class="sct-filter-input" id="sct-f-warehouse"
-             placeholder="Warehouse…" list="sct-warehouse-list">
-      <datalist id="sct-warehouse-list"></datalist>
+      <div class="sct-dd" id="sct-dd-warehouse">
+        <div class="sct-dd-trigger">
+          <input type="text" class="sct-dd-input" id="sct-f-warehouse"
+                 placeholder="Search warehouse…" autocomplete="off" spellcheck="false">
+          <button class="sct-dd-clear" id="sct-dd-warehouse-clear" tabindex="-1" aria-label="Clear">✕</button>
+          <span class="sct-dd-arrow" aria-hidden="true">▾</span>
+        </div>
+        <div class="sct-dd-list" id="sct-dd-warehouse-list" role="listbox"></div>
+      </div>
     </div>
     <div class="sct-filter-group">
       <div class="sct-filter-group-label">Special</div>

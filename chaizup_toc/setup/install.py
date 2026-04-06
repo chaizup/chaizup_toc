@@ -71,9 +71,9 @@ def _install_custom_fields():
                  label="Buffer Type [TOC App]",
                  options="\nFG\nSFG\nRM\nPM",
                  insert_after="custom_toc_enabled",
-                 mandatory_depends_on="eval:doc.custom_toc_enabled",
-                 depends_on="eval:doc.custom_toc_enabled",
-                 description="FG = Finished Goods (you SELL these) | SFG = Semi-Finished Goods (intermediates like premix blend) | RM = Raw Materials (you BUY these) | PM = Packaging Materials (you BUY these). This determines the Inventory Position formula used.",
+                 read_only=1,
+                 hidden=1,
+                 description="Auto-resolved from TOC Settings → Item Group Rules. Not user-editable.",
                  module=M),
 
             dict(fieldname="custom_toc_col_replenish", fieldtype="Column Break",

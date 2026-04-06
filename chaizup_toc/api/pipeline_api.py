@@ -58,8 +58,8 @@ def get_pipeline_data(
     show_overdue_only = int(show_overdue_only or 0)
     from_date = add_days(today(), -days_back)
 
-    # 1. Seed: TOC-managed items
-    items = _fetch_items(item_code, buffer_type, warehouse)
+    # 1. Seed: TOC-managed items + non-TOC items with active transactions
+    items = _fetch_items(item_code, buffer_type, warehouse, from_date)
     if not items:
         return _empty_response()
 
@@ -68,7 +68,14 @@ def get_pipeline_data(
     # 2. TOC buffer overlay (once, shared by all callers)
     toc_map = _get_toc_map(item_codes)
 
-    # 3. Apply zone filter — narrow item_codes
+    # 3a. Apply buffer_type filter using toc_map (buffer type is now resolved server-side)
+    if buffer_type and buffer_type != "All":
+        item_codes = [ic for ic in item_codes if toc_map.get(ic, {}).get("buffer_type") == buffer_type]
+        items = [i for i in items if i["item_code"] in item_codes]
+        if not items:
+            return _empty_response()
+
+    # 3b. Apply zone filter — narrow item_codes
     if zone and zone != "All":
         item_codes = [ic for ic in item_codes if toc_map.get(ic, {}).get("zone") == zone]
         items = [i for i in items if i["item_code"] in item_codes]
@@ -122,7 +129,7 @@ def get_pipeline_data(
     output_ics = {
         i["item_code"]
         for i in items
-        if i.get("custom_toc_buffer_type") in ("FG", "SFG") and toc_map.get(i["item_code"])
+        if toc_map.get(i["item_code"], {}).get("buffer_type") in ("FG", "SFG")
     }
 
     nodes, edges = _build_graph(
@@ -187,31 +194,119 @@ def get_filter_options():
 #  Fetch helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _fetch_items(item_code, buffer_type, warehouse):
-    filters = {"custom_toc_enabled": 1}
+def _fetch_items(item_code, buffer_type, warehouse, from_date):
+    """
+    Return items to track.
+
+    • Always includes TOC-managed items (custom_toc_enabled = 1).
+    • When buffer_type is "All" (no TOC-specific filter active), also pulls in
+      every item that has open purchase or production activity in the window,
+      giving a complete company-wide view even for items not yet under TOC.
+    """
+    _item_fields = ["name as item_code", "item_name", "custom_toc_default_bom", "item_group"]
+
+    # ── 1. TOC-managed items ──────────────────────────────────────────────────
+    # Note: buffer_type filter is applied AFTER toc_map is built (in get_pipeline_data step 3a)
+    # because buffer type is now resolved from TOC Settings → Item Group Rules, not from Item field.
+    toc_filters = {"custom_toc_enabled": 1}
     if item_code:
-        filters["name"] = item_code
-    if buffer_type and buffer_type != "All":
-        filters["custom_toc_buffer_type"] = buffer_type
-    items = frappe.get_all(
+        toc_filters["name"] = item_code
+
+    toc_items = frappe.get_all(
         "Item",
-        filters=filters,
-        fields=["name as item_code", "item_name", "custom_toc_buffer_type",
-                "custom_toc_default_bom", "item_group"],
+        filters=toc_filters,
+        fields=_item_fields,
         ignore_permissions=True,
         limit=500,
     )
-    # If warehouse filter given, keep only items that have a buffer rule for that warehouse
+    toc_codes = {i["item_code"] for i in toc_items}
+
+    # ── 2. Non-TOC items from active transactions ────────────────────────────
+    # Only when no buffer_type / zone-specific filter is active (those are
+    # TOC-specific and would produce meaningless results for non-TOC items).
+    extra_items = []
+    if not item_code and (not buffer_type or buffer_type == "All"):
+        active_codes = _item_codes_from_transactions(from_date) - toc_codes
+        if active_codes:
+            extra_items = frappe.get_all(
+                "Item",
+                filters=[["name", "in", list(active_codes)]],
+                fields=_item_fields,
+                ignore_permissions=True,
+                limit=2000,
+            )
+    elif item_code and item_code not in toc_codes:
+        # Specific item lookup even if not TOC-enabled
+        extra_items = frappe.get_all(
+            "Item",
+            filters={"name": item_code},
+            fields=_item_fields,
+            ignore_permissions=True,
+            limit=1,
+        )
+
+    items = toc_items + extra_items
+
+    # ── 3. Warehouse filter ──────────────────────────────────────────────────
     if warehouse and items:
         item_codes = [i["item_code"] for i in items]
         ph = _ph(item_codes)
-        rows = frappe.db.sql(f"""
+        # TOC buffer rules
+        toc_wh = {r[0] for r in frappe.db.sql(f"""
             SELECT DISTINCT item_code FROM `tabTOC Item Buffer`
             WHERE item_code IN ({ph}) AND warehouse = %s
-        """, tuple(item_codes) + (warehouse,), as_dict=False)
-        allowed = {r[0] for r in rows}
+        """, tuple(item_codes) + (warehouse,), as_dict=False)}
+        # MR warehouse (covers non-TOC items)
+        mr_wh = {r[0] for r in frappe.db.sql(f"""
+            SELECT DISTINCT mri.item_code
+            FROM `tabMaterial Request Item` mri
+            WHERE mri.item_code IN ({ph}) AND mri.warehouse = %s
+        """, tuple(item_codes) + (warehouse,), as_dict=False)}
+        allowed = toc_wh | mr_wh
         items = [i for i in items if i["item_code"] in allowed]
+
     return items
+
+
+def _item_codes_from_transactions(from_date):
+    """
+    Return the set of item codes that have open purchase/production activity
+    in the given time window.  Used to seed the non-TOC item list.
+    """
+    codes = set()
+
+    # Open Material Requests
+    rows = frappe.db.sql("""
+        SELECT DISTINCT mri.item_code
+        FROM `tabMaterial Request` mr
+        JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
+        WHERE mr.docstatus < 2
+          AND mr.status NOT IN ('Cancelled', 'Stopped')
+          AND mr.transaction_date >= %s
+    """, (from_date,), as_dict=False)
+    codes.update(r[0] for r in rows if r[0])
+
+    # Active Work Orders (no date filter — may have started before the window)
+    rows = frappe.db.sql("""
+        SELECT DISTINCT production_item
+        FROM `tabWork Order`
+        WHERE docstatus < 2
+          AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
+    """, as_dict=False)
+    codes.update(r[0] for r in rows if r[0])
+
+    # Open Purchase Orders
+    rows = frappe.db.sql("""
+        SELECT DISTINCT poi.item_code
+        FROM `tabPurchase Order` po
+        JOIN `tabPurchase Order Item` poi ON poi.parent = po.name
+        WHERE po.docstatus < 2
+          AND po.status NOT IN ('Cancelled', 'Closed')
+          AND po.transaction_date >= %s
+    """, (from_date,), as_dict=False)
+    codes.update(r[0] for r in rows if r[0])
+
+    return codes
 
 
 def _get_toc_map(item_codes):
@@ -492,7 +587,7 @@ def _build_tracks(items, toc_map, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, qis, 
     for item in items:
         ic   = item["item_code"]
         toc  = toc_map.get(ic, {})
-        bt   = item.get("custom_toc_buffer_type", "")
+        bt   = toc.get("buffer_type", "")
 
         # Gather all documents for this item
         item_mrs  = mrs_by_ic.get(ic, [])
@@ -546,6 +641,7 @@ def _build_tracks(items, toc_map, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, qis, 
             "item_name":    item.get("item_name", ic),
             "item_group":   item.get("item_group", ""),
             "buffer_type":  bt,
+            "toc_enabled":  bool(toc),  # False for items not under TOC management
             "zone":         toc.get("zone", ""),
             "bp_pct":       round(toc.get("bp_pct", 0) or 0, 1),
             "target_buffer":round(toc.get("target_buffer", 0) or 0, 2),
@@ -649,16 +745,53 @@ def _detect_stuck_stage(docs):
 
 def _compute_next_action(bt, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, ses):
     """
-    Determine the single most important next action for this item based on
-    what documents exist and their statuses.
+    Determine the single most important next action for this item.
+
+    For non-TOC items (bt=""), the procurement path is inferred from the
+    documents that already exist.
     """
-    # Helper: are there any docs with a given status?
     def has(docs, statuses):
         statuses = [s.lower() for s in statuses]
         return any(d.get("status", "").lower() in statuses for d in docs)
 
+    # ── Infer path for non-TOC items ──────────────────────────────────────────
+    if not bt:
+        if wos or pps:
+            bt = "FG"   # manufacture path
+        elif rfqs or pos or (mrs and mrs[0].get("material_request_type") == "Purchase"):
+            bt = "RM"   # purchase path
+        elif mrs:
+            bt = "FG"   # default to manufacture when only MR present
+        else:
+            return "No active documents"
+
+    # ── No MR yet ─────────────────────────────────────────────────────────────
     if not mrs:
-        return "No MR — Buffer needs replenishment trigger"
+        if pos:
+            # Direct PO without MR (common for non-TOC items)
+            pending_pos = [p for p in pos if p.get("status") not in ("Closed", "Cancelled")]
+            if not pending_pos:
+                return "All Purchase Orders fulfilled"
+            overdue_pos = [p for p in pending_pos if _is_overdue_doc(p, "schedule_date")]
+            if overdue_pos:
+                return f"⚠ {len(overdue_pos)} PO(s) overdue — follow up with supplier"
+            return "Awaiting goods delivery"
+        if wos:
+            open_wos = [w for w in wos if w.get("status") not in ("Completed", "Stopped", "Cancelled")]
+            if not open_wos:
+                return "All Work Orders completed"
+            if not jcs:
+                return "Start Job Cards / Operations"
+            open_jcs = [j for j in jcs if j.get("status") not in ("Completed",)]
+            if open_jcs:
+                overdue_jcs = [j for j in open_jcs if _is_overdue_doc(j, "expected_end_date")]
+                if overdue_jcs:
+                    return f"⚠ {len(overdue_jcs)} Job Card(s) overdue — expedite production"
+                return "Production in progress — monitor Job Cards"
+            if not ses:
+                return "Post Manufacture Stock Entry"
+            return "Production complete"
+        return "No MR — raise a Material Request to trigger replenishment"
 
     pending_mrs = [m for m in mrs if m.get("status", "").lower() not in ("stopped", "cancelled")]
 
@@ -719,18 +852,29 @@ def _is_overdue_doc(doc, date_field):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _item_node(ic, item, toc):
-    return {
+    node = {
         "id": f"ITEM::{ic}", "stage": "items", "doctype": "Item",
         "doc_name": ic, "label": ic, "description": item.get("item_name", ""),
-        "buffer_type": item.get("custom_toc_buffer_type", ""),
+        "buffer_type": toc.get("buffer_type", ""),
         "item_group": item.get("item_group", ""),
-        "zone": toc.get("zone", ""), "bp_pct": _r(toc.get("bp_pct")),
-        "target_buffer": _r(toc.get("target_buffer")),
-        "inventory_position": _r(toc.get("inventory_position")),
-        "on_hand": _r(toc.get("on_hand")), "order_qty": _r(toc.get("order_qty")),
-        "warehouse": toc.get("warehouse", ""), "status": "active",
+        "toc_enabled": bool(toc),
+        "zone": "", "bp_pct": 0,
+        "target_buffer": None, "inventory_position": None,
+        "on_hand": None, "order_qty": 0,
+        "warehouse": "", "status": "active",
         "days_open": 0, "is_overdue": False,
     }
+    if toc:
+        node.update({
+            "zone":               toc.get("zone", ""),
+            "bp_pct":             _r(toc.get("bp_pct")),
+            "target_buffer":      _r(toc.get("target_buffer")),
+            "inventory_position": _r(toc.get("inventory_position")),
+            "on_hand":            _r(toc.get("on_hand")),
+            "order_qty":          _r(toc.get("order_qty")),
+            "warehouse":          toc.get("warehouse", ""),
+        })
+    return node
 
 
 def _mr_node(mr):
