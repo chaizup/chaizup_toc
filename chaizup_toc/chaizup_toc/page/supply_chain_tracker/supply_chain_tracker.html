@@ -1,6 +1,45 @@
+<!--
+  supply_chain_tracker.html — Supply Chain Tracker Page Template
+  ══════════════════════════════════════════════════════════════
+
+  DOM Structure Overview:
+  ┌──────────────────────────────────────────────────────────────┐
+  │ .sct-root                  (full-height flex column)         │
+  │   .sct-command-bar         search · view toggle · filter btn │
+  │   .sct-filter-panel        collapsible filter drawer         │
+  │   .sct-summary-strip       stat cards (zone counts + docs)   │
+  │   .sct-content                                               │
+  │     #sct-loading           spinner (shown during API fetch)  │
+  │     .sct-tracker-wrap      Tracker view (active by default)  │
+  │     .sct-pipeline-wrap     Pipeline view (hidden by default) │
+  │       .sct-canvas-bar      hint text + clear button          │
+  │       .sct-pipeline-scroll overflow-x scroll container       │
+  │         .pl-grid           (injected by JS: SVG + stages)    │
+  │   .sct-panel               detail slide-in panel             │
+  └──────────────────────────────────────────────────────────────┘
+
+  The pipeline's .pl-grid and its contents are created entirely by JS
+  (_renderPipeline). Only the scroll wrapper and SVG skeleton are here.
+
+  All interactive IDs are referenced in supply_chain_tracker.js:
+    #sct-search, #sct-search-clear  — search input
+    #sct-btn-tracker, #sct-btn-pipeline — view toggle
+    #sct-filter-toggle, #sct-filter-panel — filter drawer
+    #sct-days-select — look-back window selector
+    #sct-filter-badge — active filter count badge
+    #sct-s-* — summary strip value spans
+    #sct-tracker-wrap, #sct-pipeline-wrap — view containers
+    #sct-svg-overlay — SVG edge layer (moved into .pl-grid by JS)
+    #sct-panel — detail panel
+    #sct-panel-title, #sct-panel-subtitle, #sct-panel-body, #sct-panel-actions
+-->
 <div class="sct-root" id="sct-root">
 
-  <!-- Command Bar -->
+  <!-- ── Command Bar ─────────────────────────────────────────────────────────
+       Top control row: search input, view toggle (Tracker/Pipeline),
+       filter panel toggle, and the days-back window selector.
+       All interactivity wired in _bindCommandBar().
+       ──────────────────────────────────────────────────────────────────── -->
   <div class="sct-command-bar" id="sct-command-bar">
     <div class="sct-search-wrap">
       <span class="sct-search-icon">🔍</span>
@@ -32,7 +71,14 @@
     </select>
   </div>
 
-  <!-- Filter Panel -->
+  <!-- ── Filter Panel ────────────────────────────────────────────────────────
+       Collapsible drawer opened by the ⚙ Filters button.
+       Three pill groups: Buffer Type, Zone, Document Type (client-side filters).
+       Two searchable dropdowns: Supplier, Warehouse (server-side filters).
+       Special checkboxes: Overdue only, TOC Auto-generated only, Items with no open MR.
+       Apply button: reads all values and calls load() or render() as needed.
+       Reset button: restores all filters to defaults.
+       ──────────────────────────────────────────────────────────────────── -->
   <div class="sct-filter-panel" id="sct-filter-panel">
     <div class="sct-filter-group">
       <div class="sct-filter-group-label">Buffer Type</div>
@@ -111,7 +157,11 @@
     </div>
   </div>
 
-  <!-- Summary Strip -->
+  <!-- ── Summary Strip ───────────────────────────────────────────────────────
+       Always-visible stat bar. Values populated by JS _updateSummary().
+       Red/Yellow/Green stats are clickable — clicking applies a zone filter.
+       Overdue count is computed client-side from tracks (not from server summary).
+       ──────────────────────────────────────────────────────────────────── -->
   <div class="sct-summary-strip" id="sct-summary-strip">
     <div class="sct-stat clickable" data-zone="Red" title="Click to filter Red/Stockout">
       <span class="sct-stat-icon">🚨</span>
@@ -171,20 +221,38 @@
     </div>
   </div>
 
-  <!-- Main Content -->
+  <!-- ── Main Content ────────────────────────────────────────────────────────
+       Flex-grow area that fills remaining height below summary strip.
+       Contains the loading overlay, and the two view containers.
+       Only one view is visible at a time (.active class toggled by JS).
+       ──────────────────────────────────────────────────────────────────── -->
   <div class="sct-content">
+
+    <!-- Loading spinner — shown while API fetch is in progress -->
     <div id="sct-loading" class="sct-loading">
       <div class="sct-spinner"></div>
       <span>Loading supply chain data…</span>
     </div>
 
-    <!-- Tracker View (default) -->
+    <!-- ── Tracker View (default active) ──────────────────────────────────
+         Vertical list of collapsible .sct-track rows, one per TOC item.
+         Populated entirely by JS _renderTracker(). Body elements are lazy-built
+         on first expand for performance.
+         ──────────────────────────────────────────────────────────────── -->
     <div class="sct-tracker-wrap active" id="sct-tracker-wrap">
-      <!-- Populated by JS -->
+      <!-- Populated by JS _renderTracker() -->
     </div>
 
-    <!-- Pipeline View -->
+    <!-- ── Pipeline View (hidden by default) ──────────────────────────────
+         7-stage Kanban with SVG Bezier edges.
+         .sct-pipeline-scroll is the horizontal overflow container.
+         The .pl-grid inside it (and the SVG overlay) are injected by JS
+         _renderPipeline() — they do NOT exist in the initial HTML.
+         The SVG skeleton here is moved into .pl-grid by JS so it scrolls
+         with the stage columns.
+         ──────────────────────────────────────────────────────────────── -->
     <div class="sct-pipeline-wrap" id="sct-pipeline-wrap">
+      <!-- Hint text + clear-selection button above the scrollable canvas -->
       <div class="sct-canvas-bar">
         <span class="sct-canvas-hint">Click a card to trace its lineage · Hover lines to highlight connections</span>
         <button class="sct-clear-btn" id="sct-pl-clear-btn">
@@ -194,13 +262,23 @@
           </svg>
         </button>
       </div>
+      <!-- Horizontal scroll container. JS will inject .pl-grid inside here. -->
       <div class="sct-pipeline-scroll" id="sct-pipeline-scroll">
+        <!-- SVG overlay for Bezier edge paths.
+             JS _renderPipeline() moves this into .pl-grid so coordinates align.
+             The SVG is sized dynamically to match the full grid scrollWidth/Height. -->
         <svg id="sct-svg-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
       </div>
     </div>
   </div>
 
-  <!-- Detail Panel -->
+  <!-- ── Detail Panel ──────────────────────────────────────────────────────
+       Slide-in side panel showing full document details for a selected node.
+       Populated by JS showPanel(node) via _panelBody() and _panelActions().
+       Panel is opened by adding .open class; closed by _closePanel().
+       Interactive elements use data-nav-id / data-route-item / data-close-panel
+       attributes (not inline onclick) to avoid XSS.
+       ──────────────────────────────────────────────────────────────────── -->
   <div class="sct-panel" id="sct-panel">
     <div class="sct-panel-header">
       <div class="sct-panel-header-info">

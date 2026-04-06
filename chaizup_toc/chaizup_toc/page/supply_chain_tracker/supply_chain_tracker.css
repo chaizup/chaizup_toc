@@ -1,34 +1,76 @@
+/*
+ * supply_chain_tracker.css — Supply Chain Tracker Styles
+ * ════════════════════════════════════════════════════════
+ *
+ * SECTION MAP
+ * ───────────
+ *  1. Font Import             — Oswald (headings/labels) + DM Sans (body)
+ *  2. Design Tokens (:root)   — Brand, stone, and flow-type colour palette
+ *  3. Base Layout             — .sct-root full-height flex column
+ *  4. Command Bar             — search, view toggle, filter button, days select
+ *  5. Filter Panel            — collapsible drawer: pills, custom dropdowns
+ *  6. Summary Strip           — stat cards (Red/Yellow/Green/MRs/WOs/POs/Items)
+ *  7. Main Content            — .sct-content splits loading/tracker/pipeline
+ *  8. Tracker View            — collapsible item rows, doc rows, progress bars
+ *  9. Pipeline View           — .pl-grid wrapper, stage columns (.stage), cards
+ * 10. Pipeline Cards V2       — .sct-card-v2 anatomy: type chip, body rows, ports
+ * 11. SVG Edges               — .sct-edge opacity system, .live animation, hover
+ * 12. Detail Panel            — slide-in side panel, sections, actions
+ * 13. Utility                 — badges, tags, zone indicators, BOM block
+ *
+ * DESIGN PHILOSOPHY
+ * ──────────────────
+ * • Warm stone palette (#fafaf9 → #1c1917) for a neutral, non-clinical feel
+ * • Brand orange (#f97316) used sparingly for selected/active states
+ * • Buy-chain = cyan (#06b6d4), Mfg-chain = violet (#8b5cf6) for clear flow separation
+ * • Oswald font for all column headers, type chips, and stage labels (compact, readable)
+ * • DM Sans for all body copy, row data, and status text
+ * • SVG edge opacity 0.15 by default — visible but ambient (not distracting)
+ * • On card selection, edges become opacity 1 with marching-ants animation
+ *
+ * NOTE ON SVG ATTRIBUTES VS CSS:
+ *   The stroke colour on .sct-edge paths is set as an SVG attribute (not CSS)
+ *   because CSS custom properties (--brand-500 etc.) do NOT resolve inside
+ *   SVG presentation attributes in all browsers. CSS classes (.live, .hl, etc.)
+ *   override stroke-width and opacity only, not colour.
+ */
+
 @import url("https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap");
 
-/* ── Brand Tokens ──────────────────────────────────────────── */
+/* ── Design Tokens ─────────────────────────────────────────────────────────────
+   Brand palette: Chaizup tiger orange (#f97316) as the primary accent.
+   Stone palette: warm grey scale used for backgrounds, borders, and muted text.
+   Flow type colours: buy=cyan, mfg=violet are used consistently for edges,
+   column headers, type chips, and card left-stripe accents throughout the UI.
+   ──────────────────────────────────────────────────────────────────────────── */
 :root {
   --brand-50:  #fff7ed;
   --brand-100: #ffedd5;
   --brand-200: #fed7aa;
   --brand-300: #fdba74;
   --brand-400: #fb923c;
-  --brand-500: #f97316;
+  --brand-500: #f97316;   /* Primary action / selected state */
   --brand-600: #ea580c;
   --brand-700: #c2410c;
-  --stone-50:  #fafaf9;
-  --stone-100: #f5f5f4;
-  --stone-200: #e7e5e0;
+  --stone-50:  #fafaf9;   /* Page background */
+  --stone-100: #f5f5f4;   /* Card background */
+  --stone-200: #e7e5e0;   /* Borders */
   --stone-300: #d6d3d1;
-  --stone-400: #a8a29e;
+  --stone-400: #a8a29e;   /* Muted text / idle edge colour */
   --stone-500: #78716c;
   --stone-600: #57534e;
   --stone-700: #44403c;
-  --stone-800: #292524;
+  --stone-800: #292524;   /* Primary text */
   --stone-900: #1c1917;
-  /* Flow type colours */
-  --buy:     #06b6d4;
+  /* ── Flow type colours (also used as SVG hex in JS _flowColors) ── */
+  --buy:     #06b6d4;   /* cyan-500  — purchase chain edges & accents */
   --buy-bg:  #ecfeff;
-  --mfg:     #8b5cf6;
+  --mfg:     #8b5cf6;   /* violet-500 — manufacturing chain edges & accents */
   --mfg-bg:  #f5f3ff;
-  --rm:      #3b82f6;
-  --pm:      #f59e0b;
-  --sfg:     #a855f7;
-  --fg:      #10b981;
+  --rm:      #3b82f6;   /* blue-500  — Raw Material left stripe */
+  --pm:      #f59e0b;   /* amber-500 — Packaging Material left stripe */
+  --sfg:     #a855f7;   /* purple-500 — Semi-FG left stripe */
+  --fg:      #10b981;   /* emerald-500 — Finished Good left stripe / output edges */
   --fg-bg:   #ecfdf5;
 }
 
@@ -418,7 +460,24 @@
   position: relative;
 }
 
-/* ── Pipeline View ─────────────────────────────────────────── */
+/* ── Pipeline View ─────────────────────────────────────────────────────────────
+   Layout hierarchy:
+     .sct-pipeline-wrap       flex column; full height of .sct-content
+       .sct-canvas-bar        thin top bar with hint text + clear button
+       .sct-pipeline-scroll   overflow-x:auto scroll container (NOT flex itself)
+         .pl-grid             min-width:max-content flex row — BOTH SVG and stages live here
+                              so the SVG scrolls with the cards (critical for edge coords)
+           #sct-svg-overlay   SVG overlay (position:absolute, full grid size)
+           .stage             one column per pipeline stage (7 total)
+             .st-head         column header (Oswald font, flow-type accent border)
+             .st-body         overflow-y:auto card body
+               .track-sep     section divider (buy/mfg split)
+               .sct-card-v2   individual node cards
+
+   The .sct-pipeline-scroll uses overflow-x:auto but NOT display:flex.
+   If it were flex, it would shrink .pl-grid to the viewport width, collapsing stages.
+   Instead, .pl-grid uses min-width:max-content to expand as stages are added.
+   ──────────────────────────────────────────────────────────────────────────── */
 .sct-pipeline-wrap { height: 100%; overflow: hidden; position: relative; display: none; flex-direction: column; }
 .sct-pipeline-wrap.active { display: flex; }
 
@@ -444,17 +503,25 @@
 
 .sct-pipeline-scroll {
   flex: 1;
-  display: flex;
   overflow-x: auto;
   overflow-y: hidden;
-  position: relative;
-  padding: 2px 4px 8px;
   background: var(--stone-100);
-  gap: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--stone-300) transparent;
 }
 .sct-pipeline-scroll::-webkit-scrollbar { height: 6px; }
 .sct-pipeline-scroll::-webkit-scrollbar-track { background: var(--stone-100); }
 .sct-pipeline-scroll::-webkit-scrollbar-thumb { background: var(--stone-300); border-radius: 3px; }
+
+/* Grid wrapper — stages + SVG live here; expands to full content width */
+.pl-grid {
+  display: flex;
+  gap: 12px;
+  height: 100%;
+  min-width: max-content;
+  position: relative;
+  padding: 6px 8px 10px;
+}
 
 #sct-svg-overlay {
   position: absolute;
@@ -754,31 +821,52 @@
 .sct-chip.warn { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
 .sct-auto-tag { font-size: 8.5px; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--brand-50); color: var(--brand-700); border: 1px solid var(--brand-200); }
 
-/* ── SVG Edges ─────────────────────────────────────────────── */
+/* ── SVG Edges ─────────────────────────────────────────────────────────────────
+   Three-state opacity system:
+
+   State 1 — Default (no card selected):
+     .sct-edge → opacity: 0.15   Edges are ambient / barely visible
+     Hover over a card:
+       .sct-edge.hl  → opacity: 0.9  (the directly connected edges)
+       .sct-edge.dim → opacity: 0.04 (all other edges fade further)
+
+   State 2 — Card selected (_applyLineageHighlight):
+     Non-lineage cards get .hide (display:none), layout reflows,
+     then _drawEdges(relevant, liveMode=true) redraws ONLY relevant edges.
+     .sct-edge.live → marching-ants animation at full opacity 1
+     No other .sct-edge classes are applied — every drawn edge is live.
+
+   State 3 — Clear selection:
+     All .hide removed, double-rAF, _drawEdges(all, liveMode=false).
+     Edges return to default opacity 0.15 via the base .sct-edge rule.
+
+   NOTE: stroke colour is set as an SVG attribute in JS (_getEdgeColor returns hex).
+   CSS classes here only control opacity and stroke-width, NOT colour.
+   This is because CSS custom properties cannot be resolved by SVG attributes.
+   ──────────────────────────────────────────────────────────────────────────── */
 .sct-edge {
   fill: none;
-  stroke: var(--stone-300);
   stroke-width: 1.5;
-  transition: stroke 0.15s, opacity 0.15s, stroke-width 0.15s;
+  opacity: 0.15;   /* Default: ambient faint wires (not set via SVG attribute to avoid specificity conflict) */
+  transition: opacity 0.18s, stroke-width 0.18s;
 }
-.sct-edge.active     { stroke: var(--brand-500); stroke-width: 2.5; }
-.sct-edge.ancestor   { stroke: #34d399; stroke-width: 2; }
-.sct-edge.descendant { stroke: #f59e0b; stroke-width: 2; }
-.sct-edge.dimmed     { opacity: 0.08; }
-.sct-edge.hl  { opacity: 1; stroke-width: 2; }
-.sct-edge.dim { opacity: 0.06; }
-/* Flow-type edge colours */
-.sct-edge.flow-buy  { stroke: var(--buy); }
-.sct-edge.flow-mfg  { stroke: var(--mfg); }
-.sct-edge.flow-out  { stroke: var(--fg); }
-/* Marching ants animation on selected edges */
+/* Live: selected lineage path — marching-ants stroke at full opacity */
 @keyframes sct-march { to { stroke-dashoffset: -28; } }
-.sct-edge.marching {
-  stroke-dasharray: 8 5;
-  animation: sct-march 0.7s linear infinite;
+.sct-edge.live {
+  opacity: 1 !important;
+  stroke-width: 2.5 !important;
+  stroke-dasharray: 8 6;   /* 8px dash, 6px gap — readable at most zoom levels */
+  animation: sct-march 0.6s linear infinite;
 }
+/* Hover-over-line highlight (active only when no card is selected) */
+.sct-edge.hl  { opacity: 0.9 !important; stroke-width: 2.5 !important; }
+.sct-edge.dim { opacity: 0.04 !important; }  /* All other edges during edge hover */
 
-/* ── Tracker View ──────────────────────────────────────────── */
+/* ── Tracker View ──────────────────────────────────────────────────────────────
+   One collapsible row (.sct-track) per TOC item.
+   Each row has a always-visible header + a lazy-rendered body (.sct-track-body).
+   Body is built by JS on first expand (data-built="0" → "1") to keep initial render fast.
+   ──────────────────────────────────────────────────────────────────────────── */
 .sct-tracker-wrap { height: 100%; overflow-y: auto; display: none; padding-right: 4px; }
 .sct-tracker-wrap.active { display: block; }
 .sct-tracker-wrap::-webkit-scrollbar { width: 5px; }
@@ -1027,9 +1115,35 @@
 .sct-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 200px; color: var(--stone-400); font-size: 13px; gap: 8px; }
 .sct-empty-icon { font-size: 30px; }
 
-/* ══════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════════════════════
    PIPELINE V2 — Reference UI (Chaizup Manufacturing Pipeline)
-   ══════════════════════════════════════════════════════════════ */
+   ════════════════════════════════════════════════════════════════════════════
+
+   Card anatomy (.sct-card-v2):
+     .v2-type-chip    — top-left tag (colour = buy/mfg/buffer-type)
+     .v2-top          — name line + VIEW button + status widget
+     .v2-body         — key-value rows (.v2-row: .v2-lbl + .v2-val)
+     .v2-ports        — in/out degree badges (added by JS _injectPorts)
+
+   Status widget:
+     Item/output nodes → .v2-dot (tiny circle; class reflects TOC zone)
+     Document nodes    → .v2-badge (text pill; class reflects ERPNext status)
+
+   Selection state classes (applied by JS _applyLineageHighlight):
+     .selected    — the clicked node (brand orange border)
+     .ancestor    — upstream lineage (emerald border)
+     .descendant  — downstream lineage (amber border)
+     .hide        — non-lineage nodes (display:none — collapses layout)
+     .dimmed      — legacy dim (opacity only, kept for fallback)
+
+   Left-stripe accent (::before pseudo-element) reads .bt-* class:
+     .bt-rm   → blue     (Raw Material)
+     .bt-pm   → amber    (Packaging Material)
+     .bt-sfg  → purple   (Semi-Finished Good)
+     .bt-fg   → emerald  (Finished Good)
+     .bt-buy  → cyan     (purchase-chain documents)
+     .bt-mfg  → violet   (manufacturing-chain documents)
+   ══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Stage (Column) ──────────────────────────────────────────── */
 .stage {
@@ -1089,24 +1203,35 @@
 
 /* ── Pipeline Card V2 ────────────────────────────────────────── */
 .sct-card-v2 {
-  background: #fff; border: 1px solid var(--stone-200);
-  border-radius: 10px; padding: 10px 11px 9px 15px;
-  cursor: pointer; box-shadow: 0 2px 4px rgba(43,29,24,.04);
-  flex-shrink: 0; position: relative; overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--stone-200);
+  border-radius: 10px;
+  padding: 12px 12px 10px 16px;   /* matches reference; left=16 for accent stripe */
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(43,29,24,.04);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
   transition: transform 0.2s cubic-bezier(0.16,1,0.3,1),
               box-shadow 0.2s, border-color 0.15s, opacity 0.2s;
 }
 .sct-card-v2:hover {
-  transform: translateY(-2px); box-shadow: 0 6px 14px rgba(43,29,24,.09); z-index: 10;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(43,29,24,.1);
+  border-color: var(--stone-300);
+  z-index: 10;
+  position: relative;  /* ensure z-index takes effect */
 }
 .sct-card-v2.selected {
   border-color: var(--brand-500) !important;
   box-shadow: 0 0 0 1px var(--brand-500), 0 8px 18px rgba(43,29,24,.12) !important;
-  z-index: 20; transform: translateY(-1px);
+  z-index: 20;
+  transform: translateY(-1px);
 }
-.sct-card-v2.ancestor   { border-color: #34d399; box-shadow: 0 0 0 1px rgba(52,211,153,.5); }
-.sct-card-v2.descendant { border-color: #f59e0b; box-shadow: 0 0 0 1px rgba(245,158,11,.5); }
-.sct-card-v2.dimmed     { opacity: 0.1; pointer-events: none; }
+.sct-card-v2.ancestor   { border-color: #34d399 !important; box-shadow: 0 0 0 1px rgba(52,211,153,.6) !important; }
+.sct-card-v2.descendant { border-color: #f59e0b !important; box-shadow: 0 0 0 1px rgba(245,158,11,.6) !important; }
+.sct-card-v2.dimmed     { opacity: 0.08; pointer-events: none; }
+.sct-card-v2.hide       { display: none !important; }
 
 /* Left accent stripe */
 .sct-card-v2::before {
@@ -1124,8 +1249,8 @@
 /* Type chip */
 .v2-type-chip {
   display: inline-flex; align-items: center; gap: 3px;
-  font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
-  letter-spacing: 0.4px; text-transform: uppercase; margin-bottom: 7px;
+  font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  letter-spacing: 0.4px; text-transform: uppercase; margin-bottom: 8px;
   font-family: 'DM Sans', sans-serif;
 }
 .v2tc-rm  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
@@ -1138,29 +1263,46 @@
 .v2tc-out { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
 
 /* Card header row */
-.v2-top    { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
-.v2-name   { font-size: 11.5px; font-weight: 700; line-height: 1.3; color: var(--stone-800); }
-.v2-ref    { font-family: 'Courier New', monospace; font-size: 9.5px; color: var(--stone-500); margin-top: 2px; }
-.v2-actions{ display: flex; align-items: center; gap: 5px; flex-shrink: 0; margin-top: 1px; }
+.v2-top    { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+.v2-name   { font-size: 12px; font-weight: 700; line-height: 1.25; color: var(--stone-800); word-break: break-word; }
+.v2-ref    { font-family: 'Courier New', monospace; font-size: 10px; color: var(--stone-500); margin-top: 3px; font-weight: 500; }
+.v2-actions{ display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .v2-view-btn {
-  opacity: 0; padding: 2px 7px; border-radius: 3px; font-size: 8.5px; font-weight: 700;
+  opacity: 0;
+  padding: 3px 8px; border-radius: 4px; font-size: 9px; font-weight: 700;
   background: var(--stone-50); border: 1px solid var(--stone-200); color: var(--stone-500);
   cursor: pointer; transition: all 0.12s; text-transform: uppercase; letter-spacing: 0.3px;
   font-family: 'DM Sans', sans-serif; white-space: nowrap;
 }
 .sct-card-v2:hover .v2-view-btn, .sct-card-v2.selected .v2-view-btn { opacity: 1; }
 .v2-view-btn:hover { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
-.v2-dot       { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.v2-dot.dok   { background: #10b981; box-shadow: 0 0 5px rgba(16,185,129,.4); }
-.v2-dot.dwarn { background: #f59e0b; box-shadow: 0 0 5px rgba(245,158,11,.4); }
-.v2-dot.derr  { background: #ef4444; box-shadow: 0 0 5px rgba(239,68,68,.4); }
+
+/* Status dot (used on item / output cards) */
+.v2-dot       { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.v2-dot.dok   { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,.45); }
+.v2-dot.dwarn { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,.45); }
+.v2-dot.derr  { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,.45); }
 .v2-dot.didle { background: var(--stone-300); }
 
+/* Status badge (used on document cards: MR, RFQ, PO, WO …) */
+.v2-badge {
+  font-family: 'Oswald', sans-serif;
+  font-size: 9.5px; font-weight: 600;
+  padding: 2px 6px; border-radius: 4px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  white-space: nowrap; flex-shrink: 0;
+}
+.v2b-ok    { background: #ecfdf5; color: #047857; }
+.v2b-run   { background: #eff6ff; color: #1d4ed8; }
+.v2b-draft { background: var(--stone-100); color: var(--stone-500); }
+.v2b-warn  { background: #fefce8; color: #ca8a04; }
+.v2b-err   { background: #fef2f2; color: #dc2626; }
+
 /* Card body rows */
-.v2-body { display: flex; flex-direction: column; gap: 2px; }
-.v2-row  { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; min-height: 16px; }
-.v2-lbl  { color: var(--stone-500); font-weight: 500; flex-shrink: 0; margin-right: 4px; }
-.v2-val  { font-weight: 700; color: var(--stone-800); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-body { display: flex; flex-direction: column; gap: 3px; }
+.v2-row  { display: flex; align-items: center; justify-content: space-between; font-size: 11px; min-height: 17px; }
+.v2-lbl  { color: var(--stone-500); font-weight: 500; flex-shrink: 0; margin-right: 6px; }
+.v2-val  { font-weight: 700; color: var(--stone-800); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
 .v2-val.ok   { color: #047857; }
 .v2-val.warn { color: #d97706; }
 .v2-val.err  { color: #dc2626; }
@@ -1168,8 +1310,8 @@
 .v2-val.buy  { color: #0e7490; }
 
 /* Port badges (in/out degree) */
-.v2-ports { display: flex; gap: 6px; margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--stone-200); }
-.v2-port  { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 4px; display: flex; align-items: center; gap: 3px; }
+.v2-ports { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--stone-200); }
+.v2-port  { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; display: flex; align-items: center; gap: 3px; letter-spacing: 0.3px; }
 .v2-port-in  { color: #0f766e; background: #ccfbf1; }
 .v2-port-out { color: #9f1239; background: #ffe4e6; }
 
