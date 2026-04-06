@@ -185,6 +185,15 @@
 
     <!-- Pipeline View -->
     <div class="sct-pipeline-wrap" id="sct-pipeline-wrap">
+      <div class="sct-canvas-bar">
+        <span class="sct-canvas-hint">Click a card to trace its lineage · Hover lines to highlight connections</span>
+        <button class="sct-clear-btn" id="sct-pl-clear-btn">
+          Clear Selection
+          <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" fill="none" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
       <div class="sct-pipeline-scroll" id="sct-pipeline-scroll">
         <svg id="sct-svg-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
       </div>

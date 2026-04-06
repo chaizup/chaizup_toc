@@ -419,16 +419,38 @@
 }
 
 /* ── Pipeline View ─────────────────────────────────────────── */
-.sct-pipeline-wrap { height: 100%; overflow: hidden; position: relative; display: none; }
-.sct-pipeline-wrap.active { display: block; }
+.sct-pipeline-wrap { height: 100%; overflow: hidden; position: relative; display: none; flex-direction: column; }
+.sct-pipeline-wrap.active { display: flex; }
+
+/* Canvas bar (hint + clear button above scroll) */
+.sct-canvas-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 2px 6px; flex-shrink: 0;
+}
+.sct-canvas-hint {
+  font-size: 10px; font-weight: 600; color: var(--stone-400);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.sct-clear-btn {
+  opacity: 0; pointer-events: none; transform: translateY(5px);
+  padding: 4px 11px; background: #fff; border: 1px solid var(--stone-200);
+  border-radius: 99px; font-size: 10px; font-weight: 700; color: var(--stone-500);
+  text-transform: uppercase; letter-spacing: 0.3px; cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.16,1,0.3,1);
+  display: flex; align-items: center; gap: 4px; font-family: 'DM Sans', sans-serif;
+}
+.sct-clear-btn.on { opacity: 1; pointer-events: auto; transform: none; }
+.sct-clear-btn:hover { background: #fef2f2; color: #dc2626; border-color: #fca5a5; }
+
 .sct-pipeline-scroll {
+  flex: 1;
   display: flex;
-  height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   position: relative;
-  padding-bottom: 6px;
+  padding: 2px 4px 8px;
   background: var(--stone-100);
+  gap: 0;
 }
 .sct-pipeline-scroll::-webkit-scrollbar { height: 6px; }
 .sct-pipeline-scroll::-webkit-scrollbar-track { background: var(--stone-100); }
@@ -1004,3 +1026,173 @@
 @keyframes sct-spin { 100% { transform: rotate(360deg); } }
 .sct-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 200px; color: var(--stone-400); font-size: 13px; gap: 8px; }
 .sct-empty-icon { font-size: 30px; }
+
+/* ══════════════════════════════════════════════════════════════
+   PIPELINE V2 — Reference UI (Chaizup Manufacturing Pipeline)
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Stage (Column) ──────────────────────────────────────────── */
+.stage {
+  width: 230px; min-width: 230px; display: flex; flex-direction: column;
+  height: 100%; flex-shrink: 0; position: relative;
+  border-right: 1px solid var(--stone-200);
+  background: var(--stone-50);
+  transition: opacity 0.2s ease;
+  padding: 10px 8px 0;
+}
+.stage:last-child { border-right: none; }
+.stage.hide-stage { display: none !important; }
+
+.st-head { margin-bottom: 10px; flex-shrink: 0; }
+.st-label {
+  font-family: 'Oswald', sans-serif; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  padding-bottom: 8px; border-bottom: 2px solid;
+  display: flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.st-n {
+  width: 18px; height: 18px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 800; color: #fff; flex-shrink: 0;
+  font-family: 'DM Sans', sans-serif;
+}
+/* Stage flow colour classes */
+.sl-item { color: var(--stone-600); border-color: var(--stone-400); }
+.sl-item .st-n { background: var(--stone-500); }
+.sl-buy  { color: #0e7490; border-color: var(--buy); }
+.sl-buy  .st-n { background: var(--buy); }
+.sl-mfg  { color: #5b21b6; border-color: var(--mfg); }
+.sl-mfg  .st-n { background: var(--mfg); }
+.sl-both { color: var(--stone-700); border-color: var(--brand-500); }
+.sl-both .st-n { background: var(--brand-500); }
+.sl-out  { color: #047857; border-color: var(--fg); }
+.sl-out  .st-n { background: var(--fg); }
+
+.st-body {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 7px;
+  padding: 0 0 14px; scrollbar-width: none;
+}
+.st-body::-webkit-scrollbar { display: none; }
+
+/* ── Track Separators ────────────────────────────────────────── */
+.track-sep {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 0 2px; flex-shrink: 0;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
+  font-family: 'Oswald', sans-serif;
+}
+.track-sep::after { content: ''; flex: 1; height: 1px; background: var(--stone-200); }
+.ts-buy  { color: var(--buy); }
+.ts-mfg  { color: var(--mfg); }
+.ts-item { color: var(--stone-500); }
+.ts-out  { color: var(--fg); }
+
+/* ── Pipeline Card V2 ────────────────────────────────────────── */
+.sct-card-v2 {
+  background: #fff; border: 1px solid var(--stone-200);
+  border-radius: 10px; padding: 10px 11px 9px 15px;
+  cursor: pointer; box-shadow: 0 2px 4px rgba(43,29,24,.04);
+  flex-shrink: 0; position: relative; overflow: hidden;
+  transition: transform 0.2s cubic-bezier(0.16,1,0.3,1),
+              box-shadow 0.2s, border-color 0.15s, opacity 0.2s;
+}
+.sct-card-v2:hover {
+  transform: translateY(-2px); box-shadow: 0 6px 14px rgba(43,29,24,.09); z-index: 10;
+}
+.sct-card-v2.selected {
+  border-color: var(--brand-500) !important;
+  box-shadow: 0 0 0 1px var(--brand-500), 0 8px 18px rgba(43,29,24,.12) !important;
+  z-index: 20; transform: translateY(-1px);
+}
+.sct-card-v2.ancestor   { border-color: #34d399; box-shadow: 0 0 0 1px rgba(52,211,153,.5); }
+.sct-card-v2.descendant { border-color: #f59e0b; box-shadow: 0 0 0 1px rgba(245,158,11,.5); }
+.sct-card-v2.dimmed     { opacity: 0.1; pointer-events: none; }
+
+/* Left accent stripe */
+.sct-card-v2::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 4px; border-radius: 10px 0 0 10px; background: var(--stone-200);
+}
+.sct-card-v2.bt-rm::before   { background: var(--rm); }
+.sct-card-v2.bt-pm::before   { background: var(--pm); }
+.sct-card-v2.bt-sfg::before  { background: var(--sfg); }
+.sct-card-v2.bt-fg::before   { background: var(--fg); }
+.sct-card-v2.bt-buy::before  { background: var(--buy); }
+.sct-card-v2.bt-mfg::before  { background: var(--mfg); }
+.sct-card-v2.bt-item::before { background: var(--brand-500); }
+
+/* Type chip */
+.v2-type-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 8.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  letter-spacing: 0.4px; text-transform: uppercase; margin-bottom: 7px;
+  font-family: 'DM Sans', sans-serif;
+}
+.v2tc-rm  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.v2tc-pm  { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+.v2tc-sfg { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
+.v2tc-fg  { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+.v2tc-buy { background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; }
+.v2tc-mfg { background: #f5f3ff; color: #5b21b6; border: 1px solid #ddd6fe; }
+.v2tc-item{ background: var(--brand-50); color: var(--brand-700); border: 1px solid var(--brand-200); }
+.v2tc-out { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+
+/* Card header row */
+.v2-top    { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
+.v2-name   { font-size: 11.5px; font-weight: 700; line-height: 1.3; color: var(--stone-800); }
+.v2-ref    { font-family: 'Courier New', monospace; font-size: 9.5px; color: var(--stone-500); margin-top: 2px; }
+.v2-actions{ display: flex; align-items: center; gap: 5px; flex-shrink: 0; margin-top: 1px; }
+.v2-view-btn {
+  opacity: 0; padding: 2px 7px; border-radius: 3px; font-size: 8.5px; font-weight: 700;
+  background: var(--stone-50); border: 1px solid var(--stone-200); color: var(--stone-500);
+  cursor: pointer; transition: all 0.12s; text-transform: uppercase; letter-spacing: 0.3px;
+  font-family: 'DM Sans', sans-serif; white-space: nowrap;
+}
+.sct-card-v2:hover .v2-view-btn, .sct-card-v2.selected .v2-view-btn { opacity: 1; }
+.v2-view-btn:hover { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
+.v2-dot       { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.v2-dot.dok   { background: #10b981; box-shadow: 0 0 5px rgba(16,185,129,.4); }
+.v2-dot.dwarn { background: #f59e0b; box-shadow: 0 0 5px rgba(245,158,11,.4); }
+.v2-dot.derr  { background: #ef4444; box-shadow: 0 0 5px rgba(239,68,68,.4); }
+.v2-dot.didle { background: var(--stone-300); }
+
+/* Card body rows */
+.v2-body { display: flex; flex-direction: column; gap: 2px; }
+.v2-row  { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; min-height: 16px; }
+.v2-lbl  { color: var(--stone-500); font-weight: 500; flex-shrink: 0; margin-right: 4px; }
+.v2-val  { font-weight: 700; color: var(--stone-800); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-val.ok   { color: #047857; }
+.v2-val.warn { color: #d97706; }
+.v2-val.err  { color: #dc2626; }
+.v2-val.mfg  { color: #6d28d9; }
+.v2-val.buy  { color: #0e7490; }
+
+/* Port badges (in/out degree) */
+.v2-ports { display: flex; gap: 6px; margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--stone-200); }
+.v2-port  { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 4px; display: flex; align-items: center; gap: 3px; }
+.v2-port-in  { color: #0f766e; background: #ccfbf1; }
+.v2-port-out { color: #9f1239; background: #ffe4e6; }
+
+/* ── Panel p-link connections ────────────────────────────────── */
+.sct-p-link {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 11px; background: var(--stone-50); border: 1px solid var(--stone-200);
+  border-radius: 7px; margin-bottom: 6px; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.sct-p-link:hover {
+  border-color: var(--brand-500); background: var(--brand-50);
+  transform: translateX(2px); box-shadow: 0 2px 6px rgba(249,115,22,.1);
+}
+.sct-p-link-name {
+  font-size: 11px; font-weight: 700; color: var(--stone-800);
+  display: flex; align-items: center; gap: 6px;
+}
+.sct-p-link-name::before {
+  content: ''; display: block; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--brand-500); flex-shrink: 0;
+}
+.sct-p-link-ref  { font-size: 10px; color: var(--stone-500); font-family: 'Courier New', monospace; text-align: right; }
+
+/* Chain stats section in panel */
+.sct-chain-stat { font-family: 'Courier New', monospace; color: var(--stone-700); }

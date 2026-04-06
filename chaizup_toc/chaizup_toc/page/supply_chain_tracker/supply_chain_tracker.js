@@ -382,9 +382,12 @@ class SupplyChainTracker {
   // ═══════════════════════════════════════════════════════════════════════════
   _renderPipeline(visibleNodes) {
     const scroll = document.getElementById("sct-pipeline-scroll");
-    [...scroll.querySelectorAll(".sct-col")].forEach(c => c.remove());
+    [...scroll.querySelectorAll(".stage")].forEach(c => c.remove());
     this.cardEls = {};
     this.selectedId = null;
+    document.getElementById("sct-pl-clear-btn")?.classList.remove("on");
+    // Reset separators
+    document.querySelectorAll(".track-sep").forEach(s => s.style.display = "");
 
     const visibleIds = new Set(visibleNodes.map(n => n.id));
 
@@ -400,196 +403,331 @@ class SupplyChainTracker {
   }
 
   _buildPipelineCol(stage, visibleIds, visibleNodes) {
-    const stageNodes   = visibleNodes.filter(n => n.stage === stage.id);
-    const overdueCount = stageNodes.filter(n => n.is_overdue).length;
+    const stageNodes = visibleNodes.filter(n => n.stage === stage.id);
 
     const col = document.createElement("div");
-    col.className  = `sct-col flow-${stage.flow}`;
+    col.className = "stage";
     col.dataset.stage = stage.id;
 
-    // Collapse if no visible cards
     if (!stageNodes.length && visibleNodes.length > 0) {
       col.classList.add("hide-stage");
     }
 
-    const hdr = document.createElement("div");
-    hdr.className = "sct-col-header";
-    hdr.innerHTML = `
-      <div class="sct-col-header-top">
-        <div class="sct-col-title-wrap">
-          <span class="sct-stage-num">${stage.num}</span>
-          <div class="sct-col-icon">${stage.icon}</div>
-          <span class="sct-col-title">${stage.label}</span>
-        </div>
-        <div class="sct-col-meta">
-          <span class="sct-col-count">${stageNodes.length}</span>
-          ${overdueCount > 0
-            ? `<span class="sct-col-overdue" style="display:inline">⚠ ${overdueCount}</span>`
-            : ""}
-        </div>
-      </div>
-      <div class="sct-col-sub">${stage.sub}</div>
-    `;
+    // Header — Oswald font, colored flow border
+    const flowCls = {
+      item: "sl-item", buy: "sl-buy", mfg: "sl-mfg", out: "sl-out", both: "sl-both"
+    }[stage.flow] || "sl-both";
 
-    // Click on collapsed header to expand
-    hdr.addEventListener("click", () => {
-      if (col.classList.contains("hide-stage")) {
-        col.classList.remove("hide-stage");
-      }
-    });
+    const hdr = document.createElement("div");
+    hdr.className = "st-head";
+    hdr.innerHTML = `
+      <div class="st-label ${flowCls}">
+        <div class="st-n">${parseInt(stage.num, 10)}</div>
+        ${stage.label}
+      </div>`;
     col.appendChild(hdr);
 
-    const cards = document.createElement("div");
-    cards.className = "sct-col-cards";
+    const body = document.createElement("div");
+    body.className = "st-body";
 
     if (!stageNodes.length) {
-      cards.innerHTML = `<div class="sct-col-empty">No documents</div>`;
+      const empty = document.createElement("div");
+      empty.style.cssText = "text-align:center;padding:18px 6px;color:var(--stone-400);font-size:10px;font-style:italic";
+      empty.textContent = "No documents";
+      body.appendChild(empty);
     } else {
-      stageNodes.forEach(node => {
-        const card = this._buildPipelineCard(node);
-        this.cardEls[node.id] = card;
-        cards.appendChild(card);
-      });
+      this._appendSeparatedCards(stage.id, stageNodes, body);
     }
-    col.appendChild(cards);
+
+    col.appendChild(body);
     return col;
+  }
+
+  // Split nodes into buy/mfg sections with track separators
+  _appendSeparatedCards(stageId, nodes, body) {
+    const add = (n) => { const c = this._buildPipelineCard(n); this.cardEls[n.id] = c; body.appendChild(c); };
+
+    if (stageId === "items") {
+      const buy = nodes.filter(n => ["rm","pm"].includes((n.buffer_type||"").toLowerCase()));
+      const mfg = nodes.filter(n => ["sfg","fg"].includes((n.buffer_type||"").toLowerCase()));
+      const other = nodes.filter(n => !["rm","pm","sfg","fg"].includes((n.buffer_type||"").toLowerCase()));
+      if (buy.length) { body.appendChild(this._makeSep("Raw Mat & Packaging", "ts-buy")); buy.forEach(add); }
+      if (mfg.length) { body.appendChild(this._makeSep("Semi-FG & Finished", "ts-mfg")); mfg.forEach(add); }
+      other.forEach(add);
+    } else if (stageId === "material_request") {
+      const buy = nodes.filter(n => (n.mr_type||"").toLowerCase().includes("purchase"));
+      const mfg = nodes.filter(n => !(n.mr_type||"").toLowerCase().includes("purchase"));
+      if (buy.length && mfg.length) {
+        body.appendChild(this._makeSep("Purchase", "ts-buy")); buy.forEach(add);
+        body.appendChild(this._makeSep("Manufacture", "ts-mfg")); mfg.forEach(add);
+      } else nodes.forEach(add);
+    } else if (stageId === "rfq_pp") {
+      const buy = nodes.filter(n => n.sub_type === "rfq");
+      const mfg = nodes.filter(n => n.sub_type === "pp");
+      const other = nodes.filter(n => n.sub_type !== "rfq" && n.sub_type !== "pp");
+      if (buy.length && mfg.length) {
+        body.appendChild(this._makeSep("RFQ", "ts-buy")); buy.forEach(add);
+        body.appendChild(this._makeSep("Prod. Plan", "ts-mfg")); mfg.forEach(add);
+      } else nodes.forEach(add);
+      other.forEach(add);
+    } else if (stageId === "sq_wo") {
+      const buy = nodes.filter(n => n.sub_type === "sq");
+      const mfg = nodes.filter(n => n.sub_type === "wo");
+      const other = nodes.filter(n => n.sub_type !== "sq" && n.sub_type !== "wo");
+      if (buy.length && mfg.length) {
+        body.appendChild(this._makeSep("Supplier Quotation", "ts-buy")); buy.forEach(add);
+        body.appendChild(this._makeSep("Work Order", "ts-mfg")); mfg.forEach(add);
+      } else nodes.forEach(add);
+      other.forEach(add);
+    } else if (stageId === "po_jc") {
+      const buy = nodes.filter(n => n.sub_type === "po");
+      const mfg = nodes.filter(n => n.sub_type === "jc");
+      const other = nodes.filter(n => n.sub_type !== "po" && n.sub_type !== "jc");
+      if (buy.length && mfg.length) {
+        body.appendChild(this._makeSep("Purchase Order", "ts-buy")); buy.forEach(add);
+        body.appendChild(this._makeSep("Job Card", "ts-mfg")); mfg.forEach(add);
+      } else nodes.forEach(add);
+      other.forEach(add);
+    } else if (stageId === "receipt_qc") {
+      const buy = nodes.filter(n => ["pr","qi"].includes(n.sub_type));
+      const mfg = nodes.filter(n => n.sub_type === "se");
+      const other = nodes.filter(n => !["pr","qi","se"].includes(n.sub_type));
+      if (buy.length && mfg.length) {
+        body.appendChild(this._makeSep("Receipt + QC", "ts-buy")); buy.forEach(add);
+        body.appendChild(this._makeSep("Stock Entry", "ts-mfg")); mfg.forEach(add);
+      } else nodes.forEach(add);
+      other.forEach(add);
+    } else if (stageId === "output") {
+      const sfg = nodes.filter(n => (n.buffer_type||"").toLowerCase() === "sfg");
+      const fg  = nodes.filter(n => (n.buffer_type||"").toLowerCase() === "fg");
+      const other = nodes.filter(n => !["sfg","fg"].includes((n.buffer_type||"").toLowerCase()));
+      if (sfg.length) { body.appendChild(this._makeSep("SFG Output", "ts-mfg")); sfg.forEach(add); }
+      if (fg.length)  { body.appendChild(this._makeSep("FG Output", "ts-out")); fg.forEach(add); }
+      other.forEach(add);
+    } else {
+      nodes.forEach(add);
+    }
+  }
+
+  _makeSep(label, cls) {
+    const sep = document.createElement("div");
+    sep.className = `track-sep ${cls}`;
+    sep.textContent = label;
+    return sep;
   }
 
   _buildPipelineCard(node) {
     const el = document.createElement("div");
-    // Buffer-type accent class
-    const btClass = this._btClass(node);
-    el.className = `sct-card ${btClass}` + (node.is_overdue ? " sct-card-overdue" : "");
+    el.className = `sct-card-v2 ${this._btClass(node)}`;
     el.dataset.id = node.id;
 
-    const docTag     = this._docTag(node);
-    const statusDot  = this._statusDot(node.status);
-    const statusBadge = this._statusBadge(node.status);
-    const zoneBadge  = node.zone ? this._zoneBadge(node.zone) : "";
-    const autoTag    = node.recorded_by === "By System"
-      ? `<span class="sct-auto-tag">TOC Auto</span>` : "";
-
-    let extras = "";
-
-    // Zone + BP% bar
-    if (node.zone && node.bp_pct !== undefined) {
-      const fill = Math.min(node.bp_pct, 100);
-      extras += `
-        <div class="sct-bp-row">
-          <span class="sct-bp-lbl">BP%</span>
-          <div class="sct-bp-track">
-            <div class="sct-bp-fill bp-${node.zone}" style="width:${fill}%"></div>
-          </div>
-          <span class="sct-bp-val" style="color:${this._zoneBarColor(node.zone)}">${node.bp_pct}%</span>
-        </div>`;
-    }
-
-    // WO/JC progress
-    if ((node.sub_type === "wo" || node.sub_type === "jc") && node.qty > 0) {
-      const pct  = node.progress_pct || 0;
-      const done = node.produced_qty ?? node.completed_qty ?? 0;
-      extras += `
-        <div class="sct-progress-row">
-          <div class="sct-progress-fill">
-            <div class="sct-progress-bar" style="width:${pct}%"></div>
-          </div>
-          <span>${pct}% (${done}/${node.qty})</span>
-        </div>`;
-    }
-
-    // Item / output chips (only for TOC-managed items — non-TOC have no buffer data)
-    if ((node.stage === "items" || node.sub_type === "output") && node.toc_enabled) {
-      extras += `
-        <div class="sct-chip-row">
-          <span class="sct-chip">OH: <b>${node.on_hand}</b></span>
-          <span class="sct-chip">Tgt: <b>${node.target_buffer}</b></span>
-          ${node.order_qty > 0
-            ? `<span class="sct-chip warn">Def: <b>${node.order_qty}</b></span>`
-            : ""}
-        </div>`;
-    }
-    // Non-TOC badge on item cards in pipeline view
-    if (node.stage === "items" && !node.toc_enabled) {
-      extras += `<div style="margin-top:4px"><span class="sct-tag-non-toc">Non-TOC</span></div>`;
-    }
-
-    // PO pending
-    if (node.sub_type === "po" && node.qty > 0) {
-      const pending = Math.max(0, node.qty - (node.received_qty || 0));
-      if (pending > 0) {
-        extras += `<div class="sct-chip-row">
-          <span class="sct-chip">Pending: <b>${pending}</b></span>
-          <span class="sct-chip">Rcvd: <b>${node.received_qty || 0}</b></span>
-        </div>`;
-      }
-    }
-
-    // Supplier
-    if (node.supplier) {
-      extras += `<div class="sct-chip-row"><span class="sct-chip" style="max-width:140px;overflow:hidden;text-overflow:ellipsis">🏢 ${node.supplier}</span></div>`;
-    }
-
-    // Age / overdue
-    if (node.days_open > 0 || node.is_overdue) {
-      extras += `<div class="sct-card-age">
-        ${node.days_open > 0  ? `<span class="sct-age-chip">${node.days_open}d old</span>` : ""}
-        ${node.is_overdue     ? `<span class="sct-age-chip overdue">⚠ ${node.days_overdue}d overdue</span>` : ""}
-      </div>`;
-    }
-
-    // Date
-    const dateVal = node.required_date || node.expected_delivery || node.planned_start_date
-      || node.transaction_date || node.posting_date || "";
-    if (dateVal) {
-      extras += `<div style="font-size:9.5px;color:var(--stone-400);margin-top:3px">📅 ${dateVal}</div>`;
-    }
+    const chip    = this._v2TypeChip(node);
+    const dotCls  = this._v2Dot(node);
+    const { name, ref } = this._v2NameRef(node);
+    const rows    = this._v2BodyRows(node);
+    const safeName = frappe.utils.escape_html(name || node.doc_name);
+    const safeRef  = frappe.utils.escape_html(ref || "");
 
     el.innerHTML = `
-      <div class="sct-card-top">
-        <span class="sct-card-name" title="${node.doc_name}">${statusDot}${node.label}</span>
-        <div class="sct-card-tags">${docTag}</div>
+      ${chip}
+      <div class="v2-top">
+        <div style="min-width:0;flex:1">
+          <div class="v2-name" title="${frappe.utils.escape_html(node.doc_name)}">${safeName}</div>
+          ${safeRef ? `<div class="v2-ref">${safeRef}</div>` : ""}
+        </div>
+        <div class="v2-actions">
+          <button class="v2-view-btn">VIEW</button>
+          <div class="v2-dot ${dotCls}"></div>
+        </div>
       </div>
-      <div class="sct-card-desc" title="${node.description}">${node.description || "&nbsp;"}</div>
-      <div class="sct-card-badges">${statusBadge}${zoneBadge}${autoTag}</div>
-      ${extras}
-      <button class="sct-card-view-btn">View →</button>
+      <div class="v2-body">${rows}</div>
     `;
 
-    el.addEventListener("click", e => {
-      if (e.target.closest(".sct-card-view-btn")) {
-        e.stopPropagation();
-        if (node.doctype && node.doc_name && node.stage !== "output") {
-          const url = `/app/${frappe.router.slug(node.doctype)}/${encodeURIComponent(node.doc_name)}`;
-          window.open(url, "_blank");
-        }
-        return;
+    // View button → open panel + select lineage
+    el.querySelector(".v2-view-btn").addEventListener("click", e => {
+      e.stopPropagation();
+      if (this.selectedId !== node.id) {
+        this.selectedId = null;
+        this._pipelineSelect(node.id);
       }
+      this.showPanel(this.nodeMap[node.id]);
+    });
+
+    // Card click → toggle lineage selection
+    el.addEventListener("click", e => {
+      if (e.target.closest(".v2-view-btn")) return;
       e.stopPropagation();
       this._pipelineSelect(node.id);
+    });
+
+    // Hover → highlight connected edges
+    el.addEventListener("mouseenter", () => {
+      if (this.selectedId) return;
+      document.querySelectorAll(".sct-edge").forEach(p => {
+        const hit = p.dataset.source === node.id || p.dataset.target === node.id;
+        p.classList.toggle("hl", hit);
+        p.classList.toggle("dim", !hit);
+      });
+    });
+    el.addEventListener("mouseleave", () => {
+      if (this.selectedId) return;
+      document.querySelectorAll(".sct-edge").forEach(p => p.classList.remove("hl", "dim"));
     });
 
     return el;
   }
 
-  // Buffer-type CSS class for accent stripe
-  _btClass(node) {
-    const bt = (node.buffer_type || "").toLowerCase();
+  // ── V2 card helpers ────────────────────────────────────────────────────────
+
+  _v2TypeChip(node) {
+    const bt  = (node.buffer_type || "").toLowerCase();
     const sub = node.sub_type || "";
-    if (bt === "rm") return "bt-rm";
-    if (bt === "pm") return "bt-pm";
+    let cls = "v2tc-item", label = "ITEM";
+
+    if (sub === "output") {
+      cls   = bt === "sfg" ? "v2tc-sfg" : "v2tc-out";
+      label = bt === "sfg" ? "SFG Output" : "FG Output";
+    } else if (bt === "rm")  { cls = "v2tc-rm";  label = "Raw Mat"; }
+    else if (bt === "pm")  { cls = "v2tc-pm";  label = "Packaging"; }
+    else if (bt === "sfg") { cls = "v2tc-sfg"; label = "Semi-FG"; }
+    else if (bt === "fg")  { cls = "v2tc-fg";  label = "Fin. Good"; }
+    else if (sub === "mr") {
+      const isBuy = (node.mr_type || "").toLowerCase().includes("purchase");
+      cls = isBuy ? "v2tc-buy" : "v2tc-mfg"; label = isBuy ? "Purchase MR" : "Mfg. MR";
+    }
+    else if (sub === "rfq") { cls = "v2tc-buy"; label = "RFQ"; }
+    else if (sub === "sq")  { cls = "v2tc-buy"; label = "Quotation"; }
+    else if (sub === "po")  { cls = "v2tc-buy"; label = "Purch. Order"; }
+    else if (sub === "pr")  { cls = "v2tc-buy"; label = "Receipt"; }
+    else if (sub === "qi")  { cls = "v2tc-buy"; label = "Quality Insp."; }
+    else if (sub === "pp")  { cls = "v2tc-mfg"; label = "Prod. Plan"; }
+    else if (sub === "wo")  { cls = "v2tc-mfg"; label = "Work Order"; }
+    else if (sub === "jc")  { cls = "v2tc-mfg"; label = "Job Card"; }
+    else if (sub === "se")  { cls = "v2tc-mfg"; label = "Stock Entry"; }
+    return `<div class="v2-type-chip ${cls}">${label}</div>`;
+  }
+
+  _v2Dot(node) {
+    if (node.is_overdue) return "derr";
+    if (node.zone === "Red" || node.zone === "Black") return "derr";
+    if (node.zone === "Yellow") return "dwarn";
+    if (node.zone === "Green")  return "dok";
+    const s = String(node.status || "").toLowerCase();
+    if (["completed","to-bill","submitted","closed","received"].some(x => s.includes(x))) return "dok";
+    if (["open","ordered","in process","in-process","not started","not-started","material transferred","pending"].some(x => s.includes(x))) return "dwarn";
+    if (["overdue","stopped","cancelled","blocked"].some(x => s.includes(x))) return "derr";
+    return "didle";
+  }
+
+  _v2NameRef(node) {
+    const sub   = node.sub_type || "";
+    const stage = node.stage || "";
+    let name = node.label || node.doc_name;
+    let ref  = "";
+    if (stage === "items" || sub === "output") {
+      name = node.item_code || node.doc_name;
+      ref  = node.item_name || node.item_group || "";
+    } else if (["rfq","sq","po","pr"].includes(sub)) {
+      ref = node.supplier || node.description || "";
+    } else if (sub === "jc") {
+      ref = node.operation || node.description || "";
+    } else if (sub === "wo" || sub === "pp") {
+      ref = node.item_code || node.description || "";
+    } else {
+      ref = node.description || "";
+    }
+    return { name: name || node.doc_name, ref };
+  }
+
+  _v2BodyRows(node) {
+    const r = (lbl, val, cls = "") =>
+      val !== null && val !== undefined && val !== "" && val !== 0
+        ? `<div class="v2-row"><span class="v2-lbl">${lbl}</span><span class="v2-val${cls ? " " + cls : ""}">${val}</span></div>`
+        : "";
+    const fmtMoney = v => v > 0 ? `₹ ${Number(v).toLocaleString("en-IN")}` : "";
+    const sub   = node.sub_type || "";
+    const stage = node.stage   || "";
+    const bt    = (node.buffer_type || "").toLowerCase();
+    let rows = "";
+
+    if (stage === "items" || sub === "output") {
+      if (node.toc_enabled) {
+        const zCls = node.zone === "Red" || node.zone === "Black" ? "err" : node.zone === "Yellow" ? "warn" : node.zone === "Green" ? "ok" : "";
+        rows += r("Stock",   node.on_hand,       zCls);
+        rows += r("Reorder", node.target_buffer);
+        if (node.zone)   rows += r("Zone",   node.zone, zCls);
+        if (node.bp_pct) rows += r("BP%",    `${node.bp_pct}%`, zCls);
+      } else {
+        rows += r("Item Group", node.item_group || "");
+        rows += `<div class="v2-row"><span class="v2-lbl">TOC</span><span class="sct-tag-non-toc">Non-TOC</span></div>`;
+      }
+    } else if (sub === "mr") {
+      rows += r("Type",   node.mr_type || "");
+      rows += r("Item",   node.item_code || "");
+      rows += r("Qty",    node.required_qty || node.qty || "");
+      if (node.recorded_by === "By System")
+        rows += `<div class="v2-row"><span class="v2-lbl">Source</span><span class="sct-auto-tag">TOC Auto</span></div>`;
+    } else if (sub === "rfq") {
+      rows += r("Item",  node.item_code || node.description || "");
+      rows += r("Qty",   node.qty || "");
+    } else if (sub === "sq") {
+      rows += r("Rate",  node.rate   ? `₹${node.rate}` : "");
+      rows += r("Total", fmtMoney(node.grand_total));
+    } else if (sub === "pp") {
+      rows += r("Target", node.planned_qty ? `${node.planned_qty} ${node.item_code||""}` : "");
+      rows += r("Status", node.status || "");
+    } else if (sub === "wo") {
+      const pct = node.progress_pct || 0;
+      rows += r("FG",      node.item_code || "", "mfg");
+      rows += r("Progress",pct ? `${pct}%` : "", pct >= 100 ? "ok" : pct > 0 ? "warn" : "");
+      const done = node.produced_qty || 0;
+      if (node.qty > 0) rows += r("Qty", `${done} / ${node.qty}`);
+    } else if (sub === "po") {
+      rows += r("Total",   fmtMoney(node.grand_total));
+      rows += r("ETA",     node.expected_delivery || "", node.is_overdue ? "err" : "");
+    } else if (sub === "jc") {
+      const pct = node.progress_pct || 0;
+      rows += r("Operation", node.operation || "");
+      rows += r("Progress",  pct ? `${pct}%` : "", pct >= 100 ? "ok" : pct > 0 ? "warn" : "");
+    } else if (sub === "pr") {
+      rows += r("Received", node.qty ? `${node.qty} received` : "", "ok");
+      if (node.rejected_qty > 0) rows += r("Rejected", node.rejected_qty, "err");
+    } else if (sub === "qi") {
+      rows += r("Status", node.status || "", node.status === "Accepted" ? "ok" : node.status === "Rejected" ? "err" : "warn");
+    } else if (sub === "se") {
+      rows += r("Type", node.description || "");
+      if (node.produced_qty > 0) rows += r("Produced", `${node.produced_qty}`, "mfg");
+    }
+
+    // Always show age/overdue if relevant
+    if (node.is_overdue) {
+      rows += r("Overdue", `⚠ ${node.days_overdue}d`, "err");
+    } else if (node.days_open > 14) {
+      rows += r("Age", `${node.days_open}d`, "warn");
+    }
+
+    return rows;
+  }
+
+  // Buffer-type CSS accent class (works for both v1 sct-card and v2 sct-card-v2)
+  _btClass(node) {
+    const bt  = (node.buffer_type || "").toLowerCase();
+    const sub = node.sub_type || "";
+    if (bt === "rm")  return "bt-rm";
+    if (bt === "pm")  return "bt-pm";
     if (bt === "sfg") return "bt-sfg";
-    if (bt === "fg") return "bt-fg";
+    if (bt === "fg")  return "bt-fg";
     if (["rfq","sq","po","pr","qi"].includes(sub)) return "bt-buy";
     if (["pp","wo","jc","se"].includes(sub))       return "bt-mfg";
     if (node.stage === "items" || node.stage === "output") return "bt-item";
     return "";
   }
 
-  // Status dot (tiny coloured circle based on status)
+  // Status dot (tiny coloured circle based on status) — used by tracker view
   _statusDot(status) {
     const s = String(status || "").toLowerCase();
     let cls = "didle";
-    if (["completed", "to-bill", "submitted", "closed"].some(x => s.includes(x))) cls = "dok";
+    if (["completed","to-bill","submitted","closed"].some(x => s.includes(x))) cls = "dok";
     else if (["open","ordered","in-process","not-started","material-transferred","pending"].some(x => s.includes(x))) cls = "dwarn";
     else if (["overdue","stopped","cancelled"].some(x => s.includes(x))) cls = "derr";
     return `<span class="sdot ${cls}"></span>`;
@@ -603,6 +741,7 @@ class SupplyChainTracker {
     } else {
       this.selectedId = id;
       this._applyLineageHighlight(id);
+      document.getElementById("sct-pl-clear-btn")?.classList.add("on");
       this.showPanel(this.nodeMap[id]);
     }
   }
@@ -612,9 +751,13 @@ class SupplyChainTracker {
     Object.values(this.cardEls).forEach(el => {
       el.classList.remove("selected", "ancestor", "descendant", "dimmed");
     });
+    // Restore all stages + separators
+    document.querySelectorAll(".stage").forEach(s => s.classList.remove("hide-stage"));
+    document.querySelectorAll(".track-sep").forEach(s => s.style.display = "");
     document.querySelectorAll(".sct-edge").forEach(p => {
       p.classList.remove("active", "ancestor", "descendant", "dimmed", "marching", "hl", "dim");
     });
+    document.getElementById("sct-pl-clear-btn")?.classList.remove("on");
   }
 
   _applyLineageHighlight(id) {
@@ -644,16 +787,40 @@ class SupplyChainTracker {
       else                           el.classList.add("dimmed");
     });
 
+    // Collapse stages where ALL cards are dimmed
+    document.querySelectorAll(".stage").forEach(stage => {
+      const hasRelevant = Array.from(stage.querySelectorAll(".sct-card-v2"))
+        .some(c => !c.classList.contains("dimmed"));
+      stage.classList.toggle("hide-stage", !hasRelevant);
+    });
+
+    // Update track separators: hide sep if all cards below it are dimmed
+    this._updateSeparatorVisibility();
+
+    // ALL relevant edges get marching ants (like reference)
     document.querySelectorAll(".sct-edge").forEach(path => {
       path.classList.remove("active", "ancestor", "descendant", "dimmed", "marching");
       const s = path.dataset.source, t = path.dataset.target;
-      if (s === id || t === id) {
-        path.classList.add("active", "marching");  // marching ants on direct connections
-      } else if (relevant.has(s) && relevant.has(t)) {
-        path.classList.add(ancestors.has(s) ? "ancestor" : "descendant");
+      if (relevant.has(s) && relevant.has(t)) {
+        path.classList.add("active", "marching");
       } else {
         path.classList.add("dimmed");
       }
+    });
+  }
+
+  _updateSeparatorVisibility() {
+    document.querySelectorAll(".st-body").forEach(body => {
+      let curSep = null, hasVisible = false;
+      Array.from(body.children).forEach(child => {
+        if (child.classList.contains("track-sep")) {
+          if (curSep) curSep.style.display = hasVisible ? "" : "none";
+          curSep = child; hasVisible = false;
+        } else if (child.classList.contains("sct-card-v2")) {
+          if (!child.classList.contains("dimmed")) hasVisible = true;
+        }
+      });
+      if (curSep) curSep.style.display = hasVisible ? "" : "none";
     });
   }
 
@@ -745,16 +912,18 @@ class SupplyChainTracker {
       }
     });
     Object.entries(this.cardEls).forEach(([id, el]) => {
-      let portDiv = el.querySelector(".sct-ports");
-      if (!portDiv) {
-        portDiv = document.createElement("div");
-        portDiv.className = "sct-ports";
-        el.appendChild(portDiv);
-      }
+      const iIn  = inDeg[id]  || 0;
+      const iOut = outDeg[id] || 0;
+      if (!iIn && !iOut) return;
+      // Remove old port div if present
+      el.querySelector(".v2-ports,.sct-ports")?.remove();
+      const portDiv = document.createElement("div");
+      portDiv.className = "v2-ports";
       portDiv.innerHTML = [
-        inDeg[id]  > 0 ? `<span class="sct-port sct-port-in">↑ ${inDeg[id]} in</span>`  : "",
-        outDeg[id] > 0 ? `<span class="sct-port sct-port-out">↓ ${outDeg[id]} out</span>` : "",
+        iIn  > 0 ? `<span class="v2-port v2-port-in">← ${iIn} in</span>`    : "",
+        iOut > 0 ? `<span class="v2-port v2-port-out">${iOut} out →</span>` : "",
       ].join("");
+      el.appendChild(portDiv);
     });
   }
 
@@ -946,23 +1115,64 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // Connected documents
+    // Connected documents (p-link style for pipeline, rows for tracker)
     const connected = this._connected(node.id);
     if (connected.upstream.length || connected.downstream.length) {
-      parts.push(`
-        <div class="sct-panel-section">
-          <div class="sct-panel-section-title">Connected Documents</div>
-          ${connected.upstream.map(n => `
-            <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
-              <span class="sct-panel-row-key" style="color:#34d399">← From</span>
-              <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
-            </div>`).join("")}
-          ${connected.downstream.map(n => `
-            <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
-              <span class="sct-panel-row-key" style="color:#f59e0b">→ To</span>
-              <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
-            </div>`).join("")}
-        </div>`);
+      if (this.viewMode === "pipeline") {
+        parts.push(`
+          <div class="sct-panel-section">
+            <div class="sct-panel-section-title">↑ Previous Steps (Inputs)</div>
+            ${connected.upstream.length ? connected.upstream.map(n => `
+              <div class="sct-p-link" data-nav-id="${frappe.utils.escape_html(n.id)}">
+                <span class="sct-p-link-name">${frappe.utils.escape_html(n.label || n.doc_name)}</span>
+                <span class="sct-p-link-ref">${frappe.utils.escape_html(n.doctype || "")}</span>
+              </div>`).join("") :
+              `<div style="font-size:11px;color:var(--stone-400);font-style:italic;padding:2px 0">Origin — no prior steps</div>`}
+          </div>
+          <div class="sct-panel-section">
+            <div class="sct-panel-section-title">↓ Next Steps (Outputs)</div>
+            ${connected.downstream.length ? connected.downstream.map(n => `
+              <div class="sct-p-link" data-nav-id="${frappe.utils.escape_html(n.id)}">
+                <span class="sct-p-link-name">${frappe.utils.escape_html(n.label || n.doc_name)}</span>
+                <span class="sct-p-link-ref">${frappe.utils.escape_html(n.doctype || "")}</span>
+              </div>`).join("") :
+              `<div style="font-size:11px;color:var(--stone-400);font-style:italic;padding:2px 0">Terminal — pipeline end</div>`}
+          </div>`);
+        // Chain stats
+        const counts = this._chainCounts(node.id);
+        const total  = counts.upstream + counts.downstream + 1;
+        parts.push(`
+          <div class="sct-panel-section">
+            <div class="sct-panel-section-title">Multi-Node Path Summary</div>
+            <div class="sct-panel-row">
+              <span class="sct-panel-row-key">Total Chain Size</span>
+              <span class="sct-panel-row-val sct-chain-stat">${total} nodes</span>
+            </div>
+            <div class="sct-panel-row">
+              <span class="sct-panel-row-key">Ancestors</span>
+              <span class="sct-panel-row-val sct-chain-stat">${counts.upstream} upstream</span>
+            </div>
+            <div class="sct-panel-row">
+              <span class="sct-panel-row-key">Descendants</span>
+              <span class="sct-panel-row-val sct-chain-stat">${counts.downstream} downstream</span>
+            </div>
+          </div>`);
+      } else {
+        parts.push(`
+          <div class="sct-panel-section">
+            <div class="sct-panel-section-title">Connected Documents</div>
+            ${connected.upstream.map(n => `
+              <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
+                <span class="sct-panel-row-key" style="color:#34d399">← From</span>
+                <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
+              </div>`).join("")}
+            ${connected.downstream.map(n => `
+              <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
+                <span class="sct-panel-row-key" style="color:#f59e0b">→ To</span>
+                <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
+              </div>`).join("")}
+          </div>`);
+      }
     }
 
     return parts.join("") || `<p style="color:var(--stone-400);font-size:12px">No details available.</p>`;
@@ -1192,6 +1402,23 @@ class SupplyChainTracker {
     return visited;
   }
 
+  _chainCounts(id) {
+    const fwd = {}, bwd = {};
+    this.edges.forEach(e => {
+      (fwd[e.source] = fwd[e.source] || []).push(e.target);
+      (bwd[e.target] = bwd[e.target] || []).push(e.source);
+    });
+    const bfs = (start, adj) => {
+      const v = new Set(), q = [start];
+      while (q.length) {
+        const cur = q.shift();
+        (adj[cur] || []).forEach(nb => { if (!v.has(nb)) { v.add(nb); q.push(nb); } });
+      }
+      return v.size;
+    };
+    return { upstream: bfs(id, bwd), downstream: bfs(id, fwd) };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   //  EVENT BINDINGS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1260,7 +1487,7 @@ class SupplyChainTracker {
 
     // Click pipeline background to deselect
     document.getElementById("sct-pipeline-scroll")?.addEventListener("click", e => {
-      if (!e.target.closest(".sct-card")) { this._clearSelection(); this._closePanel(); }
+      if (!e.target.closest(".sct-card") && !e.target.closest(".sct-card-v2")) { this._clearSelection(); this._closePanel(); }
     });
   }
 
