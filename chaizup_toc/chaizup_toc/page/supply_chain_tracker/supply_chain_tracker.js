@@ -1,127 +1,111 @@
-/**
- * supply_chain_tracker.js — Supply Chain Tracker Controller
- * ══════════════════════════════════════════════════════════
+/*
+ * supply_chain_tracker.js -- Supply Chain Tracker Controller
+ * ===========================================================
  *
- * ┌─ ARCHITECTURE OVERVIEW ───────────────────────────────────────────────────┐
- * │                                                                           │
- * │  The page operates in two mutually-exclusive view modes that share the    │
- * │  same server data pipeline:                                               │
- * │                                                                           │
- * │  • Tracker View (default)                                                 │
- * │    One collapsible row per TOC-managed item. Each row shows a buffer      │
- * │    zone bar (BP%), next-action hint, and an expandable document chain     │
- * │    (MR → RFQ/PP → SQ/WO → PO/JC → PR/SE/QI). Bodies are lazy-built on   │
- * │    first expand to keep the initial render fast.                          │
- * │                                                                           │
- * │  • Pipeline View                                                          │
- * │    A horizontal 7-stage Kanban. Cards sit in stage columns; directed SVG  │
- * │    Bezier edges connect source → target. Clicking a card:                 │
- * │      1. Runs BFS forward (descendants) + BFS backward (ancestors)         │
- * │      2. Hides (display:none) all non-lineage cards so the layout          │
- * │         collapses around the relevant chain                               │
- * │      3. After a double-rAF browser reflow, redraws only relevant edges    │
- * │         with marching-ants animation (.live class)                        │
- * │                                                                           │
- * └───────────────────────────────────────────────────────────────────────────┘
+ * ARCHITECTURE OVERVIEW
+ * ---------------------
+ * The page operates in two mutually-exclusive view modes that share the
+ * same server data pipeline:
  *
- * ┌─ DATA MODEL (from server: pipeline_api.get_pipeline_data) ────────────────┐
- * │                                                                           │
- * │  nodes[]  — Every pipeline entity: item buffers, MRs, RFQs, POs, WOs,   │
- * │             JCs, PRs, SEs, QIs. Key fields per node:                     │
- * │               id, stage, sub_type, doctype, doc_name, status, zone,      │
- * │               bp_pct, is_overdue, days_open, days_overdue, supplier, …   │
- * │             Node IDs are stable composite keys (e.g., "MR::MR-0001").    │
- * │                                                                           │
- * │  edges[]  — Directed pairs { source, target } encoding document lineage. │
- * │             e.g. { source:"MR::MR-0001", target:"PO::PO-0001" }          │
- * │                                                                           │
- * │  tracks[] — Item-centric aggregations for the Tracker view. Each track   │
- * │             bundles its documents with pending/overdue counts and a       │
- * │             pre-computed next_action recommendation string.               │
- * │                                                                           │
- * │  summary  — Server-side aggregate counts (red/yellow/green items, open   │
- * │             MRs, WOs, POs) for the summary strip.                        │
- * │                                                                           │
- * └───────────────────────────────────────────────────────────────────────────┘
+ *   Tracker View (default)
+ *     One collapsible row per TOC-managed item. Each row shows a buffer
+ *     zone bar (BP%), next-action hint, and an expandable document chain
+ *     (MR -> RFQ/PP -> SQ/WO -> PO/JC -> PR/SE/QI). Bodies are lazy-built
+ *     on first expand to keep the initial render fast.
  *
- * ┌─ FILTER TIERS ────────────────────────────────────────────────────────────┐
- * │                                                                           │
- * │  Server-side (trigger load()):                                            │
- * │    days_back, supplier, warehouse — change the underlying dataset.        │
- * │                                                                           │
- * │  Client-side (trigger render() only):                                    │
- * │    search, zone, buffer_type, doctype, overdue, auto, noaction           │
- * │    Applied in _applyClientFilters() against the already-loaded arrays.   │
- * │    Zone filter uses BFS propagation: seed items matching the zone, then   │
- * │    expand to all reachable nodes via the edge graph.                      │
- * │                                                                           │
- * └───────────────────────────────────────────────────────────────────────────┘
+ *   Pipeline View
+ *     A horizontal 7-stage Kanban. Cards sit in stage columns; directed SVG
+ *     Bezier edges connect source -> target. Clicking a card:
+ *       1. Runs BFS forward (descendants) + BFS backward (ancestors)
+ *       2. Hides (display:none) all non-lineage cards so the layout
+ *          collapses around the relevant chain
+ *       3. After a double-rAF browser reflow, redraws only relevant edges
+ *          with marching-ants animation (.live class)
  *
- * ┌─ SVG EDGE COORDINATE SYSTEM ──────────────────────────────────────────────┐
- * │                                                                           │
- * │  The SVG overlay lives INSIDE .sct-pl-grid (the expanding flex container     │
- * │  that also holds stage columns). This is critical: SVG must scroll with  │
- * │  the cards. If SVG were a direct child of .sct-pl-scroll instead,  │
- * │  it would stay fixed while cards scroll, breaking all coordinates.       │
- * │                                                                           │
- * │  Coordinate anchor: (card.getBoundingClientRect().right − grid.getBCR().left)  │
- * │  Both rects are in viewport space. When the user scrolls the scroll       │
- * │  container, BOTH shift by the same delta, so the subtraction stays       │
- * │  constant — a stable grid-space coordinate.                              │
- * │                                                                           │
- * │  Bezier curve formula: M x1,y1 C x1+dx,y1 x2-dx,y2 x2,y2               │
- * │  where dx = |x2−x1| × 0.42 (tension factor).                            │
- * │  • 0.42 produces smooth S-curves that elongate proportionally when       │
- * │    nodes span multiple skipped stages.                                   │
- * │  • Lower values make straighter lines; higher values tighten bends.      │
- * │                                                                           │
- * └───────────────────────────────────────────────────────────────────────────┘
+ * DATA MODEL (from server: pipeline_api.get_pipeline_data)
+ * ---------------------------------------------------------
+ *   nodes[]  -- Every pipeline entity: item buffers, MRs, RFQs, POs, WOs,
+ *               JCs, PRs, SEs, QIs. Key fields per node:
+ *                 id, stage, sub_type, doctype, doc_name, status, zone,
+ *                 bp_pct, is_overdue, days_open, days_overdue, supplier...
+ *               Node IDs are stable composite keys (e.g. "MR::MR-0001").
  *
- * ┌─ ANIMATION SYSTEM (edge wire behaviour) ──────────────────────────────────┐
- * │                                                                           │
- * │  State 1 — Default (no selection):                                       │
- * │    All edges drawn at opacity 0.15 via CSS .sct-edge rule.               │
- * │    Hover over a card → direct edges get .hl (opacity 0.9), others .dim.  │
- * │                                                                           │
- * │  State 2 — Card selected:                                                │
- * │    _applyLineageHighlight(id):                                            │
- * │      a. BFS ancestors (bwd graph) + BFS descendants (fwd graph)          │
- * │      b. Non-lineage cards: .hide → display:none → layout collapses       │
- * │      c. double-rAF: waits for browser reflow after layout change          │
- * │      d. _drawEdges(relevant, liveMode=true):                             │
- * │           - Skips cards with .hide (getBCR would return zeros)           │
- * │           - All drawn paths get .live → marching-ants CSS animation      │
- * │                                                                           │
- * │  State 3 — Clear selection:                                              │
- * │    _clearSelection(): removes .hide from all cards, double-rAF redraws   │
- * │    all edges at default opacity 0.15 (liveMode=false).                   │
- * │                                                                           │
- * │  WHY hide instead of dim: display:none removes the card from layout,     │
- * │  so the remaining cards repack into the column. After reflow, the bezier  │
- * │  coordinates are computed only from visible cards, giving clean paths.   │
- * │  Opacity-based dimming leaves cards in layout, causing wires to route    │
- * │  around invisible obstacles.                                             │
- * │                                                                           │
- * └───────────────────────────────────────────────────────────────────────────┘
+ *   edges[]  -- Directed pairs { source, target } encoding document lineage.
+ *               e.g. { source:"MR::MR-0001", target:"PO::PO-0001" }
  *
- * ┌─ TOC FORMULA REFERENCE ───────────────────────────────────────────────────┐
- * │  F1: Target = ADU × RLT × VF                                             │
- * │  F2a (FG):  IP = On-Hand + WIP − Backorders                              │
- * │  F2b (RM):  IP = On-Hand + On-Order − Committed                          │
- * │  F3: BP% = (Target − IP) / Target × 100                                  │
- * │  F4: Order Qty = Target − IP   (replenishment deficit)                   │
- * └───────────────────────────────────────────────────────────────────────────┘
+ *   tracks[] -- Item-centric aggregations for the Tracker view. Each track
+ *               bundles its documents with pending/overdue counts and a
+ *               pre-computed next_action recommendation string.
+ *
+ *   summary  -- Server-side aggregate counts (red/yellow/green items, open
+ *               MRs, WOs, POs) for the summary strip.
+ *
+ * FILTER TIERS
+ * ------------
+ *   Server-side (trigger load()):
+ *     days_back, supplier -- change the underlying dataset.
+ *
+ *   Client-side (trigger render() only):
+ *     search, zone, item_group, doctype, overdue, auto, noaction
+ *     Applied in _applyClientFilters() against already-loaded arrays.
+ *     Zone filter uses BFS propagation: seed items matching the zone, then
+ *     expand to all reachable nodes via the edge graph.
+ *
+ * SVG EDGE COORDINATE SYSTEM
+ * --------------------------
+ *   The SVG overlay lives INSIDE .sct-pl-grid (the expanding flex container
+ *   that also holds stage columns). This is critical: SVG must scroll with
+ *   the cards. If SVG were a direct child of .sct-pl-scroll instead,
+ *   it would stay fixed while cards scroll, breaking all coordinates.
+ *
+ *   Coordinate anchor: (card.getBoundingClientRect().right - grid.getBCR().left)
+ *   Both rects are in viewport space. When the user scrolls the scroll
+ *   container, BOTH shift by the same delta, so the subtraction stays
+ *   constant -- a stable grid-space coordinate.
+ *
+ *   Bezier curve formula: M x1,y1 C x1+dx,y1 x2-dx,y2 x2,y2
+ *   where dx = |x2-x1| * 0.42 (tension factor).
+ *   - 0.42 produces smooth S-curves that elongate proportionally when
+ *     nodes span multiple skipped stages.
+ *   - Lower values make straighter lines; higher values tighten bends.
+ *
+ * ANIMATION SYSTEM (edge wire behaviour)
+ * ---------------------------------------
+ *   State 1 -- Default (no selection):
+ *     All edges drawn at opacity 0.15 via CSS .sct-edge rule.
+ *     Hover over a card -> direct edges get .hl (opacity 0.9), others .dim.
+ *
+ *   State 2 -- Card selected:
+ *     _applyLineageHighlight(id):
+ *       a. BFS ancestors (bwd graph) + BFS descendants (fwd graph)
+ *       b. Non-lineage cards: .hide -> display:none -> layout collapses
+ *       c. double-rAF: waits for browser reflow after layout change
+ *       d. _drawEdges(relevant, liveMode=true):
+ *            - Skips cards with .hide (getBCR would return zeros)
+ *            - All drawn paths get .live -> marching-ants CSS animation
+ *
+ *   State 3 -- Clear selection:
+ *     _clearSelection(): removes .hide from all cards, double-rAF redraws
+ *     all edges at default opacity 0.15 (liveMode=false).
+ *
+ *   WHY hide instead of dim: display:none removes the card from layout,
+ *   so the remaining cards repack into the column. After reflow, the bezier
+ *   coordinates are computed only from visible cards, giving clean paths.
+ *   Opacity-based dimming leaves cards in layout, causing wires to route
+ *   around invisible obstacles.
+ *
+ * TOC FORMULA REFERENCE
+ * ---------------------
+ *   F1: Target = ADU x RLT x VF
+ *   F2a (FG):  IP = On-Hand + WIP - Backorders
+ *   F2b (RM):  IP = On-Hand + On-Order - Committed
+ *   F3: BP% = (Target - IP) / Target * 100
+ *   F4: Order Qty = Target - IP   (replenishment deficit)
  *
  * Brand: Oswald (headings) + DM Sans (body)
  *        --brand-500 #f97316 (Chaizup tiger orange)
- *        Warm stone palette · buy=cyan #06b6d4 · mfg=violet #8b5cf6 · out=emerald #10b981
+ *        Warm stone: buy=cyan #06b6d4, mfg=violet #8b5cf6, out=emerald #10b981
  */
-
-/* ──────────────────────────────────────────────────────────────────────────────
-   PAGE LOAD ENTRY POINT
-   Called once by Frappe when the page HTML is first rendered into the DOM.
-   guard wrapper.sct_initialized prevents double-init on tab revisit.
-   ──────────────────────────────────────────────────────────────────────────── */
 frappe.pages["supply-chain-tracker"].on_page_load = function (wrapper) {
   if (wrapper.sct_initialized) return;
   wrapper.sct_initialized = true;
@@ -149,45 +133,45 @@ frappe.pages["supply-chain-tracker"].on_page_load = function (wrapper) {
 };
 
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SupplyChainTracker  — main controller class
+// ===============================================================================
+//  SupplyChainTracker  -- main controller class
 //  All state, rendering logic, and event handling lives here.
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 class SupplyChainTracker {
   constructor(page) {
     this.page    = page;   // Frappe app-page reference (for future toolbar use)
 
-    // ── Raw server data (refreshed by load()) ─────────────────────────────────
+    // -- Raw server data (refreshed by load()) ---------------------------------
     this.nodes   = [];     // All pipeline nodes (items + documents)
     this.edges   = [];     // Directed edges { source, target } for the DAG
     this.tracks  = [];     // Tracker-view rows (item-centric aggregations)
     this.nodeMap = {};     // nodes keyed by id for O(1) lookup: { [id]: node }
 
-    // ── Pipeline view state ───────────────────────────────────────────────────
+    // -- Pipeline view state ---------------------------------------------------
     this.cardEls    = {};     // DOM element map { [nodeId]: HTMLElement } for edge anchoring
     this.selectedId = null;   // Currently selected node id (null = no selection)
 
-    // ── Active filter state ────────────────────────────────────────────────────
-    // search, type, zone, doctype are client-side (no server round-trip on change).
-    // supplier, warehouse require a new API call because they need SQL filtering.
+    // -- Active filter state ----------------------------------------------------
+    // search, zone, item_group, doctype are client-side (no server round-trip).
+    // supplier requires a new API call (server-side SQL join).
     // days_back changes the look-back window for open documents.
     this.f = {
-      search:    "",      // Free-text search across item codes, doc names, suppliers
-      type:      "All",   // Buffer type: "All" | "FG" | "SFG" | "RM" | "PM"
-      zone:      "All",   // TOC zone: "All" | "Red" | "Yellow" | "Green" | "Black"
-      doctype:   "All",   // Document type abbreviation: "All" | "MR" | "PO" | …
-      supplier:  "",      // Supplier name (server-side filter)
-      warehouse: "",      // Warehouse name (server-side filter)
-      overdue:   false,   // Show only items/docs with at least one overdue document
-      auto:      false,   // Show only TOC-auto-generated MRs (recorded_by = "By System")
-      noaction:  false,   // Show only items with NO open Material Request
-      days_back: 30,      // Look-back window in days (server-side)
+      search:     "",      // Free-text search across item codes, doc names, suppliers
+      type:       "All",   // Buffer type: "All" | "FG" | "SFG" | "RM" | "PM"
+      zone:       "All",   // TOC zone: "All" | "Red" | "Yellow" | "Green" | "Black"
+      doctype:    "All",   // Document type abbreviation: "All" | "MR" | "PO" | ...
+      supplier:   "",      // Supplier name (server-side filter -- triggers load())
+      item_group: "",      // Item group (client-side filter)
+      overdue:    false,   // Show only items/docs with at least one overdue document
+      auto:       false,   // Show only TOC-auto-generated MRs (recorded_by = "By System")
+      noaction:   false,   // Show only items with NO open Material Request
+      days_back:  30,      // Look-back window in days (server-side)
     };
 
     this.viewMode  = "tracker";   // Active view: "tracker" | "pipeline"
-    this._bomCache = new Map();   // BOM lookup cache: item_code → { bomName, items[] } | null
+    this._bomCache = new Map();   // BOM lookup cache: item_code -> { bomName, items[] } | null
 
-    // ── Pipeline stage definitions ────────────────────────────────────────────
+    // -- Pipeline stage definitions --------------------------------------------
     // The seven columns of the pipeline view, left-to-right.
     // flow: "item" | "buy" | "mfg" | "both" | "out" controls the column header
     // accent colour (matches CSS .sl-* classes and _flowColors).
@@ -201,21 +185,21 @@ class SupplyChainTracker {
       { id: "output",           label: "FG / SFG Buffer",   sub: "Current buffer state",  icon: "🏭", flow: "out",  num: "07" },
     ];
 
-    // Edge stroke colours — must be hex values, NOT CSS vars, because SVG
+    // Edge stroke colours -- must be hex values, NOT CSS vars, because SVG
     // presentation attributes do not resolve CSS custom properties.
     this._flowColors = {
-      buy:  "#06b6d4",   // cyan-500  — purchase flow
-      mfg:  "#8b5cf6",   // violet-500 — manufacturing flow
-      both: "#f97316",   // brand orange — mixed/MR stage
-      item: "#a8a29e",   // stone-400  — item → MR edges
-      out:  "#10b981",   // emerald-500 — output (FG/SFG buffer) edges
+      buy:  "#06b6d4",   // cyan-500  -- purchase flow
+      mfg:  "#8b5cf6",   // violet-500 -- manufacturing flow
+      both: "#f97316",   // brand orange -- mixed/MR stage
+      item: "#a8a29e",   // stone-400  -- item -> MR edges
+      out:  "#10b981",   // emerald-500 -- output (FG/SFG buffer) edges
     };
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  INIT
   //  Wire up all static DOM events, load initial dropdown options, then fetch data.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   init() {
     this._bindCommandBar();     // Search, view-mode toggle, days select, scroll/resize
     this._bindFilterPanel();    // Filter pills, apply/reset buttons
@@ -225,13 +209,13 @@ class SupplyChainTracker {
     this.load();                // Initial server fetch
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  DATA FETCH
   //  Sends server-side filter parameters to get_pipeline_data.
   //  Server handles: time window, supplier join, warehouse join.
   //  All other filters (zone, search, doctype, etc.) are applied client-side
   //  in _applyClientFilters() to avoid slow page loads on every keypress.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   load() {
     this._setLoading(true);
     frappe.call({
@@ -265,12 +249,12 @@ class SupplyChainTracker {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  RENDER DISPATCH
   //  Single entry point called after every filter change or data load.
   //  Clears any active pipeline selection/panel, applies client-side filters,
   //  then delegates to the active view renderer.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   render() {
     this._clearSelection();   // Reset pipeline highlight & edge state
     this._closePanel();       // Close detail panel if open
@@ -286,13 +270,13 @@ class SupplyChainTracker {
     this._updateFilterBadge();   // Keep the "Filters (N)" badge current
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  TRACKER VIEW
   //  Renders a vertical list of collapsible item rows, one per track.
   //  Uses DocumentFragment for a single DOM insertion to minimise reflow.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   _renderTracker(tracks) {
-    const wrap = document.getElementById("sct-tracker-wrap");
+    const wrap = document.getElementById("sct-view-tracker");
     wrap.innerHTML = "";
 
     if (!tracks.length) {
@@ -315,7 +299,7 @@ class SupplyChainTracker {
    * Structure:
    *   .sct-track                (adds .overdue-track if any doc is overdue)
    *     .sct-track-header       (always visible; click to expand)
-   *       .sct-track-zone-bar   (left coloured stripe — Red/Yellow/Green)
+   *       .sct-track-zone-bar   (left coloured stripe -- Red/Yellow/Green)
    *       .sct-track-item-info  (item code + name, tags)
    *       .sct-track-meta       (BP% bar, zone badge, doc counts, next-action)
    *     .sct-track-body         (hidden by default; built lazily on first expand)
@@ -339,7 +323,7 @@ class SupplyChainTracker {
       <div class="sct-track-zone-bar" style="background:${zoneColor}"></div>
       <div class="sct-track-item-info">
         <div class="sct-track-item-name">${track.item_code}
-          <span style="font-size:11px;font-weight:400;color:var(--stone-500)"> — ${track.item_name}</span>
+          <span style="font-size:11px;font-weight:400;color:var(--stone-500)"> -- ${track.item_name}</span>
         </div>
         <div class="sct-track-item-sub">
           ${track.buffer_type ? `<span class="sct-doc-tag tag-item">${track.buffer_type}</span>` : ""}
@@ -362,19 +346,19 @@ class SupplyChainTracker {
           ${track.pending_count > 0  ? `<span class="sct-track-count-chip count-open">${track.pending_count} open</span>`         : ""}
           ${track.overdue_count > 0  ? `<span class="sct-track-count-chip count-overdue">⚠ ${track.overdue_count} overdue</span>` : ""}
           ${track.doc_count > 0 && track.pending_count === 0
-            ? `<span class="sct-track-count-chip count-done">✓ done</span>` : ""}
+            ? `<span class="sct-track-count-chip count-done">v done</span>` : ""}
         </div>
         <div class="sct-track-next-action${isUrgent ? " urgent" : ""}" title="${track.next_action}">
           ${track.next_action}
         </div>
       </div>
-      <span class="sct-track-toggle">▼</span>
+      <span class="sct-track-toggle">v</span>
     `;
     // Toggle the expanded class (CSS shows/hides the body via max-height transition)
     hdr.addEventListener("click", () => el.classList.toggle("expanded"));
     el.appendChild(hdr);
 
-    // Lazy body container — innerHTML is empty until first expand
+    // Lazy body container -- innerHTML is empty until first expand
     const body = document.createElement("div");
     body.className = "sct-track-body";
     body.dataset.built = "0";
@@ -387,7 +371,7 @@ class SupplyChainTracker {
       if (body.dataset.built === "0") {
         body.innerHTML = this._buildTrackBody(track);
         body.dataset.built = "1";
-        // Wire up document row click → detail panel (delegated, not inline onclick)
+        // Wire up document row click -> detail panel (delegated, not inline onclick)
         body.querySelectorAll(".sct-doc-row[data-doc]").forEach(row => {
           row.addEventListener("click", (ev) => {
             ev.stopPropagation();
@@ -406,15 +390,15 @@ class SupplyChainTracker {
    * Build the HTML string for the expanded body of a track row.
    *
    * Sections rendered (in order):
-   *   1. Stock info chips — shows F1 Target, F2 IP, F3 BP%, F4 Deficit
-   *   2. Next action box  — urgent styling when zone is Red/Black or action starts with ⚠
-   *   3. Documents        — grouped by stage, each stage as a labelled section
-   *                         Order follows supply chain flow: MR → RFQ/PP → SQ/WO → PO/JC → PR/SE
+   *   1. Stock info chips -- shows F1 Target, F2 IP, F3 BP%, F4 Deficit
+   *   2. Next action box  -- urgent styling when zone is Red/Black or action starts with ⚠
+   *   3. Documents        -- grouped by stage, each stage as a labelled section
+   *                         Order follows supply chain flow: MR -> RFQ/PP -> SQ/WO -> PO/JC -> PR/SE
    */
   _buildTrackBody(track) {
     const parts = [];
 
-    // ── Stock info chips (TOC buffer formulas) ─────────────────────────────────
+    // -- Stock info chips (TOC buffer formulas) ---------------------------------
     if (track.zone) {
       const deficit = track.order_qty > 0;
       parts.push(`
@@ -443,7 +427,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── Next action recommendation ─────────────────────────────────────────────
+    // -- Next action recommendation ---------------------------------------------
     if (track.next_action) {
       const isUrgent = track.next_action.startsWith("⚠") || track.zone === "Red" || track.zone === "Black";
       parts.push(`
@@ -453,7 +437,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── Document rows grouped by pipeline stage ────────────────────────────────
+    // -- Document rows grouped by pipeline stage --------------------------------
     if (!track.documents || !track.documents.length) {
       parts.push(`<div class="sct-no-docs">No open documents in the last ${this.f.days_back} days</div>`);
     } else {
@@ -487,15 +471,15 @@ class SupplyChainTracker {
    * Build an HTML string for a single document row within the tracker body.
    *
    * The row carries:
-   *   data-doc      — document name (used to open Frappe form)
-   *   data-doctype  — ERPNext doctype string
-   *   data-nodeid   — composite node id (e.g., "PO::PO-0001") used to look up
+   *   data-doc      -- document name (used to open Frappe form)
+   *   data-doctype  -- ERPNext doctype string
+   *   data-nodeid   -- composite node id (e.g., "PO::PO-0001") used to look up
    *                   the node in this.nodeMap for the detail panel
    *
    * Visual elements:
-   *   left icon    — doctype emoji
-   *   body         — doc name, TOC-Auto tag, MR type, sub-text (supplier/qty/due), progress bar
-   *   right column — status badge, age, overdue warning
+   *   left icon    -- doctype emoji
+   *   body         -- doc name, TOC-Auto tag, MR type, sub-text (supplier/qty/due), progress bar
+   *   right column -- status badge, age, overdue warning
    */
   _buildDocRow(doc, item_code) {
     const icons = {
@@ -573,7 +557,7 @@ class SupplyChainTracker {
     };
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  PIPELINE VIEW
   //  Renders a 7-column Kanban with SVG bezier edges connecting related nodes.
   //
@@ -586,28 +570,29 @@ class SupplyChainTracker {
   //          .st-body                       (scrollable card body)
   //            .track-sep.ts-buy            (buy/mfg section separator)
   //            .sct-card-v2                 (one node card)
-  //            …
+  //            ...
   //        .stage[data-stage="material_request"]  (column 2)
-  //        …
+  //        ...
   //
   //  WHY sct-pl-grid wrapper:
   //    The SVG overlay must be a sibling of the stage columns inside the same
   //    expanding container. If it were placed inside .sct-pl-scroll directly,
   //    the SVG would not scroll with the cards; coordinate references would drift.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   _renderPipeline(visibleNodes) {
     const scroll = document.getElementById("sct-pl-scroll");
 
-    // Create or reuse the inner grid wrapper.
-    // The SVG overlay is moved into this wrapper on first creation.
-    let grid = scroll.querySelector(".sct-pl-grid");
+    // Use the pre-existing grid from the HTML template (id="sct-pl-grid").
+    // The HTML already contains the SVG inside this grid -- no need to move it.
+    // Fallback: create the grid if somehow not present in the DOM.
+    let grid = document.getElementById("sct-pl-grid");
     if (!grid) {
       grid = document.createElement("div");
-      grid.className = "sct-pl-grid";
-      // SVG must live inside grid so it scrolls with the stage columns
+      grid.id = "sct-pl-grid";
+      grid.className = "pl-grid";
       const svg = document.getElementById("sct-svg-overlay");
       if (svg) grid.appendChild(svg);
-      scroll.appendChild(grid);
+      scroll?.appendChild(grid);
     }
 
     // Remove only stage columns (leave SVG in place)
@@ -634,7 +619,7 @@ class SupplyChainTracker {
 
     // double-rAF: wait two frames so the browser has fully laid out the columns
     // before we read getBoundingClientRect() for edge coordinate calculation.
-    // A single rAF is not sufficient — layout may still be in progress after frame 1.
+    // A single rAF is not sufficient -- layout may still be in progress after frame 1.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       this._drawEdges(visibleIds);
       this._injectPorts(visibleIds);
@@ -667,7 +652,7 @@ class SupplyChainTracker {
     col.className = "stage";
     col.dataset.stage = stage.id;
 
-    // Collapse empty columns to slim stubs (not completely hidden — keeps consistent layout)
+    // Collapse empty columns to slim stubs (not completely hidden -- keeps consistent layout)
     if (!stageNodes.length && visibleNodes.length > 0) {
       col.classList.add("hide-stage");
     }
@@ -708,16 +693,16 @@ class SupplyChainTracker {
    * Append cards to a stage body with optional buy/mfg section separators.
    *
    * Mixed stages (rfq_pp, sq_wo, po_jc, receipt_qc) show two sections only when
-   * BOTH flavours are present — if only one type exists, no separator is added
+   * BOTH flavours are present -- if only one type exists, no separator is added
    * to keep the column clean. Each stage has its own split logic:
    *
-   *   items        → RM/PM vs SFG/FG (by buffer_type)
-   *   material_req → Purchase MR vs Manufacture MR (by mr_type)
-   *   rfq_pp       → RFQ vs Production Plan (by sub_type)
-   *   sq_wo        → Supplier Quotation vs Work Order (by sub_type)
-   *   po_jc        → Purchase Order vs Job Card (by sub_type)
-   *   receipt_qc   → PR/QI vs Stock Entry (by sub_type)
-   *   output       → SFG Output vs FG Output (by buffer_type)
+   *   items        -> RM/PM vs SFG/FG (by buffer_type)
+   *   material_req -> Purchase MR vs Manufacture MR (by mr_type)
+   *   rfq_pp       -> RFQ vs Production Plan (by sub_type)
+   *   sq_wo        -> Supplier Quotation vs Work Order (by sub_type)
+   *   po_jc        -> Purchase Order vs Job Card (by sub_type)
+   *   receipt_qc   -> PR/QI vs Stock Entry (by sub_type)
+   *   output       -> SFG Output vs FG Output (by buffer_type)
    */
   _appendSeparatedCards(stageId, nodes, body) {
     // Helper: build card element and register in cardEls map for edge anchoring
@@ -806,19 +791,19 @@ class SupplyChainTracker {
    * Build one pipeline card (.sct-card-v2).
    *
    * Card anatomy:
-   *   .v2-type-chip    — top-left coloured type label (e.g. "Purchase MR", "Work Order")
-   *   .v2-top          — name line + VIEW button + status widget (badge or dot)
-   *   .v2-body         — key-value rows specific to the node's doctype
-   *   .v2-ports        — in/out degree badges injected later by _injectPorts()
+   *   .v2-type-chip    -- top-left coloured type label (e.g. "Purchase MR", "Work Order")
+   *   .v2-top          -- name line + VIEW button + status widget (badge or dot)
+   *   .v2-body         -- key-value rows specific to the node's doctype
+   *   .v2-ports        -- in/out degree badges injected later by _injectPorts()
    *
    * Status widget:
-   *   Item/output nodes → .v2-dot (tiny coloured circle reflecting zone/status)
-   *   Document nodes    → .v2-badge (text badge: OPEN, IN PROCESS, COMPLETED, etc.)
+   *   Item/output nodes -> .v2-dot (tiny coloured circle reflecting zone/status)
+   *   Document nodes    -> .v2-badge (text badge: OPEN, IN PROCESS, COMPLETED, etc.)
    *
    * Click interactions (three separate behaviours):
-   *   VIEW button click → open detail panel AND trigger lineage selection
-   *   Card click        → toggle lineage selection only (no panel)
-   *   Card hover        → highlight directly connected edges (hl/dim classes)
+   *   VIEW button click -> open detail panel AND trigger lineage selection
+   *   Card click        -> toggle lineage selection only (no panel)
+   *   Card hover        -> highlight directly connected edges (hl/dim classes)
    */
   _buildPipelineCard(node) {
     const el = document.createElement("div");
@@ -888,9 +873,9 @@ class SupplyChainTracker {
     return el;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  PIPELINE CARD HELPER METHODS
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
 
   /**
    * Return the HTML for the coloured type-chip at the top of a card.
@@ -966,10 +951,10 @@ class SupplyChainTracker {
   /**
    * Return the display name and subtitle reference for a pipeline card.
    *
-   *   Items / output nodes → item_code as name, item_name as subtitle
-   *   Buy-chain docs       → doc_name, supplier as subtitle
-   *   Mfg-chain docs       → doc_name, item_code or operation as subtitle
-   *   Generic              → label (server-computed) or doc_name, description
+   *   Items / output nodes -> item_code as name, item_name as subtitle
+   *   Buy-chain docs       -> doc_name, supplier as subtitle
+   *   Mfg-chain docs       -> doc_name, item_code or operation as subtitle
+   *   Generic              -> label (server-computed) or doc_name, description
    */
   _v2NameRef(node) {
     const sub   = node.sub_type || "";
@@ -1063,7 +1048,7 @@ class SupplyChainTracker {
       if (node.produced_qty > 0) rows += r("Produced", `${node.produced_qty}`, "mfg");
     }
 
-    // Append timing context — always useful regardless of doctype
+    // Append timing context -- always useful regardless of doctype
     if (node.is_overdue) {
       rows += r("Overdue", `⚠ ${node.days_overdue}d`, "err");
     } else if (node.days_open > 14) {
@@ -1105,9 +1090,9 @@ class SupplyChainTracker {
     return `<span class="sdot ${cls}"></span>`;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  PIPELINE SELECTION & LINEAGE HIGHLIGHT
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
 
   /**
    * Toggle selection on a pipeline node.
@@ -1116,7 +1101,7 @@ class SupplyChainTracker {
    */
   _pipelineSelect(id) {
     if (this.selectedId === id) {
-      // Second click on same card → clear everything
+      // Second click on same card -> clear everything
       this._clearSelection();
       this._closePanel();
     } else {
@@ -1149,10 +1134,10 @@ class SupplyChainTracker {
     // Restore any separators that were hidden during lineage highlight
     document.querySelectorAll(".track-sep").forEach(s => s.style.display = "");
     document.getElementById("sct-clear-btn")?.classList.remove("on");
-    // Redraw edges at default faint opacity — wait for layout reflow first
+    // Redraw edges at default faint opacity -- wait for layout reflow first
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const visibleIds = new Set(Object.keys(this.cardEls));
-      this._drawEdges(visibleIds);   // liveMode=false → opacity 0.15, no animation
+      this._drawEdges(visibleIds);   // liveMode=false -> opacity 0.15, no animation
     }));
   }
 
@@ -1160,11 +1145,11 @@ class SupplyChainTracker {
    * Apply lineage highlight for a selected node.
    *
    * Algorithm:
-   *   1. Build adjacency maps (fwd: source→[targets], bwd: target→[sources])
-   *   2. BFS backward from id → ancestors (all upstream nodes)
-   *   3. BFS forward from id  → descendants (all downstream nodes)
+   *   1. Build adjacency maps (fwd: source->[targets], bwd: target->[sources])
+   *   2. BFS backward from id -> ancestors (all upstream nodes)
+   *   3. BFS forward from id  -> descendants (all downstream nodes)
    *   4. relevant = union of { id, ancestors, descendants }
-   *   5. All non-relevant cards get .hide (display:none) — not dim!
+   *   5. All non-relevant cards get .hide (display:none) -- not dim!
    *      display:none collapses them from layout so the remaining cards repack
    *      into columns, shortening bezier paths and removing visual clutter.
    *   6. Stages where every card is hidden get .hide-stage (collapsed stub)
@@ -1249,52 +1234,52 @@ class SupplyChainTracker {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  SVG EDGES
   //  Draws cubic Bezier paths between connected card elements.
   //
   //  COORDINATE SYSTEM
-  //  ─────────────────
+  //  -----------------
   //  Both the card and the grid container are queried with getBoundingClientRect()
   //  which returns coordinates in viewport (window) space. Subtracting the grid's
   //  rect position from the card's rect position converts to grid-space:
   //
-  //    x1 = card.right  − grid.left    ← source card right edge in grid coords
-  //    y1 = card.top + card.height/2 − grid.top   ← vertical midpoint of card
+  //    x1 = card.right  - grid.left    <- source card right edge in grid coords
+  //    y1 = card.top + card.height/2 - grid.top   <- vertical midpoint of card
   //
   //  This is stable under horizontal scrolling of .sct-pl-scroll because
   //  both card.right and grid.left shift by the same scroll delta.
   //
   //  BEZIER FORMULA
-  //  ──────────────
+  //  --------------
   //  Path:  M x1,y1  C (x1+dx),y1  (x2-dx),y2  x2,y2
-  //  where: dx = |x2 − x1| × 0.42  (tension = 42% of horizontal span)
+  //  where: dx = |x2 - x1| x 0.42  (tension = 42% of horizontal span)
   //
   //  The horizontal span factor (0.42) was chosen empirically:
-  //    • Small values (< 0.3) produce near-straight lines
-  //    • Large values (> 0.55) produce hairpin bends for adjacent columns
-  //    • 0.42 gives smooth S-curves that remain readable across 1–6 skipped stages
+  //    - Small values (< 0.3) produce near-straight lines
+  //    - Large values (> 0.55) produce hairpin bends for adjacent columns
+  //    - 0.42 gives smooth S-curves that remain readable across 1-6 skipped stages
   //
   //  LIVE MODE
-  //  ─────────
+  //  ---------
   //  liveMode=false (default): edges drawn at CSS opacity 0.15, no animation
   //  liveMode=true  (after lineage select): every drawn path gets .live class
-  //                  → marching-ants stroke-dasharray animation at opacity 1
-  // ══════════════════════════════════════════════════════════════════════════════
+  //                  -> marching-ants stroke-dasharray animation at opacity 1
+  // ==============================================================================
 
   /** Return hex stroke colour for an edge (based on target node's sub_type). */
   _getEdgeColor(edge) {
     const tgt = this.nodeMap[edge.target];
     const sub = tgt?.sub_type || "";
     const mrType = (tgt?.mr_type || "").toLowerCase();
-    // Buy-chain edges: RFQ, SQ, PO, PR, QI → cyan
+    // Buy-chain edges: RFQ, SQ, PO, PR, QI -> cyan
     if (["rfq","sq","po","pr","qi"].includes(sub))       return this._flowColors.buy;
-    // Mfg-chain edges: PP, WO, JC, SE → violet
+    // Mfg-chain edges: PP, WO, JC, SE -> violet
     if (["pp","wo","jc","se"].includes(sub))             return this._flowColors.mfg;
     // MR edges inherit colour from MR type
     if (sub === "mr" && mrType.includes("purchase"))     return this._flowColors.buy;
     if (sub === "mr")                                    return this._flowColors.mfg;
-    // Buffer output edges → emerald
+    // Buffer output edges -> emerald
     const stage = tgt?.stage || "";
     if (stage === "output") return this._flowColors.out;
     if (stage === "items")  return this._flowColors.item;
@@ -1317,12 +1302,12 @@ class SupplyChainTracker {
   /**
    * Completely redraw all SVG edges for the given set of visible node ids.
    *
-   * @param {Set<string>}  visibleIds  — only draw edges where both source AND target are in this set
-   * @param {boolean}      liveMode    — when true, add .live class to animate drawn paths
+   * @param {Set<string>}  visibleIds  -- only draw edges where both source AND target are in this set
+   * @param {boolean}      liveMode    -- when true, add .live class to animate drawn paths
    *
    * The SVG is cleared and rebuilt from scratch on every call. This is intentional:
    * card positions change after show/hide operations, after scrolling, and after resize.
-   * Incremental updates would require tracking stale paths — full redraw is simpler
+   * Incremental updates would require tracking stale paths -- full redraw is simpler
    * and fast enough for typical pipeline sizes (< 200 edges).
    */
   _drawEdges(visibleIds, liveMode = false) {
@@ -1397,8 +1382,8 @@ class SupplyChainTracker {
    * Inject in/out degree port badges (.v2-ports) onto each pipeline card.
    *
    * Port badges show the edge count for each card:
-   *   "← 2 in"  — 2 upstream sources feed into this node
-   *   "3 out →" — this node feeds into 3 downstream targets
+   *   "<- 2 in"  -- 2 upstream sources feed into this node
+   *   "3 out ->" -- this node feeds into 3 downstream targets
    *
    * Only cards with at least one edge get ports. Cards with neither in nor out
    * degree are standalone nodes (no ports rendered).
@@ -1421,14 +1406,14 @@ class SupplyChainTracker {
       const portDiv = document.createElement("div");
       portDiv.className = "v2-ports";
       portDiv.innerHTML = [
-        iIn  > 0 ? `<span class="v2-port v2-port-in">← ${iIn} in</span>`    : "",
-        iOut > 0 ? `<span class="v2-port v2-port-out">${iOut} out →</span>` : "",
+        iIn  > 0 ? `<span class="v2-port v2-port-in"><- ${iIn} in</span>`    : "",
+        iOut > 0 ? `<span class="v2-port v2-port-out">${iOut} out -></span>` : "",
       ].join("");
       el.appendChild(portDiv);
     });
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  DETAIL PANEL
   //  A slide-in side panel (.sct-panel) that shows full document details,
   //  TOC buffer analysis, connected nodes, and quick action buttons.
@@ -1436,10 +1421,10 @@ class SupplyChainTracker {
   //  The panel is populated purely via innerHTML; event handlers for interactive
   //  elements are wired up via data-* attributes (not inline onclick) to avoid
   //  XSS risks. Specifically:
-  //    data-nav-id       → _pipelineSelect(id)    (navigate to another node)
-  //    data-route-item   → route to Production Priority Board
-  //    data-close-panel  → close the panel
-  // ══════════════════════════════════════════════════════════════════════════════
+  //    data-nav-id       -> _pipelineSelect(id)    (navigate to another node)
+  //    data-route-item   -> route to Production Priority Board
+  //    data-close-panel  -> close the panel
+  // ==============================================================================
 
   /**
    * Open and populate the detail panel for a given node.
@@ -1448,12 +1433,12 @@ class SupplyChainTracker {
   showPanel(node) {
     if (!node) return;
     document.getElementById("sct-panel-title").textContent    = node.doc_name || node.label;
-    document.getElementById("sct-panel-subtitle").textContent = node.doctype  + (node.is_overdue ? " — ⚠ OVERDUE" : "");
+    document.getElementById("sct-panel-subtitle").textContent = node.doctype  + (node.is_overdue ? " -- ⚠ OVERDUE" : "");
     document.getElementById("sct-panel-body").innerHTML       = this._panelBody(node);
     document.getElementById("sct-panel-actions").innerHTML    = this._panelActions(node);
     document.getElementById("sct-panel").classList.add("open");
 
-    // Wire up navigation links via data attributes (no inline onclick → no XSS)
+    // Wire up navigation links via data attributes (no inline onclick -> no XSS)
     document.querySelectorAll("#sct-panel-body [data-nav-id], #sct-panel-actions [data-nav-id]").forEach(el => {
       el.addEventListener("click", () => this._pipelineSelect(el.dataset.navId));
     });
@@ -1473,21 +1458,21 @@ class SupplyChainTracker {
       this._loadBomBlock(node.item_code || node.doc_name);
     }
 
-    // Async production block: for Work Orders — shows what was produced (batch, stock)
+    // Async production block: for Work Orders -- shows what was produced (batch, stock)
     // and what materials were consumed (item, qty, batch, warehouse).
     if (node.sub_type === "wo") {
       this._loadProductionBlock(node);
     }
 
-    // Async receipt block: for Purchase Receipts — shows received/accepted/rejected
+    // Async receipt block: for Purchase Receipts -- shows received/accepted/rejected
     // quantities per item, batch numbers, and current warehouse stock.
     if (node.sub_type === "pr") {
       this._loadReceiptBlock(node);
     }
 
-    // Fulfillment summary: for Material Requests — shows the full pipeline progress
-    // (requested qty → PO raised → received) by traversing connected pipeline nodes.
-    // No extra API call — uses already-loaded nodeMap + edges.
+    // Fulfillment summary: for Material Requests -- shows the full pipeline progress
+    // (requested qty -> PO raised -> received) by traversing connected pipeline nodes.
+    // No extra API call -- uses already-loaded nodeMap + edges.
     if (node.sub_type === "mr") {
       this._loadMRFulfillmentBlock(node);
     }
@@ -1497,8 +1482,8 @@ class SupplyChainTracker {
    * Asynchronously fetch and insert the BOM component list into the open panel.
    *
    * Uses a two-step API call:
-   *   1. frappe.client.get_list("BOM", { item, is_default:1, docstatus:1 }) → get BOM name
-   *   2. frappe.client.get_list("BOM Item", { parent: bomName }) → get component rows
+   *   1. frappe.client.get_list("BOM", { item, is_default:1, docstatus:1 }) -> get BOM name
+   *   2. frappe.client.get_list("BOM Item", { parent: bomName }) -> get component rows
    *
    * Results are cached in this._bomCache (Map):
    *   null                 = item has no default active BOM
@@ -1517,7 +1502,7 @@ class SupplyChainTracker {
       const bomBlock = document.createElement("div");
       bomBlock.className = "sct-bom-block";
       bomBlock.innerHTML = `
-        <div class="sct-bom-title">🔩 BOM — ${frappe.utils.escape_html(bomName)}</div>
+        <div class="sct-bom-title">🔩 BOM -- ${frappe.utils.escape_html(bomName)}</div>
         ${items.map(i => `
           <div class="sct-bom-row">
             <span class="sct-bom-item">${frappe.utils.escape_html(i.item_code)} <small style="color:var(--stone-400)">${frappe.utils.escape_html(i.item_name || "")}</small></span>
@@ -1547,7 +1532,7 @@ class SupplyChainTracker {
       },
       callback: (r) => {
         if (!r.message || !r.message.length) {
-          this._bomCache.set(item_code, null);  // No BOM — cache the miss
+          this._bomCache.set(item_code, null);  // No BOM -- cache the miss
           return;
         }
         const bomName = r.message[0].name;
@@ -1573,12 +1558,12 @@ class SupplyChainTracker {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  ASYNC DETAIL BLOCKS — Production, Purchase Receipt, MR Fulfillment
+  // ==============================================================================
+  //  ASYNC DETAIL BLOCKS -- Production, Purchase Receipt, MR Fulfillment
   //  Each method inserts a rich HTML section into #sct-panel-body after the
   //  synchronous panel content is already visible. They follow the same
-  //  pattern as _loadBomBlock: check for existing block → API fetch → insert.
-  // ══════════════════════════════════════════════════════════════════════════════
+  //  pattern as _loadBomBlock: check for existing block -> API fetch -> insert.
+  // ==============================================================================
 
   /**
    * Load production detail block for a Work Order panel.
@@ -1604,7 +1589,7 @@ class SupplyChainTracker {
     // Insert a placeholder while loading
     const placeholder = document.createElement("div");
     placeholder.className = "sct-prod-block sct-detail-loading";
-    placeholder.innerHTML = `<div class="sct-detail-loading-txt">⏳ Loading production details…</div>`;
+    placeholder.innerHTML = `<div class="sct-detail-loading-txt">⏳ Loading production details...</div>`;
     bodyEl.appendChild(placeholder);
 
     // Step 1: find all submitted Manufacture Stock Entries for this WO
@@ -1647,7 +1632,7 @@ class SupplyChainTracker {
             const fmtQty = (q, u) => `${(+q || 0).toLocaleString("en-IN", {maximumFractionDigits: 3})} ${u || ""}`;
             const esc    = v => frappe.utils.escape_html(String(v || ""));
 
-            // ── Produced section ───────────────────────────────────────────────
+            // -- Produced section -----------------------------------------------
             let producedHtml = "";
             if (produced.length) {
               producedHtml = produced.map(i => `
@@ -1657,16 +1642,16 @@ class SupplyChainTracker {
                     <span class="sct-prod-item-name">${esc(i.item_name)}</span>
                   </div>
                   <div class="sct-prod-row-meta">
-                    <span class="sct-prod-qty ok">▲ ${fmtQty(i.qty, i.uom)}</span>
+                    <span class="sct-prod-qty ok">^ ${fmtQty(i.qty, i.uom)}</span>
                     ${i.batch_no ? `<span class="sct-prod-batch">Batch: <strong>${esc(i.batch_no)}</strong></span>` : ""}
-                    ${i.t_warehouse ? `<span class="sct-prod-wh">→ ${esc(i.t_warehouse)}</span>` : ""}
+                    ${i.t_warehouse ? `<span class="sct-prod-wh">-> ${esc(i.t_warehouse)}</span>` : ""}
                   </div>
                 </div>`).join("");
             } else {
               producedHtml = `<div class="sct-detail-empty" style="margin:4px 0">No output entries yet</div>`;
             }
 
-            // ── Consumed section ───────────────────────────────────────────────
+            // -- Consumed section -----------------------------------------------
             let consumedHtml = "";
             if (consumed.length) {
               consumedHtml = consumed.map(i => `
@@ -1676,9 +1661,9 @@ class SupplyChainTracker {
                     <span class="sct-prod-item-name">${esc(i.item_name)}</span>
                   </div>
                   <div class="sct-prod-row-meta">
-                    <span class="sct-prod-qty used">▼ ${fmtQty(i.qty, i.uom)}</span>
+                    <span class="sct-prod-qty used">v ${fmtQty(i.qty, i.uom)}</span>
                     ${i.batch_no ? `<span class="sct-prod-batch">Batch: <strong>${esc(i.batch_no)}</strong></span>` : ""}
-                    ${i.s_warehouse ? `<span class="sct-prod-wh">← ${esc(i.s_warehouse)}</span>` : ""}
+                    ${i.s_warehouse ? `<span class="sct-prod-wh"><- ${esc(i.s_warehouse)}</span>` : ""}
                   </div>
                 </div>`).join("");
             } else {
@@ -1746,7 +1731,7 @@ class SupplyChainTracker {
 
     const placeholder = document.createElement("div");
     placeholder.className = "sct-recv-block sct-detail-loading";
-    placeholder.innerHTML = `<div class="sct-detail-loading-txt">⏳ Loading receipt details…</div>`;
+    placeholder.innerHTML = `<div class="sct-detail-loading-txt">⏳ Loading receipt details...</div>`;
     bodyEl.appendChild(placeholder);
 
     // Step 1: fetch all line items from this Purchase Receipt
@@ -1802,8 +1787,8 @@ class SupplyChainTracker {
               </div>
               <div class="sct-recv-row-meta">
                 ${i.batch_no ? `<span class="sct-prod-batch">Batch: <strong>${esc(i.batch_no)}</strong></span>` : `<span class="sct-prod-batch" style="color:var(--stone-400)">No batch</span>`}
-                ${i.warehouse ? `<span class="sct-prod-wh">→ ${esc(i.warehouse)}</span>` : ""}
-                <span class="sct-recv-stock" data-item="${esc(i.item_code)}" data-wh="${esc(i.warehouse)}">…</span>
+                ${i.warehouse ? `<span class="sct-prod-wh">-> ${esc(i.warehouse)}</span>` : ""}
+                <span class="sct-recv-stock" data-item="${esc(i.item_code)}" data-wh="${esc(i.warehouse)}">...</span>
               </div>
               ${i.material_request ? `<div style="font-size:9px;color:var(--stone-400);margin-top:2px">From MR: ${esc(i.material_request)}</div>` : ""}
             </div>`;
@@ -1842,14 +1827,14 @@ class SupplyChainTracker {
 
   /**
    * Build the MR fulfillment summary block entirely from already-loaded data.
-   * No API call — traverses this.edges and this.nodeMap to find downstream nodes.
+   * No API call -- traverses this.edges and this.nodeMap to find downstream nodes.
    *
    * Shows:
-   *   Requested Qty  — from node.required_qty
-   *   PO Raised      — total qty across downstream PO nodes
-   *   Received       — total received_qty across downstream PR nodes
-   *   WO Raised      — total qty across downstream WO nodes (manufacture MRs)
-   *   Produced       — total produced_qty across downstream WO nodes
+   *   Requested Qty  -- from node.required_qty
+   *   PO Raised      -- total qty across downstream PO nodes
+   *   Received       -- total received_qty across downstream PR nodes
+   *   WO Raised      -- total qty across downstream WO nodes (manufacture MRs)
+   *   Produced       -- total produced_qty across downstream WO nodes
    *
    * Progress bar shows: received/ordered percentage.
    */
@@ -1879,13 +1864,13 @@ class SupplyChainTracker {
 
     const sum  = (arr, field) => arr.reduce((a, n) => a + (+n[field] || 0), 0);
     const fmt  = (q, u) => `${(+q || 0).toLocaleString("en-IN", {maximumFractionDigits: 2})} ${u || ""}`;
-    const esc  = v => frappe.utils.escape_html(String(v || "—"));
+    const esc  = v => frappe.utils.escape_html(String(v || "--"));
 
     const reqQty  = node.required_qty || node.qty || 0;
     const uom     = node.uom || "";
     const isPurch = (node.mr_type || "").toLowerCase().includes("purchase");
 
-    // ── Build fulfillment row data ─────────────────────────────────────────────
+    // -- Build fulfillment row data ---------------------------------------------
     const steps = [];
 
     steps.push({
@@ -1895,7 +1880,7 @@ class SupplyChainTracker {
     });
 
     if (isPurch) {
-      // Purchase path: MR → RFQ → SQ → PO → PR
+      // Purchase path: MR -> RFQ -> SQ -> PO -> PR
       if (rfqs.length) {
         steps.push({ icon: "🔍", label: "RFQ Raised",
           val: `${rfqs.length} RFQ${rfqs.length > 1 ? "s" : ""}`,
@@ -1917,7 +1902,7 @@ class SupplyChainTracker {
           sub: `${pos.length} PO${pos.length > 1 ? "s" : ""}${poTot > 0 ? " · ₹" + poTot.toLocaleString("en-IN") : ""}`,
           cls: poQty >= reqQty ? "step-ok" : "step-partial" });
       } else if (reqQty > 0) {
-        steps.push({ icon: "⏳", label: "PO Raised", val: "—", sub: "No PO yet", cls: "step-missing" });
+        steps.push({ icon: "⏳", label: "PO Raised", val: "--", sub: "No PO yet", cls: "step-missing" });
       }
       if (prs.length) {
         const recvQty = sum(prs, "qty") || sum(prs, "received_qty");
@@ -1927,10 +1912,10 @@ class SupplyChainTracker {
           sub: rejQty > 0 ? `${fmt(rejQty, uom)} rejected` : `${prs.length} receipt${prs.length > 1 ? "s" : ""}`,
           cls: recvQty >= reqQty ? "step-ok" : recvQty > 0 ? "step-partial" : "step-missing" });
       } else if (pos.length) {
-        steps.push({ icon: "⏳", label: "Received", val: "—", sub: "Awaiting delivery", cls: "step-missing" });
+        steps.push({ icon: "⏳", label: "Received", val: "--", sub: "Awaiting delivery", cls: "step-missing" });
       }
     } else {
-      // Manufacture path: MR → PP → WO → JC → SE
+      // Manufacture path: MR -> PP -> WO -> JC -> SE
       const pps = downstream.filter(n => n.sub_type === "pp");
       if (pps.length) {
         steps.push({ icon: "📅", label: "Prod. Plan",
@@ -1952,7 +1937,7 @@ class SupplyChainTracker {
             cls: prodQty >= woQty ? "step-ok" : "step-partial" });
         }
       } else if (reqQty > 0) {
-        steps.push({ icon: "⏳", label: "Work Order", val: "—", sub: "No WO yet", cls: "step-missing" });
+        steps.push({ icon: "⏳", label: "Work Order", val: "--", sub: "No WO yet", cls: "step-missing" });
       }
       if (jcs.length) {
         steps.push({ icon: "🔧", label: "Job Cards",
@@ -1962,7 +1947,7 @@ class SupplyChainTracker {
       }
     }
 
-    // ── Progress bar ───────────────────────────────────────────────────────────
+    // -- Progress bar -----------------------------------------------------------
     const lastStep  = steps[steps.length - 1];
     const isOk      = lastStep?.cls === "step-ok";
     const isPartial = lastStep?.cls === "step-partial";
@@ -1977,7 +1962,7 @@ class SupplyChainTracker {
           <div class="sct-fulfill-step-val">${s.val}</div>
           ${s.sub ? `<div class="sct-fulfill-step-sub">${s.sub}</div>` : ""}
         </div>
-      </div>`).join('<div class="sct-fulfill-arrow">→</div>');
+      </div>`).join('<div class="sct-fulfill-arrow">-></div>');
 
     const block = document.createElement("div");
     block.className = "sct-fulfill-block";
@@ -2004,19 +1989,19 @@ class SupplyChainTracker {
    * Build the HTML string for the detail panel body.
    *
    * Sections (in render order):
-   *   1. Next action box          — urgent styling for Red/Black zone or ⚠ prefix
-   *   2. Non-TOC notice           — shown when item exists but TOC not configured
-   *   3. TOC buffer status        — F3 BP% formula breakdown, visual bar
-   *   4. Timeline                 — days open, overdue days, creation date
-   *   5. Document details         — per-doctype key fields from _panelFields()
-   *   6. Connected documents      — pipeline view: p-link clickable cards
+   *   1. Next action box          -- urgent styling for Red/Black zone or ⚠ prefix
+   *   2. Non-TOC notice           -- shown when item exists but TOC not configured
+   *   3. TOC buffer status        -- F3 BP% formula breakdown, visual bar
+   *   4. Timeline                 -- days open, overdue days, creation date
+   *   5. Document details         -- per-doctype key fields from _panelFields()
+   *   6. Connected documents      -- pipeline view: p-link clickable cards
    *                                tracker view: simple rows with nav-id
-   *   7. Chain stats              — pipeline view only: total chain size, ancestors, descendants
+   *   7. Chain stats              -- pipeline view only: total chain size, ancestors, descendants
    */
   _panelBody(node) {
     const parts = [];
 
-    // ── Next action ────────────────────────────────────────────────────────────
+    // -- Next action ------------------------------------------------------------
     if (node.next_action) {
       const isUrgent = node.next_action.startsWith("⚠") || node.zone === "Red" || node.zone === "Black";
       parts.push(`
@@ -2026,7 +2011,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── Non-TOC notice ─────────────────────────────────────────────────────────
+    // -- Non-TOC notice ---------------------------------------------------------
     if ((node.stage === "items" || node.stage === "output") && !node.toc_enabled) {
       parts.push(`
         <div class="sct-toc-box" style="border-color:#d1d5db;background:#f9fafb">
@@ -2039,7 +2024,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── TOC buffer status (F3 formula breakdown) ───────────────────────────────
+    // -- TOC buffer status (F3 formula breakdown) -------------------------------
     if (node.zone) {
       const bp   = node.bp_pct ?? 0;
       const fill = Math.min(bp, 100);
@@ -2057,8 +2042,8 @@ class SupplyChainTracker {
           ${node.order_qty > 0
             ? `<div class="sct-toc-box-row"><span>Order Qty (F4)</span><strong style="color:#dc2626">${node.order_qty}</strong></div>` : ""}
           <div class="sct-toc-formula">
-            F3: BP% = (Target − IP) / Target × 100<br>
-            = (${node.target_buffer} − ${node.inventory_position}) / ${node.target_buffer} × 100
+            F3: BP% = (Target - IP) / Target x 100<br>
+            = (${node.target_buffer} - ${node.inventory_position}) / ${node.target_buffer} x 100
           </div>
           <div style="height:5px;background:var(--stone-100);border-radius:99px;overflow:hidden;margin-top:8px">
             <div style="width:${fill}%;height:100%;background:${this._zoneBarColor(node.zone)};border-radius:99px"></div>
@@ -2066,7 +2051,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── Timeline ───────────────────────────────────────────────────────────────
+    // -- Timeline ---------------------------------------------------------------
     if (node.days_open > 0) {
       parts.push(`
         <div class="sct-panel-section">
@@ -2086,7 +2071,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── Document fields (per-doctype key-value pairs) ──────────────────────────
+    // -- Document fields (per-doctype key-value pairs) --------------------------
     const fields = this._panelFields(node);
     if (fields.length) {
       parts.push(`
@@ -2100,7 +2085,7 @@ class SupplyChainTracker {
         </div>`);
     }
 
-    // ── Connected documents (direct neighbours only, not full lineage) ─────────
+    // -- Connected documents (direct neighbours only, not full lineage) ---------
     const connected = this._connected(node.id);
     if (connected.upstream.length || connected.downstream.length) {
       if (this.viewMode === "pipeline") {
@@ -2113,7 +2098,7 @@ class SupplyChainTracker {
                 <span class="sct-p-link-name">${frappe.utils.escape_html(n.label || n.doc_name)}</span>
                 <span class="sct-p-link-ref">${frappe.utils.escape_html(n.doctype || "")}</span>
               </div>`).join("") :
-              `<div style="font-size:11px;color:var(--stone-400);font-style:italic;padding:2px 0">Origin — no prior steps</div>`}
+              `<div style="font-size:11px;color:var(--stone-400);font-style:italic;padding:2px 0">Origin -- no prior steps</div>`}
           </div>
           <div class="sct-panel-section">
             <div class="sct-panel-section-title">↓ Next Steps (Outputs)</div>
@@ -2122,7 +2107,7 @@ class SupplyChainTracker {
                 <span class="sct-p-link-name">${frappe.utils.escape_html(n.label || n.doc_name)}</span>
                 <span class="sct-p-link-ref">${frappe.utils.escape_html(n.doctype || "")}</span>
               </div>`).join("") :
-              `<div style="font-size:11px;color:var(--stone-400);font-style:italic;padding:2px 0">Terminal — pipeline end</div>`}
+              `<div style="font-size:11px;color:var(--stone-400);font-style:italic;padding:2px 0">Terminal -- pipeline end</div>`}
           </div>`);
 
         // Chain summary stats (uses _chainCounts for full BFS count, not just direct neighbours)
@@ -2151,12 +2136,12 @@ class SupplyChainTracker {
             <div class="sct-panel-section-title">Connected Documents</div>
             ${connected.upstream.map(n => `
               <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
-                <span class="sct-panel-row-key" style="color:#34d399">← From</span>
+                <span class="sct-panel-row-key" style="color:#34d399"><- From</span>
                 <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
               </div>`).join("")}
             ${connected.downstream.map(n => `
               <div class="sct-panel-row" style="cursor:pointer" data-nav-id="${frappe.utils.escape_html(n.id)}">
-                <span class="sct-panel-row-key" style="color:#f59e0b">→ To</span>
+                <span class="sct-panel-row-key" style="color:#f59e0b">-> To</span>
                 <span class="sct-panel-row-val">${frappe.utils.escape_html(n.doc_name)} <small style="color:var(--stone-400)">(${frappe.utils.escape_html(n.doctype)})</small></span>
               </div>`).join("")}
           </div>`);
@@ -2170,12 +2155,12 @@ class SupplyChainTracker {
    * Build the quick-action button bar at the bottom of the detail panel.
    *
    * Buttons generated based on node type:
-   *   All doc nodes      → "Open in ERPNext" (deep link to the actual document)
-   *   Item/output nodes  → "Priority Board" (routes to Production Priority Board report)
+   *   All doc nodes      -> "Open in ERPNext" (deep link to the actual document)
+   *   Item/output nodes  -> "Priority Board" (routes to Production Priority Board report)
    *                        "Item Master" (direct link to Item form)
-   *   WO / JC nodes      → "Work Order List" shortcut
-   *   PO / PR nodes      → "Purchase Order List" shortcut
-   *   All nodes          → "Close" button (always last)
+   *   WO / JC nodes      -> "Work Order List" shortcut
+   *   PO / PR nodes      -> "Purchase Order List" shortcut
+   *   All nodes          -> "Close" button (always last)
    */
   _panelActions(node) {
     const actions = [];
@@ -2336,35 +2321,36 @@ class SupplyChainTracker {
     return { upstream, downstream };
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  CLIENT-SIDE FILTERS
   //  Applied to the already-loaded nodes/tracks arrays without a server round-trip.
   //  Returns { visibleNodes, visibleTracks } for the active view to render.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
 
   /**
    * Apply all active client-side filters and return the sets of visible records.
    *
    * Filter logic:
-   *   search   — substring match across item code, name, doc names, supplier
-   *   zone     — for tracks: match track.zone; for nodes: match item-stage zone,
+   *   search   -- substring match across item code, name, doc names, supplier
+   *   zone     -- for tracks: match track.zone; for nodes: match item-stage zone,
    *              then BFS-expand to include all reachable nodes in the edge graph
-   *   doctype  — filter nodes by ERPNext doctype (uses docTypeMap abbreviation → full name)
-   *   overdue  — tracks: track.overdue_count > 0; nodes: node.is_overdue (items excluded)
-   *   auto     — tracks: has at least one "By System" doc; nodes: recorded_by === "By System"
-   *   noaction — tracks: no open MR for this item (items that need attention but have no trigger)
+   *   doctype  -- filter nodes by ERPNext doctype (uses docTypeMap abbreviation -> full name)
+   *   overdue  -- tracks: track.overdue_count > 0; nodes: node.is_overdue (items excluded)
+   *   auto     -- tracks: has at least one "By System" doc; nodes: recorded_by === "By System"
+   *   noaction -- tracks: no open MR for this item (items that need attention but have no trigger)
    *
    * NOTE: Zone filter on the pipeline view uses BFS propagation (_reachable) to
    *       include the full document chain of zone-matching items, not just the items
    *       themselves. This ensures the pipeline shows complete supply chains.
    */
   _applyClientFilters() {
-    const q        = this.f.search.toLowerCase().trim();
-    const fZone    = this.f.zone;
-    const fDoctype = this.f.doctype;
-    const fOverdue = this.f.overdue;
-    const fAuto    = this.f.auto;
-    const fNoaction= this.f.noaction;
+    const q          = this.f.search.toLowerCase().trim();
+    const fZone      = this.f.zone;
+    const fDoctype   = this.f.doctype;
+    const fOverdue   = this.f.overdue;
+    const fAuto      = this.f.auto;
+    const fNoaction  = this.f.noaction;
+    const fItemGroup = (this.f.item_group || "").toLowerCase().trim();
 
     // Map filter-panel abbreviations to full ERPNext doctype names
     const docTypeMap = {
@@ -2375,11 +2361,13 @@ class SupplyChainTracker {
     };
     const allowedDoctype = fDoctype !== "All" ? docTypeMap[fDoctype] : null;
 
-    // ── Filter tracks for the Tracker view ──────────────────────────────────
+    // -- Filter tracks for the Tracker view ----------------------------------
     let visibleTracks = this.tracks.filter(track => {
       if (fZone !== "All" && track.zone !== fZone) return false;
       if (fOverdue && track.overdue_count === 0) return false;
-      // noaction: exclude items that have an open (non-closed) MR — keep items with NO open MR
+      // item_group: client-side substring match against the track's item group
+      if (fItemGroup && !(track.item_group || "").toLowerCase().includes(fItemGroup)) return false;
+      // noaction: exclude items that have an open (non-closed) MR -- keep items with NO open MR
       if (fNoaction && track.documents.some(d => d.stage === "material_request" && !d.is_closed)) return false;
 
       if (q) {
@@ -2393,11 +2381,15 @@ class SupplyChainTracker {
       return true;
     });
 
-    // ── Filter nodes for the Pipeline view ────────────────────────────────────
+    // -- Filter nodes for the Pipeline view ------------------------------------
     let visibleNodes = this.nodes.filter(node => {
-      // Zone filter on items only — non-item nodes are propagated by BFS below
+      // Zone filter on items only -- non-item nodes are propagated by BFS below
       if (fZone !== "All") {
         if (node.stage === "items" && node.zone !== fZone) return false;
+      }
+      // item_group: filter item/output nodes only (documents don't carry item_group)
+      if (fItemGroup && (node.stage === "items" || node.stage === "output")) {
+        if (!(node.item_group || "").toLowerCase().includes(fItemGroup)) return false;
       }
       // Doctype filter: skip item and output nodes (they don't have a doctype match)
       if (allowedDoctype && node.doctype !== allowedDoctype && node.stage !== "items" && node.stage !== "output") return false;
@@ -2429,9 +2421,9 @@ class SupplyChainTracker {
    * Returns a Set of all node ids reachable from any seed via forward or backward edges.
    * Used by _applyClientFilters() for zone-filter propagation.
    *
-   * @param {Set<string>}  seeds      — starting nodes
-   * @param {string[]}     nodeIdSet  — only traverse edges whose endpoints are in this set
-   * @returns {Set<string>} — all reachable node ids (inclusive of seeds)
+   * @param {Set<string>}  seeds      -- starting nodes
+   * @param {string[]}     nodeIdSet  -- only traverse edges whose endpoints are in this set
+   * @returns {Set<string>} -- all reachable node ids (inclusive of seeds)
    */
   _reachable(seeds, nodeIdSet) {
     const nodeSet = new Set(nodeIdSet);
@@ -2458,8 +2450,8 @@ class SupplyChainTracker {
    * Used by the panel "Multi-Node Path Summary" section.
    *
    * Runs two independent BFS traversals:
-   *   upstream   → BFS on the backward (bwd) adjacency map
-   *   downstream → BFS on the forward (fwd) adjacency map
+   *   upstream   -> BFS on the backward (bwd) adjacency map
+   *   downstream -> BFS on the forward (fwd) adjacency map
    *
    * Returns { upstream: number, downstream: number }
    * The caller adds +1 for the node itself to get total chain size.
@@ -2481,25 +2473,25 @@ class SupplyChainTracker {
     return { upstream: bfs(id, bwd), downstream: bfs(id, fwd) };
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  EVENT BINDINGS
   //  All event listeners set up once during init(). Subsequent re-renders do
-  //  not re-bind these — they remain active for the page lifetime.
-  // ══════════════════════════════════════════════════════════════════════════════
+  //  not re-bind these -- they remain active for the page lifetime.
+  // ==============================================================================
 
   /**
    * Bind the command bar (top row of controls):
-   *   Search input      — debounced 280ms; shows/hides clear button
-   *   Clear button      — clears search and re-renders
-   *   View-mode buttons — toggle between Tracker and Pipeline views
-   *   Filter toggle     — show/hide the filter panel
-   *   Days-back select  — changes look-back window, triggers server reload
-   *   Scroll/resize     — redraws SVG edges when pipeline scroll position changes;
+   *   Search input      -- debounced 280ms; shows/hides clear button
+   *   Clear button      -- clears search and re-renders
+   *   View-mode buttons -- toggle between Tracker and Pipeline views
+   *   Filter toggle     -- show/hide the filter panel
+   *   Days-back select  -- changes look-back window, triggers server reload
+   *   Scroll/resize     -- redraws SVG edges when pipeline scroll position changes;
    *                       preserves liveMode if a card is currently selected
-   *   Background click  — clicking empty pipeline area deselects and closes panel
+   *   Background click  -- clicking empty pipeline area deselects and closes panel
    */
   _bindCommandBar() {
-    // ── Debounced search ───────────────────────────────────────────────────────
+    // -- Debounced search -------------------------------------------------------
     const searchEl = document.getElementById("sct-search");
     const clearEl  = document.getElementById("sct-search-clear");
     let debounce;
@@ -2516,7 +2508,7 @@ class SupplyChainTracker {
       this.render();
     });
 
-    // ── View mode toggle ────────────────────────────────────────────────────────
+    // -- View mode toggle --------------------------------------------------------
     document.querySelectorAll(".sct-view-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         const view = btn.dataset.view;
@@ -2534,13 +2526,13 @@ class SupplyChainTracker {
       });
     });
 
-    // ── Pipeline Clear Selection ────────────────────────────────────────────────
+    // -- Pipeline Clear Selection ------------------------------------------------
     document.getElementById("sct-clear-btn")?.addEventListener("click", () => {
       this._clearSelection();
       this._closePanel();
     });
 
-    // ── Filter panel toggle ────────────────────────────────────────────────────
+    // -- Filter panel toggle ----------------------------------------------------
     document.getElementById("sct-filter-toggle")?.addEventListener("click", () => {
       const panel = document.getElementById("sct-filter-panel");
       const btn   = document.getElementById("sct-filter-toggle");
@@ -2548,13 +2540,13 @@ class SupplyChainTracker {
       btn.classList.toggle("active", panel.classList.contains("open"));
     });
 
-    // ── Days-back window change (server-side) ──────────────────────────────────
+    // -- Days-back window change (server-side) ----------------------------------
     document.getElementById("sct-days-back")?.addEventListener("change", (e) => {
       this.f.days_back = parseInt(e.target.value);
-      this.load();  // Requires new server fetch — changes document set
+      this.load();  // Requires new server fetch -- changes document set
     });
 
-    // ── Pipeline scroll / resize: redraw edges ─────────────────────────────────
+    // -- Pipeline scroll / resize: redraw edges ---------------------------------
     // When the user scrolls the pipeline container or resizes the window, card
     // positions shift, so edges must be redrawn from scratch.
     // We use a rAF-debounce to avoid firing dozens of times per scroll frame.
@@ -2568,7 +2560,7 @@ class SupplyChainTracker {
           const { visibleNodes } = this._applyClientFilters();
           const ids = new Set(visibleNodes.map(n => n.id));
           // Pass all cardEls ids (not just visibleNodes) so hidden-card skip in _drawEdges
-          // handles filtering — otherwise reselected-card edges could disappear on scroll
+          // handles filtering -- otherwise reselected-card edges could disappear on scroll
           this._drawEdges(this.selectedId ? new Set(Object.keys(this.cardEls)) : ids,
                           !!this.selectedId);
         });
@@ -2577,7 +2569,7 @@ class SupplyChainTracker {
       window.addEventListener("resize", redraw);
     }
 
-    // ── Background click: deselect ─────────────────────────────────────────────
+    // -- Background click: deselect ---------------------------------------------
     // Clicking empty canvas (not a card) clears selection and closes panel.
     // Must check both .sct-card (tracker) and .sct-card-v2 (pipeline).
     document.getElementById("sct-pl-scroll")?.addEventListener("click", e => {
@@ -2589,55 +2581,23 @@ class SupplyChainTracker {
   }
 
   /**
-   * Bind the filter panel interactions:
-   *   Pill clicks      — toggle active pill within each filter group; update this.f
-   *   Apply button     — read all filter values; reload server if supplier/warehouse changed
-   *   Reset button     — restore all filters to defaults; re-render
+   * Bind the filter panel interactions.
+   * Pills apply immediately on click (no Apply button in new HTML).
+   * data-filter="zone" and data-value="Red" are the attribute names in Tiger Theme HTML.
    */
   _bindFilterPanel() {
-    // Single delegated listener on the panel for all pill clicks
+    // Single delegated listener on the panel for all pill clicks.
+    // Pills apply immediately -- no Apply button needed.
     document.getElementById("sct-filter-panel")?.addEventListener("click", e => {
       const pill = e.target.closest(".sct-fpill");
       if (!pill) return;
-      const group = pill.dataset.f;   // "type" | "zone" | "doctype"
-      const val   = pill.dataset.v;
+      const group = pill.dataset.filter;   // "zone" (only zone pills in new HTML)
+      const val   = pill.dataset.value;
       // Deactivate all pills in this group, then activate the clicked one
-      document.querySelectorAll(`.sct-fpill[data-f="${group}"]`).forEach(p => p.classList.remove("active"));
+      document.querySelectorAll(`.sct-fpill[data-filter="${group}"]`).forEach(p => p.classList.remove("active"));
       pill.classList.add("active");
-      if      (group === "type")    this.f.type    = val;
-      else if (group === "zone")    this.f.zone    = val;
-      else if (group === "doctype") this.f.doctype = val;
-      // Note: pill clicks don't trigger render — user must click Apply
-    });
-
-    document.getElementById("sct-btn-apply")?.addEventListener("click", () => {
-      this.f.supplier  = document.getElementById("sct-f-supplier")?.value.trim()  || "";
-      this.f.warehouse = document.getElementById("sct-f-warehouse")?.value.trim() || "";
-      this.f.overdue   = document.getElementById("sct-f-overdue")?.checked  || false;
-      this.f.auto      = document.getElementById("sct-f-auto")?.checked     || false;
-      this.f.noaction  = document.getElementById("sct-f-noaction")?.checked || false;
-
-      // Supplier and warehouse require server-side SQL join — trigger full reload
-      const needReload = this.f.supplier || this.f.warehouse;
-      if (needReload) this.load(); else this.render();
-    });
-
-    document.getElementById("sct-btn-reset")?.addEventListener("click", () => {
-      // Reset filter state (keep days_back and search intact)
-      this.f = { ...this.f, type: "All", zone: "All", doctype: "All", supplier: "", warehouse: "", overdue: false, auto: false, noaction: false };
-      // Reset all pill visuals to "All" active
-      document.querySelectorAll(".sct-fpill").forEach(p => {
-        p.classList.toggle("active", p.dataset.v === "All");
-      });
-      // Clear custom dropdown inputs
-      ["sct-dd-supplier", "sct-dd-warehouse"].forEach(id => {
-        const wrap = document.getElementById(id);
-        if (!wrap) return;
-        const inp = wrap.querySelector(".sct-dd-input");
-        if (inp) { inp.value = ""; inp.classList.remove("has-value"); }
-        wrap.classList.remove("has-value", "open");
-      });
-      ["sct-f-overdue","sct-f-auto","sct-f-noaction"].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+      if (group === "zone") this.f.zone = val;
+      // Apply immediately on click
       this.render();
     });
   }
@@ -2651,35 +2611,47 @@ class SupplyChainTracker {
   }
 
   /**
-   * Bind the summary strip stat cards so clicking a zone stat applies a zone filter.
-   * E.g. clicking "🚨 12 Red / Stockout" sets zone="Red" and re-renders.
+   * Bind the summary strip zone-filter shortcuts via event delegation.
+   * The strip is built dynamically by _updateSummary(), so we delegate from
+   * #sct-summary rather than binding directly to (not-yet-existing) stat cards.
    */
   _bindSummaryClicks() {
-    document.querySelectorAll(".sct-stat[data-zone]").forEach(stat => {
-      stat.addEventListener("click", () => {
-        const zone = stat.dataset.zone;
-        this.f.zone = zone;
-        // Update filter pills to reflect the programmatic change
-        document.querySelectorAll(`.sct-fpill[data-f="zone"]`).forEach(p => {
-          p.classList.toggle("active", p.dataset.v === zone);
-        });
-        this.render();
+    document.getElementById("sct-summary")?.addEventListener("click", e => {
+      const stat = e.target.closest("[data-zone]");
+      if (!stat) return;
+      const zone = stat.dataset.zone;
+      this.f.zone = zone;
+      // Update filter pills to reflect the programmatic change
+      document.querySelectorAll(`.sct-fpill[data-filter="zone"]`).forEach(p => {
+        p.classList.toggle("active", p.dataset.value === zone);
       });
+      this.render();
     });
   }
 
   /**
-   * Fetch supplier and warehouse lists from the server once at startup.
-   * These populate the custom searchable dropdowns in the filter panel.
+   * Fetch supplier and item group lists from the server once at startup.
+   * Supplier selection triggers a server reload (SQL join).
+   * Item group selection is applied client-side only.
+   * New dropdown IDs match the Tiger Theme HTML: dd-supplier, dd-group.
    */
   _loadFilterOptions() {
     frappe.call({
       method: "chaizup_toc.api.pipeline_api.get_filter_options",
       callback: (r) => {
         if (!r.message) return;
-        const { suppliers = [], warehouses = [] } = r.message;
-        this._initSearchDropdown("sct-dd-supplier",  "sct-f-supplier",  suppliers);
-        this._initSearchDropdown("sct-dd-warehouse", "sct-f-warehouse", warehouses);
+        const { suppliers = [], item_groups = [], warehouses = [] } = r.message;
+        // Supplier: server-side filter -- triggers load()
+        this._initSearchDropdown("dd-supplier", suppliers, (val) => {
+          this.f.supplier = val;
+          this.load();
+        });
+        // Item group: client-side filter -- triggers render() only
+        const groups = item_groups.length ? item_groups : warehouses;
+        this._initSearchDropdown("dd-group", groups, (val) => {
+          this.f.item_group = val;
+          this.render();
+        });
       },
     });
   }
@@ -2688,24 +2660,24 @@ class SupplyChainTracker {
    * Initialise a custom searchable dropdown widget.
    *
    * The dropdown handles:
-   *   • Type-to-filter with live substring highlight in results
-   *   • Keyboard navigation (ArrowDown/Up = move focus, Enter = select, Escape = close)
-   *   • Click-outside to close (mousedown on capture phase to beat blur)
-   *   • Clear button (✕) to reset selection
-   *   • Committed vs. typed state: if user types but doesn't select, input reverts
+   *   - Type-to-filter with live substring highlight in results
+   *   - Keyboard navigation (ArrowDown/Up = move focus, Enter = select, Escape = close)
+   *   - Click-outside to close (mousedown on capture phase to beat blur)
+   *   - Clear button (x) to reset selection
+   *   - Committed vs. typed state: if user types but doesn't select, input reverts
    *     to the previously committed value on blur/close
    *
-   * The "committed" value is stored in the closure — it is the formally selected
-   * value that will be used when Apply is clicked. The input .value may temporarily
-   * differ from committed while the user is typing.
+   * The input element is found by class .sct-dd-input within the wrapper --
+   * no separate inputId needed. onSelect callback fires immediately on selection
+   * (no Apply button required in the Tiger Theme layout).
    *
-   * @param {string}   wrapperId  — id of the .sct-dd wrapper element
-   * @param {string}   inputId    — id of the text input inside it
-   * @param {string[]} items      — complete options list fetched from the server
+   * @param {string}      wrapperId  -- id of the .sct-dd wrapper element
+   * @param {string[]}    items      -- complete options list fetched from the server
+   * @param {function}    onSelect   -- called with (value) when user commits a selection or clears
    */
-  _initSearchDropdown(wrapperId, inputId, items) {
+  _initSearchDropdown(wrapperId, items, onSelect) {
     const wrap   = document.getElementById(wrapperId);
-    const input  = document.getElementById(inputId);
+    const input  = wrap?.querySelector(".sct-dd-input");
     const list   = wrap?.querySelector(".sct-dd-list");
     const clear  = wrap?.querySelector(".sct-dd-clear");
     if (!wrap || !input || !list) return;
@@ -2746,7 +2718,7 @@ class SupplyChainTracker {
         el.setAttribute("role", "option");
         el.innerHTML = _highlight(item, q_lower);
         el.addEventListener("mousedown", (e) => {
-          e.preventDefault();   // Prevent blur on input — blur would close the list before click registers
+          e.preventDefault();   // Prevent blur on input -- blur would close the list before click registers
           _select(item);
         });
         list.appendChild(el);
@@ -2773,22 +2745,25 @@ class SupplyChainTracker {
       }
     };
 
-    // Formally select a value: update committed and close the dropdown
+    // Formally select a value: update committed and close the dropdown.
+    // Calls onSelect immediately so no Apply button is needed.
     const _select = (val) => {
       committed = val;
       input.value = val;
       input.classList.add("has-value");
       wrap.classList.add("has-value");
       _close();
+      if (onSelect) onSelect(val);
     };
 
-    // Clear the committed value and reset input
+    // Clear the committed value and reset input.
     const _clearValue = () => {
       committed = "";
       input.value = "";
       input.classList.remove("has-value");
       wrap.classList.remove("has-value");
       _close();
+      if (onSelect) onSelect("");
     };
 
     // Move keyboard focus within the list, scroll to keep focused item visible
@@ -2801,7 +2776,7 @@ class SupplyChainTracker {
       rows[focusIdx].scrollIntoView({ block: "nearest" });
     };
 
-    // ── Event listeners ────────────────────────────────────────────────────────
+    // -- Event listeners --------------------------------------------------------
     input.addEventListener("focus", () => _open());
     input.addEventListener("input", () => {
       wrap.classList.toggle("has-value", !!input.value);
@@ -2820,7 +2795,7 @@ class SupplyChainTracker {
       else if (e.key === "Escape") { _close(); input.blur(); }
     });
 
-    // Close on click outside — use capture phase to run before focus events
+    // Close on click outside -- use capture phase to run before focus events
     document.addEventListener("mousedown", (e) => {
       if (!wrap.contains(e.target)) _close();
     }, { capture: true });
@@ -2839,24 +2814,50 @@ class SupplyChainTracker {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  SUMMARY STRIP
-  //  Populates the stat cards at the top of the page.
-  //  red/yellow/green/mrs/wos/pos come from the server summary object.
-  //  overdue count is computed client-side from this.tracks (avoids an extra API call).
-  // ══════════════════════════════════════════════════════════════════════════════
+  //  Builds stat cards dynamically -- the new Tiger Theme HTML has an empty
+  //  #sct-summary div that we populate here. Each card is clickable to filter
+  //  by zone (handled via event delegation in _bindSummaryClicks).
+  //  overdue count is computed client-side from this.tracks.
+  // ==============================================================================
   _updateSummary(s, meta) {
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? "—"; };
-    set("sct-s-red",    s.red    ?? 0);
-    set("sct-s-yellow", s.yellow ?? 0);
-    set("sct-s-green",  s.green  ?? 0);
-    set("sct-s-mrs",    s.mrs    ?? 0);
-    set("sct-s-wos",    s.wos    ?? 0);
-    set("sct-s-pos",    s.pos    ?? 0);
-    set("sct-s-items",  meta.total_items ?? 0);
-    // Count items with at least one overdue document (client-side, from tracks array)
+    const strip = document.getElementById("sct-summary");
+    if (!strip) return;
     const overdueCount = this.tracks.filter(t => t.overdue_count > 0).length;
-    set("sct-s-overdue", overdueCount);
+    const total = meta.total_items ?? 0;
+
+    const stat = (zone, icon, label, count) =>
+      `<div class="sct-stat clickable" data-zone="${zone}" title="Click to filter by ${label} zone">
+        <span class="sct-stat-val">${count}</span>
+        <span class="sct-stat-lbl">${icon} ${label}</span>
+       </div>`;
+
+    strip.innerHTML = [
+      stat("Red",    "🔴", "Red",    s.red    ?? 0),
+      stat("Yellow", "🟡", "Yellow", s.yellow ?? 0),
+      stat("Green",  "🟢", "Green",  s.green  ?? 0),
+      `<div class="sct-stat">
+        <span class="sct-stat-val">${s.mrs ?? 0}</span>
+        <span class="sct-stat-lbl">📋 Open MRs</span>
+       </div>`,
+      `<div class="sct-stat">
+        <span class="sct-stat-val">${s.wos ?? 0}</span>
+        <span class="sct-stat-lbl">⚙ Work Orders</span>
+       </div>`,
+      `<div class="sct-stat">
+        <span class="sct-stat-val">${s.pos ?? 0}</span>
+        <span class="sct-stat-lbl">🛒 Purchase Orders</span>
+       </div>`,
+      overdueCount > 0 ? `<div class="sct-stat sct-stat-warn">
+        <span class="sct-stat-val">${overdueCount}</span>
+        <span class="sct-stat-lbl">⚠ Overdue</span>
+       </div>` : "",
+      total ? `<div class="sct-stat">
+        <span class="sct-stat-val">${total}</span>
+        <span class="sct-stat-lbl">📦 Items</span>
+       </div>` : "",
+    ].join("");
   }
 
   /**
@@ -2865,15 +2866,15 @@ class SupplyChainTracker {
    */
   _updateFilterBadge() {
     let count = 0;
-    if (this.f.type    !== "All") count++;
-    if (this.f.zone    !== "All") count++;
-    if (this.f.doctype !== "All") count++;
-    if (this.f.supplier)          count++;
-    if (this.f.warehouse)         count++;
-    if (this.f.overdue)           count++;
-    if (this.f.auto)              count++;
-    if (this.f.noaction)          count++;
-    if (this.f.search)            count++;
+    if (this.f.type       !== "All") count++;
+    if (this.f.zone       !== "All") count++;
+    if (this.f.doctype    !== "All") count++;
+    if (this.f.supplier)             count++;
+    if (this.f.item_group)           count++;
+    if (this.f.overdue)              count++;
+    if (this.f.auto)                 count++;
+    if (this.f.noaction)             count++;
+    if (this.f.search)               count++;
     const badge = document.getElementById("sct-filter-badge");
     if (badge) {
       badge.style.display = count > 0 ? "inline" : "none";
@@ -2883,14 +2884,14 @@ class SupplyChainTracker {
 
   /** Show/hide the loading spinner. */
   _setLoading(show) {
-    const el = document.getElementById("sct-loading");
+    const el = document.getElementById("sct-loader");
     if (el) el.style.display = show ? "flex" : "none";
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
   //  BADGE / COLOUR HELPERS
   //  Small, pure functions that produce HTML strings or CSS values.
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ==============================================================================
 
   /** Return the HTML for a zone badge (🔴 Red, 🟡 Yellow, 🟢 Green, ⚫ Black). */
   _zoneBadge(zone) {

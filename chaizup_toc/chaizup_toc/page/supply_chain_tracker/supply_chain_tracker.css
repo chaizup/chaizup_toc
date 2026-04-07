@@ -193,11 +193,14 @@
   box-shadow: var(--sh-sm);
   transition: all var(--tf);
 }
+.sct-stat.clickable { cursor: pointer; }
 .sct-stat.clickable:hover {
   transform: translateY(-1px);
   box-shadow: var(--sh-md);
   border-color: var(--brand-500);
 }
+.sct-stat-warn { border-color: var(--warn-500); }
+.sct-stat-warn .sct-stat-val { color: var(--warn-600); }
 .sct-stat-val {
   font-family: var(--font-display);
   font-size: 20px;
