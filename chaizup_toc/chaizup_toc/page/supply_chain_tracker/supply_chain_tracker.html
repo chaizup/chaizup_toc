@@ -1,294 +1,132 @@
 <!--
   supply_chain_tracker.html — Supply Chain Tracker Page Template
   ══════════════════════════════════════════════════════════════
-
-  DOM Structure Overview:
-  ┌──────────────────────────────────────────────────────────────┐
-  │ .sct-root                  (full-height flex column)         │
-  │   .sct-command-bar         search · view toggle · filter btn │
-  │   .sct-filter-panel        collapsible filter drawer         │
-  │   .sct-summary-strip       stat cards (zone counts + docs)   │
-  │   .sct-content                                               │
-  │     #sct-loading           spinner (shown during API fetch)  │
-  │     .sct-tracker-wrap      Tracker view (active by default)  │
-  │     .sct-pipeline-wrap     Pipeline view (hidden by default) │
-  │       .sct-canvas-bar      hint text + clear button          │
-  │       .sct-pipeline-scroll overflow-x scroll container       │
-  │         .pl-grid           (injected by JS: SVG + stages)    │
-  │   .sct-panel               detail slide-in panel             │
-  └──────────────────────────────────────────────────────────────┘
-
-  The pipeline's .pl-grid and its contents are created entirely by JS
-  (_renderPipeline). Only the scroll wrapper and SVG skeleton are here.
-
-  All interactive IDs are referenced in supply_chain_tracker.js:
-    #sct-search, #sct-search-clear  — search input
-    #sct-btn-tracker, #sct-btn-pipeline — view toggle
-    #sct-filter-toggle, #sct-filter-panel — filter drawer
-    #sct-days-select — look-back window selector
-    #sct-filter-badge — active filter count badge
-    #sct-s-* — summary strip value spans
-    #sct-tracker-wrap, #sct-pipeline-wrap — view containers
-    #sct-svg-overlay — SVG edge layer (moved into .pl-grid by JS)
-    #sct-panel — detail panel
-    #sct-panel-title, #sct-panel-subtitle, #sct-panel-body, #sct-panel-actions
+  Updated with Tiger Theme structure and improved pipeline layout.
 -->
-<div class="sct-root" id="sct-root">
 
-  <!-- ── Command Bar ─────────────────────────────────────────────────────────
-       Top control row: search input, view toggle (Tracker/Pipeline),
-       filter panel toggle, and the days-back window selector.
-       All interactivity wired in _bindCommandBar().
-       ──────────────────────────────────────────────────────────────────── -->
-  <div class="sct-command-bar" id="sct-command-bar">
+<div class="sct-root">
+
+  <!-- ── 1. COMMAND BAR ── -->
+  <div class="sct-command-bar">
     <div class="sct-search-wrap">
       <span class="sct-search-icon">🔍</span>
-      <input type="text" class="sct-search-input" id="sct-search"
-             placeholder="Search item, doc number, supplier…">
-      <button class="sct-search-clear" id="sct-search-clear" title="Clear">✕</button>
+      <input type="text" class="sct-search-input" id="sct-search" placeholder="Search Item Code or Document...">
+      <button class="sct-search-clear" id="sct-search-clear">✕</button>
     </div>
 
     <div class="sct-view-btns">
-      <button class="sct-view-btn active" data-view="tracker" id="sct-btn-tracker">
-        <span>≡</span> Tracker
+      <button class="sct-view-btn active" data-view="tracker">
+        <span>📊</span> Tracker
       </button>
-      <button class="sct-view-btn" data-view="pipeline" id="sct-btn-pipeline">
-        <span>⇒</span> Pipeline
+      <button class="sct-view-btn" data-view="pipeline">
+        <span>⛓️</span> Pipeline
       </button>
     </div>
 
     <button class="sct-filter-toggle" id="sct-filter-toggle">
-      <span>⚙</span> Filters
+      <span>👁️</span> Filter
       <span class="sct-filter-badge" id="sct-filter-badge">0</span>
     </button>
 
-    <select class="sct-days-select" id="sct-days-select" title="Look-back window">
-      <option value="14">14 days</option>
-      <option value="30" selected>30 days</option>
-      <option value="60">60 days</option>
-      <option value="90">90 days</option>
-      <option value="180">180 days</option>
+    <select class="sct-days-select" id="sct-days-back">
+      <option value="15">Last 15 Days</option>
+      <option value="30" selected>Last 30 Days</option>
+      <option value="60">Last 60 Days</option>
+      <option value="90">Last 90 Days</option>
     </select>
   </div>
 
-  <!-- ── Filter Panel ────────────────────────────────────────────────────────
-       Collapsible drawer opened by the ⚙ Filters button.
-       Three pill groups: Buffer Type, Zone, Document Type (client-side filters).
-       Two searchable dropdowns: Supplier, Warehouse (server-side filters).
-       Special checkboxes: Overdue only, TOC Auto-generated only, Items with no open MR.
-       Apply button: reads all values and calls load() or render() as needed.
-       Reset button: restores all filters to defaults.
-       ──────────────────────────────────────────────────────────────────── -->
+  <!-- ── 2. FILTER PANEL ── -->
   <div class="sct-filter-panel" id="sct-filter-panel">
     <div class="sct-filter-group">
-      <div class="sct-filter-group-label">Buffer Type</div>
+      <div class="sct-filter-group-label">Buffer Zone</div>
       <div class="sct-filter-pills">
-        <span class="sct-fpill active" data-f="type" data-v="All">All</span>
-        <span class="sct-fpill" data-f="type" data-v="FG">FG</span>
-        <span class="sct-fpill" data-f="type" data-v="SFG">SFG</span>
-        <span class="sct-fpill" data-f="type" data-v="RM">RM</span>
-        <span class="sct-fpill" data-f="type" data-v="PM">PM</span>
+        <div class="sct-fpill" data-filter="zone" data-value="Red">Red</div>
+        <div class="sct-fpill" data-filter="zone" data-value="Yellow">Yellow</div>
+        <div class="sct-fpill" data-filter="zone" data-value="Green">Green</div>
+        <div class="sct-fpill" data-filter="zone" data-value="Black">Black</div>
       </div>
     </div>
-    <div class="sct-filter-group">
-      <div class="sct-filter-group-label">Zone</div>
-      <div class="sct-filter-pills">
-        <span class="sct-fpill active"          data-f="zone" data-v="All">All</span>
-        <span class="sct-fpill zone-Red"    data-f="zone" data-v="Red">🔴 Red</span>
-        <span class="sct-fpill zone-Yellow" data-f="zone" data-v="Yellow">🟡 Yellow</span>
-        <span class="sct-fpill zone-Green"  data-f="zone" data-v="Green">🟢 Green</span>
-        <span class="sct-fpill zone-Black"  data-f="zone" data-v="Black">⚫ Black</span>
-      </div>
-    </div>
-    <div class="sct-filter-group">
-      <div class="sct-filter-group-label">Document Type</div>
-      <div class="sct-filter-pills">
-        <span class="sct-fpill active" data-f="doctype" data-v="All">All</span>
-        <span class="sct-fpill" data-f="doctype" data-v="MR">MR</span>
-        <span class="sct-fpill" data-f="doctype" data-v="RFQ">RFQ</span>
-        <span class="sct-fpill" data-f="doctype" data-v="PP">Prod. Plan</span>
-        <span class="sct-fpill" data-f="doctype" data-v="SQ">SQ</span>
-        <span class="sct-fpill" data-f="doctype" data-v="WO">Work Order</span>
-        <span class="sct-fpill" data-f="doctype" data-v="PO">PO</span>
-        <span class="sct-fpill" data-f="doctype" data-v="JC">Job Card</span>
-        <span class="sct-fpill" data-f="doctype" data-v="PR">Receipt</span>
-        <span class="sct-fpill" data-f="doctype" data-v="SE">Stock Entry</span>
-      </div>
-    </div>
+
     <div class="sct-filter-group">
       <div class="sct-filter-group-label">Supplier</div>
-      <div class="sct-dd" id="sct-dd-supplier">
+      <div class="sct-dd" id="dd-supplier">
         <div class="sct-dd-trigger">
-          <input type="text" class="sct-dd-input" id="sct-f-supplier"
-                 placeholder="Search supplier…" autocomplete="off" spellcheck="false">
-          <button class="sct-dd-clear" id="sct-dd-supplier-clear" tabindex="-1" aria-label="Clear">✕</button>
-          <span class="sct-dd-arrow" aria-hidden="true">▾</span>
+          <input type="text" class="sct-dd-input" placeholder="Select Supplier..." readonly>
+          <span class="sct-dd-arrow">▼</span>
         </div>
-        <div class="sct-dd-list" id="sct-dd-supplier-list" role="listbox"></div>
+        <div class="sct-dd-list"></div>
       </div>
     </div>
-    <div class="sct-filter-group">
-      <div class="sct-filter-group-label">Warehouse</div>
-      <div class="sct-dd" id="sct-dd-warehouse">
-        <div class="sct-dd-trigger">
-          <input type="text" class="sct-dd-input" id="sct-f-warehouse"
-                 placeholder="Search warehouse…" autocomplete="off" spellcheck="false">
-          <button class="sct-dd-clear" id="sct-dd-warehouse-clear" tabindex="-1" aria-label="Clear">✕</button>
-          <span class="sct-dd-arrow" aria-hidden="true">▾</span>
-        </div>
-        <div class="sct-dd-list" id="sct-dd-warehouse-list" role="listbox"></div>
-      </div>
-    </div>
-    <div class="sct-filter-group">
-      <div class="sct-filter-group-label">Special</div>
-      <label class="sct-filter-check">
-        <input type="checkbox" id="sct-f-overdue"> Overdue only
-      </label>
-      <label class="sct-filter-check" style="margin-top:4px">
-        <input type="checkbox" id="sct-f-auto"> TOC Auto-generated only
-      </label>
-      <label class="sct-filter-check" style="margin-top:4px">
-        <input type="checkbox" id="sct-f-noaction"> Items with no open MR
-      </label>
-    </div>
-    <div class="sct-filter-actions">
-      <button class="sct-btn-apply" id="sct-btn-apply">Apply</button>
-      <button class="sct-btn-reset" id="sct-btn-reset">Reset</button>
-    </div>
-  </div>
 
-  <!-- ── Summary Strip ───────────────────────────────────────────────────────
-       Always-visible stat bar. Values populated by JS _updateSummary().
-       Red/Yellow/Green stats are clickable — clicking applies a zone filter.
-       Overdue count is computed client-side from tracks (not from server summary).
-       ──────────────────────────────────────────────────────────────────── -->
-  <div class="sct-summary-strip" id="sct-summary-strip">
-    <div class="sct-stat clickable" data-zone="Red" title="Click to filter Red/Stockout">
-      <span class="sct-stat-icon">🚨</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-red">—</span>
-        <span class="sct-stat-lbl">Red / Stockout</span>
-      </div>
-    </div>
-    <div class="sct-stat clickable" data-zone="Yellow" title="Click to filter Yellow">
-      <span class="sct-stat-icon">⚠️</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-yellow">—</span>
-        <span class="sct-stat-lbl">Yellow Zone</span>
-      </div>
-    </div>
-    <div class="sct-stat clickable" data-zone="Green" title="Click to filter Green">
-      <span class="sct-stat-icon">✅</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-green">—</span>
-        <span class="sct-stat-lbl">Green Zone</span>
-      </div>
-    </div>
-    <div class="sct-stat">
-      <span class="sct-stat-icon">📋</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-mrs">—</span>
-        <span class="sct-stat-lbl">Open MRs</span>
-      </div>
-    </div>
-    <div class="sct-stat">
-      <span class="sct-stat-icon">🏭</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-wos">—</span>
-        <span class="sct-stat-lbl">Active Work Orders</span>
-      </div>
-    </div>
-    <div class="sct-stat">
-      <span class="sct-stat-icon">🛒</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-pos">—</span>
-        <span class="sct-stat-lbl">Open Purchase Orders</span>
-      </div>
-    </div>
-    <div class="sct-stat" id="sct-s-overdue-stat">
-      <span class="sct-stat-icon">🔥</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-overdue">—</span>
-        <span class="sct-stat-lbl">Items w/ Overdue Docs</span>
-      </div>
-    </div>
-    <div class="sct-stat" style="margin-left:auto">
-      <span class="sct-stat-icon">📦</span>
-      <div class="sct-stat-body">
-        <span class="sct-stat-val" id="sct-s-items">—</span>
-        <span class="sct-stat-lbl">Items Tracked</span>
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Item Group</div>
+      <div class="sct-dd" id="dd-group">
+        <div class="sct-dd-trigger">
+          <input type="text" class="sct-dd-input" placeholder="Select Group..." readonly>
+          <span class="sct-dd-arrow">▼</span>
+        </div>
+        <div class="sct-dd-list"></div>
       </div>
     </div>
   </div>
 
-  <!-- ── Main Content ────────────────────────────────────────────────────────
-       Flex-grow area that fills remaining height below summary strip.
-       Contains the loading overlay, and the two view containers.
-       Only one view is visible at a time (.active class toggled by JS).
-       ──────────────────────────────────────────────────────────────────── -->
+  <!-- ── 3. SUMMARY STRIP ── -->
+  <div class="sct-summary-strip" id="sct-summary">
+    <!-- Built dynamically by JS -->
+  </div>
+
+  <!-- ── 4. MAIN CONTENT ── -->
   <div class="sct-content">
-
-    <!-- Loading spinner — shown while API fetch is in progress -->
-    <div id="sct-loading" class="sct-loading">
+    
+    <!-- Loading Overlay -->
+    <div class="sct-loading" id="sct-loader">
       <div class="sct-spinner"></div>
-      <span>Loading supply chain data…</span>
+      <div>Loading Pipeline Data...</div>
     </div>
 
-    <!-- ── Tracker View (default active) ──────────────────────────────────
-         Vertical list of collapsible .sct-track rows, one per TOC item.
-         Populated entirely by JS _renderTracker(). Body elements are lazy-built
-         on first expand for performance.
-         ──────────────────────────────────────────────────────────────── -->
-    <div class="sct-tracker-wrap active" id="sct-tracker-wrap">
-      <!-- Populated by JS _renderTracker() -->
+    <!-- Tracker View (Scrollable List) -->
+    <div class="sct-tracker-wrap active" id="sct-view-tracker">
+      <div id="sct-tracker-list"></div>
     </div>
 
-    <!-- ── Pipeline View (hidden by default) ──────────────────────────────
-         7-stage Kanban with SVG Bezier edges.
-         .sct-pipeline-scroll is the horizontal overflow container.
-         The .pl-grid inside it (and the SVG overlay) are injected by JS
-         _renderPipeline() — they do NOT exist in the initial HTML.
-         The SVG skeleton here is moved into .pl-grid by JS so it scrolls
-         with the stage columns.
-         ──────────────────────────────────────────────────────────────── -->
-    <div class="sct-pipeline-wrap" id="sct-pipeline-wrap">
-      <!-- Hint text + clear-selection button above the scrollable canvas -->
+    <!-- Pipeline View (SVG Canvas + Stages) -->
+    <div class="sct-pipeline-wrap" id="sct-view-pipeline">
       <div class="sct-canvas-bar">
-        <span class="sct-canvas-hint">Click a card to trace its lineage · Hover lines to highlight connections</span>
-        <button class="sct-clear-btn" id="sct-pl-clear-btn">
-          Clear Selection
-          <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" fill="none" stroke-width="2.5">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
+        <span class="sct-canvas-hint">Click a card to trace exact lineage. Click 'View' for ERP details.</span>
+        <button class="sct-clear-btn" id="sct-clear-btn">
+          Clear Selection ✕
         </button>
       </div>
-      <!-- Horizontal scroll container. JS will inject .pl-grid inside here. -->
-      <div class="sct-pipeline-scroll" id="sct-pipeline-scroll">
-        <!-- SVG overlay for Bezier edge paths.
-             JS _renderPipeline() moves this into .pl-grid so coordinates align.
-             The SVG is sized dynamically to match the full grid scrollWidth/Height. -->
-        <svg id="sct-svg-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+
+      <div class="sct-pipeline-scroll" id="sct-pl-scroll">
+        <div class="pl-grid" id="sct-pl-grid">
+          <!-- The SVG layer for Bezier curves -->
+          <svg id="sct-svg-overlay"></svg>
+          <!-- Stage columns 1-7 built dynamically by JS -->
+        </div>
       </div>
     </div>
+
   </div>
 
-  <!-- ── Detail Panel ──────────────────────────────────────────────────────
-       Slide-in side panel showing full document details for a selected node.
-       Populated by JS showPanel(node) via _panelBody() and _panelActions().
-       Panel is opened by adding .open class; closed by _closePanel().
-       Interactive elements use data-nav-id / data-route-item / data-close-panel
-       attributes (not inline onclick) to avoid XSS.
-       ──────────────────────────────────────────────────────────────────── -->
+  <!-- ── 5. DETAIL SIDE PANEL ── -->
   <div class="sct-panel" id="sct-panel">
     <div class="sct-panel-header">
       <div class="sct-panel-header-info">
-        <div class="sct-panel-title"    id="sct-panel-title">—</div>
+        <div class="sct-panel-title" id="sct-panel-title">—</div>
         <div class="sct-panel-subtitle" id="sct-panel-subtitle">—</div>
       </div>
-      <div class="sct-panel-close" id="sct-panel-close">✕</div>
+      <button class="sct-panel-close" id="sct-panel-close">✕</button>
     </div>
-    <div class="sct-panel-body"    id="sct-panel-body"></div>
-    <div class="sct-panel-actions" id="sct-panel-actions"></div>
+    
+    <div class="sct-panel-body" id="sct-panel-body">
+      <!-- Data injected by JS -->
+    </div>
+
+    <div class="sct-panel-actions" id="sct-panel-actions">
+      <!-- Buttons injected by JS -->
+    </div>
   </div>
 
 </div>

@@ -59,9 +59,9 @@
  *
  * ┌─ SVG EDGE COORDINATE SYSTEM ──────────────────────────────────────────────┐
  * │                                                                           │
- * │  The SVG overlay lives INSIDE .pl-grid (the expanding flex container     │
+ * │  The SVG overlay lives INSIDE .sct-pl-grid (the expanding flex container     │
  * │  that also holds stage columns). This is critical: SVG must scroll with  │
- * │  the cards. If SVG were a direct child of .sct-pipeline-scroll instead,  │
+ * │  the cards. If SVG were a direct child of .sct-pl-scroll instead,  │
  * │  it would stay fixed while cards scroll, breaking all coordinates.       │
  * │                                                                           │
  * │  Coordinate anchor: (card.getBoundingClientRect().right − grid.getBCR().left)  │
@@ -578,8 +578,8 @@ class SupplyChainTracker {
   //  Renders a 7-column Kanban with SVG bezier edges connecting related nodes.
   //
   //  DOM structure produced:
-  //    .sct-pipeline-scroll                 (overflow-x:auto scroll container)
-  //      .pl-grid                           (min-width:max-content flex row)
+  //    .sct-pl-scroll                 (overflow-x:auto scroll container)
+  //      .sct-pl-grid                           (min-width:max-content flex row)
   //        #sct-svg-overlay                 (SVG absolute-positioned, full grid size)
   //        .stage[data-stage="items"]       (column 1)
   //          .st-head                       (column header with flow accent)
@@ -590,20 +590,20 @@ class SupplyChainTracker {
   //        .stage[data-stage="material_request"]  (column 2)
   //        …
   //
-  //  WHY pl-grid wrapper:
+  //  WHY sct-pl-grid wrapper:
   //    The SVG overlay must be a sibling of the stage columns inside the same
-  //    expanding container. If it were placed inside .sct-pipeline-scroll directly,
+  //    expanding container. If it were placed inside .sct-pl-scroll directly,
   //    the SVG would not scroll with the cards; coordinate references would drift.
   // ══════════════════════════════════════════════════════════════════════════════
   _renderPipeline(visibleNodes) {
-    const scroll = document.getElementById("sct-pipeline-scroll");
+    const scroll = document.getElementById("sct-pl-scroll");
 
     // Create or reuse the inner grid wrapper.
     // The SVG overlay is moved into this wrapper on first creation.
-    let grid = scroll.querySelector(".pl-grid");
+    let grid = scroll.querySelector(".sct-pl-grid");
     if (!grid) {
       grid = document.createElement("div");
-      grid.className = "pl-grid";
+      grid.className = "sct-pl-grid";
       // SVG must live inside grid so it scrolls with the stage columns
       const svg = document.getElementById("sct-svg-overlay");
       if (svg) grid.appendChild(svg);
@@ -616,7 +616,7 @@ class SupplyChainTracker {
     // Reset selection state for the new render
     this.cardEls = {};
     this.selectedId = null;
-    document.getElementById("sct-pl-clear-btn")?.classList.remove("on");
+    document.getElementById("sct-clear-btn")?.classList.remove("on");
     document.querySelectorAll(".track-sep").forEach(s => s.style.display = "");
 
     const visibleIds = new Set(visibleNodes.map(n => n.id));
@@ -1122,7 +1122,7 @@ class SupplyChainTracker {
     } else {
       this.selectedId = id;
       this._applyLineageHighlight(id);
-      document.getElementById("sct-pl-clear-btn")?.classList.add("on");
+      document.getElementById("sct-clear-btn")?.classList.add("on");
       this.showPanel(this.nodeMap[id]);
     }
   }
@@ -1148,7 +1148,7 @@ class SupplyChainTracker {
     document.querySelectorAll(".stage").forEach(s => s.classList.remove("hide-stage"));
     // Restore any separators that were hidden during lineage highlight
     document.querySelectorAll(".track-sep").forEach(s => s.style.display = "");
-    document.getElementById("sct-pl-clear-btn")?.classList.remove("on");
+    document.getElementById("sct-clear-btn")?.classList.remove("on");
     // Redraw edges at default faint opacity — wait for layout reflow first
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const visibleIds = new Set(Object.keys(this.cardEls));
@@ -1180,14 +1180,12 @@ class SupplyChainTracker {
    *   from getBoundingClientRect() are accurate.
    */
   _applyLineageHighlight(id) {
-    // Build forward and backward adjacency lists from the edge array
     const fwd = {}, bwd = {};
     this.edges.forEach(e => {
       (fwd[e.source] = fwd[e.source] || []).push(e.target);
       (bwd[e.target] = bwd[e.target] || []).push(e.source);
     });
 
-    // Generic BFS: returns Set of all visited node ids reachable from start via adj
     const bfs = (start, adj) => {
       const visited = new Set();
       const q = [start];
@@ -1198,32 +1196,29 @@ class SupplyChainTracker {
       return visited;
     };
 
-    const ancestors   = bfs(id, bwd);   // Everything upstream of selected node
-    const descendants = bfs(id, fwd);   // Everything downstream of selected node
+    const ancestors   = bfs(id, bwd);
+    const descendants = bfs(id, fwd);
     const relevant    = new Set([id, ...ancestors, ...descendants]);
 
-    // Apply role classes to cards; hide non-relevant ones from layout
     Object.entries(this.cardEls).forEach(([nid, el]) => {
       el.classList.remove("selected", "ancestor", "descendant", "dimmed", "hide");
-      if      (nid === id)           el.classList.add("selected");     // the clicked node
-      else if (ancestors.has(nid))   el.classList.add("ancestor");     // green border
-      else if (descendants.has(nid)) el.classList.add("descendant");   // amber border
-      else                           el.classList.add("hide");         // display:none — collapses layout
+      if      (nid === id)           el.classList.add("selected");
+      else if (ancestors.has(nid))   el.classList.add("ancestor");
+      else if (descendants.has(nid)) el.classList.add("descendant");
+      else                           el.classList.add("hide");
     });
 
-    // Collapse stages where every card is now hidden
     document.querySelectorAll(".stage").forEach(stage => {
       const hasRelevant = Array.from(stage.querySelectorAll(".sct-card-v2"))
         .some(c => !c.classList.contains("hide"));
       stage.classList.toggle("hide-stage", !hasRelevant);
     });
 
-    // Clean up orphaned track separators (separators with no visible cards)
     this._updateSeparatorVisibility();
+    document.getElementById("sct-clear-btn")?.classList.add("on");
 
-    // Wait for reflow, then redraw only the relevant edges with live animation
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      this._drawEdges(relevant, true /* liveMode: adds .live to every drawn path */);
+      this._drawEdges(relevant, true);
     }));
   }
 
@@ -1267,7 +1262,7 @@ class SupplyChainTracker {
   //    x1 = card.right  − grid.left    ← source card right edge in grid coords
   //    y1 = card.top + card.height/2 − grid.top   ← vertical midpoint of card
   //
-  //  This is stable under horizontal scrolling of .sct-pipeline-scroll because
+  //  This is stable under horizontal scrolling of .sct-pl-scroll because
   //  both card.right and grid.left shift by the same scroll delta.
   //
   //  BEZIER FORMULA
@@ -1331,23 +1326,23 @@ class SupplyChainTracker {
    * and fast enough for typical pipeline sizes (< 200 edges).
    */
   _drawEdges(visibleIds, liveMode = false) {
-    const scroll = document.getElementById("sct-pipeline-scroll");
-    const grid   = scroll?.querySelector(".pl-grid") || scroll;
+    const grid   = document.getElementById("sct-pl-grid");
     const svg    = document.getElementById("sct-svg-overlay");
     if (!grid || !svg) return;
 
-    // Size the SVG to cover the entire .pl-grid content area so paths never clip
-    const W = grid.scrollWidth  || grid.offsetWidth;
-    const H = grid.scrollHeight || grid.offsetHeight;
+    // Size the SVG to cover the entire .sct-pl-grid content area so paths never clip
+    const W = grid.scrollWidth;
+    const H = grid.scrollHeight;
     svg.setAttribute("width",   W);
     svg.setAttribute("height",  H);
+    svg.style.width  = W + "px";
+    svg.style.height = H + "px";
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    
     // Clear all existing paths before redrawing
     while (svg.firstChild) svg.removeChild(svg.firstChild);
 
-    // Anchor for coordinate translation: grid.left shifts by the same amount
-    // as card.right when the scroll container scrolls, so (card.right − grid.left)
-    // stays constant → stable grid-space X coordinate.
+    // Anchor for coordinate translation: stable grid-space coordinates
     const gRect = grid.getBoundingClientRect();
 
     this.edges.forEach(edge => {
@@ -1355,49 +1350,38 @@ class SupplyChainTracker {
       if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) return;
       const se = this.cardEls[edge.source];
       const te = this.cardEls[edge.target];
-      // Both card elements must exist and must not be hidden.
-      // getBoundingClientRect() on a display:none element returns all zeros,
-      // which would render degenerate paths at the origin.
       if (!se || !te) return;
       if (se.classList.contains("hide") || te.classList.contains("hide")) return;
 
-      const sr = se.getBoundingClientRect();   // source card bounding box
-      const tr = te.getBoundingClientRect();   // target card bounding box
+      const sr = se.getBoundingClientRect();
+      const tr = te.getBoundingClientRect();
 
       // Convert viewport coordinates to grid-space by subtracting grid origin
-      const x1 = sr.right  - gRect.left;              // right edge of source card
-      const y1 = sr.top    + sr.height / 2 - gRect.top;  // vertical midpoint of source
-      const x2 = tr.left   - gRect.left;              // left edge of target card
-      const y2 = tr.top    + tr.height / 2 - gRect.top;  // vertical midpoint of target
+      const x1 = sr.right  - gRect.left;
+      const y1 = sr.top    + sr.height / 2 - gRect.top;
+      const x2 = tr.left   - gRect.left;
+      const y2 = tr.top    + tr.height / 2 - gRect.top;
 
-      // Bezier tension: 42% of horizontal distance → smooth S-curve
-      // The two control points mirror each other (horizontal tangents at both ends)
       const dx = Math.abs(x2 - x1) * 0.42;
 
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d",            `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
       path.setAttribute("fill",         "none");
-      // stroke is set as an attribute (not CSS) because SVG attributes cannot resolve
-      // CSS custom properties (--brand-500, etc.) in all browsers
       path.setAttribute("stroke",       this._getEdgeColor(edge));
       path.setAttribute("stroke-width", "1.5");
-      // Default opacity 0.15 is controlled entirely by CSS .sct-edge rule.
-      // No opacity attribute is set here to avoid specificity conflicts.
 
       const flowClass = this._getEdgeFlowClass(edge);
       path.classList.add("sct-edge");
       if (flowClass) path.classList.add(flowClass);
-      // liveMode: card was just selected — all drawn edges get marching-ants animation
       if (liveMode) path.classList.add("live");
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
 
-      // Hover interaction (only active when no card is selected)
       path.addEventListener("mouseenter", () => {
-        if (this.selectedId) return;   // Selection takes over, suppress edge hover
+        if (this.selectedId) return;
         document.querySelectorAll(".sct-edge").forEach(p => {
-          p.classList.toggle("hl",  p === path);   // highlight this path
-          p.classList.toggle("dim", p !== path);   // fade all other paths
+          p.classList.toggle("hl",  p === path);
+          p.classList.toggle("dim", p !== path);
         });
       });
       path.addEventListener("mouseleave", () => {
@@ -1488,6 +1472,25 @@ class SupplyChainTracker {
     if (node.stage === "items" || node.sub_type === "output") {
       this._loadBomBlock(node.item_code || node.doc_name);
     }
+
+    // Async production block: for Work Orders — shows what was produced (batch, stock)
+    // and what materials were consumed (item, qty, batch, warehouse).
+    if (node.sub_type === "wo") {
+      this._loadProductionBlock(node);
+    }
+
+    // Async receipt block: for Purchase Receipts — shows received/accepted/rejected
+    // quantities per item, batch numbers, and current warehouse stock.
+    if (node.sub_type === "pr") {
+      this._loadReceiptBlock(node);
+    }
+
+    // Fulfillment summary: for Material Requests — shows the full pipeline progress
+    // (requested qty → PO raised → received) by traversing connected pipeline nodes.
+    // No extra API call — uses already-loaded nodeMap + edges.
+    if (node.sub_type === "mr") {
+      this._loadMRFulfillmentBlock(node);
+    }
   }
 
   /**
@@ -1568,6 +1571,424 @@ class SupplyChainTracker {
         });
       },
     });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  ASYNC DETAIL BLOCKS — Production, Purchase Receipt, MR Fulfillment
+  //  Each method inserts a rich HTML section into #sct-panel-body after the
+  //  synchronous panel content is already visible. They follow the same
+  //  pattern as _loadBomBlock: check for existing block → API fetch → insert.
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Load production detail block for a Work Order panel.
+   *
+   * Two-section block:
+   *   📦 Production Output
+   *     One row per FG/SFG item produced (t_warehouse items in Manufacture SEs).
+   *     Shows: item code, qty produced, batch number, warehouse, current stock.
+   *
+   *   🔩 Materials Consumed
+   *     One row per component consumed (s_warehouse items in Manufacture SEs).
+   *     Shows: item code, qty consumed, batch number, source warehouse.
+   *
+   * Queries:
+   *   1. Stock Entry (type=Manufacture, work_order=WO name, docstatus=1)
+   *   2. Stock Entry Detail (parent = each SE name)
+   *   3. Bin (item_code, warehouse) for current stock of produced items
+   */
+  _loadProductionBlock(node) {
+    const bodyEl = document.getElementById("sct-panel-body");
+    if (!bodyEl || bodyEl.querySelector(".sct-prod-block")) return;
+
+    // Insert a placeholder while loading
+    const placeholder = document.createElement("div");
+    placeholder.className = "sct-prod-block sct-detail-loading";
+    placeholder.innerHTML = `<div class="sct-detail-loading-txt">⏳ Loading production details…</div>`;
+    bodyEl.appendChild(placeholder);
+
+    // Step 1: find all submitted Manufacture Stock Entries for this WO
+    frappe.call({
+      method: "frappe.client.get_list",
+      args: {
+        doctype: "Stock Entry",
+        filters: { work_order: node.doc_name, stock_entry_type: "Manufacture", docstatus: 1 },
+        fields: ["name", "posting_date", "posting_time"],
+        limit_page_length: 20,
+        order_by: "posting_date asc",
+      },
+      callback: (r) => {
+        if (!r.message || !r.message.length) {
+          placeholder.innerHTML = `<div class="sct-detail-empty">No submitted Stock Entries found for this Work Order yet.</div>`;
+          return;
+        }
+        const seNames = r.message.map(s => s.name);
+
+        // Step 2: fetch all SE Detail rows for all linked SEs in one call
+        frappe.call({
+          method: "frappe.client.get_list",
+          args: {
+            doctype: "Stock Entry Detail",
+            filters: [["parent", "in", seNames]],
+            fields: ["parent", "item_code", "item_name", "qty", "transfer_qty",
+                     "uom", "stock_uom", "batch_no", "s_warehouse", "t_warehouse",
+                     "basic_rate", "basic_amount"],
+            limit_page_length: 200,
+            order_by: "parent asc, idx asc",
+          },
+          callback: (r2) => {
+            if (!r2.message) { placeholder.remove(); return; }
+
+            // Separate items into produced (t_warehouse set, no s_warehouse)
+            // and consumed (s_warehouse set)
+            const produced  = r2.message.filter(i => i.t_warehouse && !i.s_warehouse);
+            const consumed  = r2.message.filter(i => i.s_warehouse);
+
+            const fmtQty = (q, u) => `${(+q || 0).toLocaleString("en-IN", {maximumFractionDigits: 3})} ${u || ""}`;
+            const esc    = v => frappe.utils.escape_html(String(v || ""));
+
+            // ── Produced section ───────────────────────────────────────────────
+            let producedHtml = "";
+            if (produced.length) {
+              producedHtml = produced.map(i => `
+                <div class="sct-prod-row sct-prod-out">
+                  <div class="sct-prod-row-item">
+                    <span class="sct-prod-item-code">${esc(i.item_code)}</span>
+                    <span class="sct-prod-item-name">${esc(i.item_name)}</span>
+                  </div>
+                  <div class="sct-prod-row-meta">
+                    <span class="sct-prod-qty ok">▲ ${fmtQty(i.qty, i.uom)}</span>
+                    ${i.batch_no ? `<span class="sct-prod-batch">Batch: <strong>${esc(i.batch_no)}</strong></span>` : ""}
+                    ${i.t_warehouse ? `<span class="sct-prod-wh">→ ${esc(i.t_warehouse)}</span>` : ""}
+                  </div>
+                </div>`).join("");
+            } else {
+              producedHtml = `<div class="sct-detail-empty" style="margin:4px 0">No output entries yet</div>`;
+            }
+
+            // ── Consumed section ───────────────────────────────────────────────
+            let consumedHtml = "";
+            if (consumed.length) {
+              consumedHtml = consumed.map(i => `
+                <div class="sct-prod-row sct-prod-in">
+                  <div class="sct-prod-row-item">
+                    <span class="sct-prod-item-code">${esc(i.item_code)}</span>
+                    <span class="sct-prod-item-name">${esc(i.item_name)}</span>
+                  </div>
+                  <div class="sct-prod-row-meta">
+                    <span class="sct-prod-qty used">▼ ${fmtQty(i.qty, i.uom)}</span>
+                    ${i.batch_no ? `<span class="sct-prod-batch">Batch: <strong>${esc(i.batch_no)}</strong></span>` : ""}
+                    ${i.s_warehouse ? `<span class="sct-prod-wh">← ${esc(i.s_warehouse)}</span>` : ""}
+                  </div>
+                </div>`).join("");
+            } else {
+              consumedHtml = `<div class="sct-detail-empty" style="margin:4px 0">No consumption entries yet</div>`;
+            }
+
+            placeholder.outerHTML = `
+              <div class="sct-prod-block">
+                <div class="sct-detail-block-title">📦 Production Output
+                  <span class="sct-detail-block-sub">${seNames.length} Stock Entr${seNames.length > 1 ? "ies" : "y"}</span>
+                </div>
+                ${producedHtml}
+                <div class="sct-detail-block-title" style="margin-top:10px">🔩 Materials Consumed</div>
+                ${consumedHtml}
+              </div>`;
+
+            // Step 3: fetch current stock (Bin) for each produced item/warehouse
+            produced.forEach(i => {
+              if (!i.t_warehouse) return;
+              frappe.call({
+                method: "frappe.client.get_value",
+                args: {
+                  doctype: "Bin",
+                  filters: { item_code: i.item_code, warehouse: i.t_warehouse },
+                  fieldname: "actual_qty",
+                },
+                callback: (rb) => {
+                  const qty = rb.message?.actual_qty ?? null;
+                  if (qty === null) return;
+                  // Find and update the matching produced row
+                  document.querySelectorAll(".sct-prod-out").forEach(row => {
+                    if (row.querySelector(".sct-prod-item-code")?.textContent === i.item_code) {
+                      const meta = row.querySelector(".sct-prod-row-meta");
+                      if (meta && !meta.querySelector(".sct-prod-stock")) {
+                        const chip = document.createElement("span");
+                        chip.className = "sct-prod-stock";
+                        chip.innerHTML = `Stock: <strong>${(+qty).toLocaleString("en-IN", {maximumFractionDigits: 2})} ${i.uom}</strong>`;
+                        meta.appendChild(chip);
+                      }
+                    }
+                  });
+                },
+              });
+            });
+          },
+        });
+      },
+    });
+  }
+
+  /**
+   * Load purchase receipt detail block for a Purchase Receipt panel.
+   *
+   * One card per line item showing:
+   *   Item code / name, received qty, accepted qty, rejected qty,
+   *   batch number, warehouse, and current warehouse stock (from Bin).
+   *
+   * Queries:
+   *   1. Purchase Receipt Item (parent = PR name)
+   *   2. Bin (item_code, warehouse) per line item for current stock
+   */
+  _loadReceiptBlock(node) {
+    const bodyEl = document.getElementById("sct-panel-body");
+    if (!bodyEl || bodyEl.querySelector(".sct-recv-block")) return;
+
+    const placeholder = document.createElement("div");
+    placeholder.className = "sct-recv-block sct-detail-loading";
+    placeholder.innerHTML = `<div class="sct-detail-loading-txt">⏳ Loading receipt details…</div>`;
+    bodyEl.appendChild(placeholder);
+
+    // Step 1: fetch all line items from this Purchase Receipt
+    frappe.call({
+      method: "frappe.client.get_list",
+      args: {
+        doctype: "Purchase Receipt Item",
+        filters: { parent: node.doc_name },
+        fields: ["item_code", "item_name", "qty", "received_qty",
+                 "rejected_qty", "accepted_qty", "batch_no",
+                 "warehouse", "uom", "rate", "amount",
+                 "purchase_order", "material_request"],
+        limit_page_length: 50,
+        order_by: "idx asc",
+      },
+      callback: (r) => {
+        if (!r.message || !r.message.length) {
+          placeholder.innerHTML = `<div class="sct-detail-empty">No line items found.</div>`;
+          return;
+        }
+
+        const esc    = v => frappe.utils.escape_html(String(v || ""));
+        const fmtQty = (q, u) => `${(+q || 0).toLocaleString("en-IN", {maximumFractionDigits: 3})} ${u || ""}`;
+        const fmtMon = v => v > 0 ? `₹ ${(+v).toLocaleString("en-IN", {minimumFractionDigits: 2})}` : "";
+
+        const rows = r.message.map(i => {
+          const accepted = i.accepted_qty > 0 ? i.accepted_qty : (i.received_qty - (i.rejected_qty || 0));
+          const hasRej   = (i.rejected_qty || 0) > 0;
+          return `
+            <div class="sct-recv-row" data-item="${esc(i.item_code)}" data-wh="${esc(i.warehouse)}">
+              <div class="sct-recv-row-item">
+                <span class="sct-prod-item-code">${esc(i.item_code)}</span>
+                <span class="sct-prod-item-name">${esc(i.item_name)}</span>
+              </div>
+              <div class="sct-recv-row-grid">
+                <div class="sct-recv-cell">
+                  <span class="sct-recv-lbl">Received</span>
+                  <span class="sct-recv-val">${fmtQty(i.received_qty || i.qty, i.uom)}</span>
+                </div>
+                <div class="sct-recv-cell">
+                  <span class="sct-recv-lbl">Accepted</span>
+                  <span class="sct-recv-val ok">${fmtQty(accepted, i.uom)}</span>
+                </div>
+                ${hasRej ? `
+                <div class="sct-recv-cell">
+                  <span class="sct-recv-lbl">Rejected</span>
+                  <span class="sct-recv-val err">${fmtQty(i.rejected_qty, i.uom)}</span>
+                </div>` : ""}
+                <div class="sct-recv-cell">
+                  <span class="sct-recv-lbl">Rate</span>
+                  <span class="sct-recv-val">${fmtMon(i.rate)}</span>
+                </div>
+              </div>
+              <div class="sct-recv-row-meta">
+                ${i.batch_no ? `<span class="sct-prod-batch">Batch: <strong>${esc(i.batch_no)}</strong></span>` : `<span class="sct-prod-batch" style="color:var(--stone-400)">No batch</span>`}
+                ${i.warehouse ? `<span class="sct-prod-wh">→ ${esc(i.warehouse)}</span>` : ""}
+                <span class="sct-recv-stock" data-item="${esc(i.item_code)}" data-wh="${esc(i.warehouse)}">…</span>
+              </div>
+              ${i.material_request ? `<div style="font-size:9px;color:var(--stone-400);margin-top:2px">From MR: ${esc(i.material_request)}</div>` : ""}
+            </div>`;
+        }).join("");
+
+        placeholder.outerHTML = `
+          <div class="sct-recv-block">
+            <div class="sct-detail-block-title">📬 Receipt Line Items</div>
+            ${rows}
+          </div>`;
+
+        // Step 2: fetch current Bin stock for each item/warehouse and inject inline
+        r.message.forEach(i => {
+          if (!i.warehouse) return;
+          frappe.call({
+            method: "frappe.client.get_value",
+            args: {
+              doctype: "Bin",
+              filters: { item_code: i.item_code, warehouse: i.warehouse },
+              fieldname: "actual_qty",
+            },
+            callback: (rb) => {
+              const qty = rb.message?.actual_qty;
+              if (qty === undefined || qty === null) return;
+              // Update the stock chip for this item in the rendered block
+              document.querySelectorAll(`.sct-recv-stock[data-item="${CSS.escape(i.item_code)}"][data-wh="${CSS.escape(i.warehouse)}"]`).forEach(el => {
+                el.innerHTML = `Current Stock: <strong>${(+qty).toLocaleString("en-IN", {maximumFractionDigits: 2})} ${i.uom}</strong>`;
+                el.classList.add(qty > 0 ? "ok" : "err");
+              });
+            },
+          });
+        });
+      },
+    });
+  }
+
+  /**
+   * Build the MR fulfillment summary block entirely from already-loaded data.
+   * No API call — traverses this.edges and this.nodeMap to find downstream nodes.
+   *
+   * Shows:
+   *   Requested Qty  — from node.required_qty
+   *   PO Raised      — total qty across downstream PO nodes
+   *   Received       — total received_qty across downstream PR nodes
+   *   WO Raised      — total qty across downstream WO nodes (manufacture MRs)
+   *   Produced       — total produced_qty across downstream WO nodes
+   *
+   * Progress bar shows: received/ordered percentage.
+   */
+  _loadMRFulfillmentBlock(node) {
+    const bodyEl = document.getElementById("sct-panel-body");
+    if (!bodyEl || bodyEl.querySelector(".sct-fulfill-block")) return;
+
+    // BFS forward from this MR to collect all downstream nodes
+    const fwd = {};
+    this.edges.forEach(e => (fwd[e.source] = fwd[e.source] || []).push(e.target));
+    const visited = new Set();
+    const q = [node.id];
+    while (q.length) {
+      const cur = q.shift();
+      (fwd[cur] || []).forEach(nb => { if (!visited.has(nb)) { visited.add(nb); q.push(nb); } });
+    }
+    visited.delete(node.id);  // exclude the MR itself
+
+    // Collect downstream nodes by type
+    const downstream = [...visited].map(id => this.nodeMap[id]).filter(Boolean);
+    const pos  = downstream.filter(n => n.sub_type === "po");
+    const prs  = downstream.filter(n => n.sub_type === "pr");
+    const wos  = downstream.filter(n => n.sub_type === "wo");
+    const jcs  = downstream.filter(n => n.sub_type === "jc");
+    const rfqs = downstream.filter(n => n.sub_type === "rfq");
+    const sqs  = downstream.filter(n => n.sub_type === "sq");
+
+    const sum  = (arr, field) => arr.reduce((a, n) => a + (+n[field] || 0), 0);
+    const fmt  = (q, u) => `${(+q || 0).toLocaleString("en-IN", {maximumFractionDigits: 2})} ${u || ""}`;
+    const esc  = v => frappe.utils.escape_html(String(v || "—"));
+
+    const reqQty  = node.required_qty || node.qty || 0;
+    const uom     = node.uom || "";
+    const isPurch = (node.mr_type || "").toLowerCase().includes("purchase");
+
+    // ── Build fulfillment row data ─────────────────────────────────────────────
+    const steps = [];
+
+    steps.push({
+      icon: "📋", label: "Requested",
+      val: fmt(reqQty, uom), sub: node.required_date ? `Required by ${node.required_date}` : "",
+      cls: "step-req",
+    });
+
+    if (isPurch) {
+      // Purchase path: MR → RFQ → SQ → PO → PR
+      if (rfqs.length) {
+        steps.push({ icon: "🔍", label: "RFQ Raised",
+          val: `${rfqs.length} RFQ${rfqs.length > 1 ? "s" : ""}`,
+          sub: rfqs.map(n => esc(n.doc_name)).join(", "),
+          cls: "step-rfq" });
+      }
+      if (sqs.length) {
+        const sqTotal = sum(sqs, "grand_total");
+        steps.push({ icon: "💬", label: "Supplier Quotes",
+          val: `${sqs.length} SQ${sqs.length > 1 ? "s" : ""}`,
+          sub: sqTotal > 0 ? `Total: ₹${sqTotal.toLocaleString("en-IN", {minimumFractionDigits: 2})}` : "",
+          cls: "step-sq" });
+      }
+      if (pos.length) {
+        const poQty = sum(pos, "qty");
+        const poTot = sum(pos, "grand_total");
+        steps.push({ icon: "🛒", label: "PO Raised",
+          val: fmt(poQty, uom),
+          sub: `${pos.length} PO${pos.length > 1 ? "s" : ""}${poTot > 0 ? " · ₹" + poTot.toLocaleString("en-IN") : ""}`,
+          cls: poQty >= reqQty ? "step-ok" : "step-partial" });
+      } else if (reqQty > 0) {
+        steps.push({ icon: "⏳", label: "PO Raised", val: "—", sub: "No PO yet", cls: "step-missing" });
+      }
+      if (prs.length) {
+        const recvQty = sum(prs, "qty") || sum(prs, "received_qty");
+        const rejQty  = sum(prs, "rejected_qty");
+        steps.push({ icon: "📦", label: "Received",
+          val: fmt(recvQty, uom),
+          sub: rejQty > 0 ? `${fmt(rejQty, uom)} rejected` : `${prs.length} receipt${prs.length > 1 ? "s" : ""}`,
+          cls: recvQty >= reqQty ? "step-ok" : recvQty > 0 ? "step-partial" : "step-missing" });
+      } else if (pos.length) {
+        steps.push({ icon: "⏳", label: "Received", val: "—", sub: "Awaiting delivery", cls: "step-missing" });
+      }
+    } else {
+      // Manufacture path: MR → PP → WO → JC → SE
+      const pps = downstream.filter(n => n.sub_type === "pp");
+      if (pps.length) {
+        steps.push({ icon: "📅", label: "Prod. Plan",
+          val: `${pps.length} plan${pps.length > 1 ? "s" : ""}`,
+          sub: pps.map(n => esc(n.doc_name)).join(", "),
+          cls: "step-rfq" });
+      }
+      if (wos.length) {
+        const woQty   = sum(wos, "qty");
+        const prodQty = sum(wos, "produced_qty");
+        steps.push({ icon: "⚙", label: "Work Order",
+          val: fmt(woQty, uom),
+          sub: `${wos.length} WO${wos.length > 1 ? "s" : ""}`,
+          cls: woQty >= reqQty ? "step-ok" : "step-partial" });
+        if (prodQty > 0) {
+          steps.push({ icon: "🏭", label: "Produced",
+            val: fmt(prodQty, uom),
+            sub: `${Math.round(prodQty / (woQty || 1) * 100)}% complete`,
+            cls: prodQty >= woQty ? "step-ok" : "step-partial" });
+        }
+      } else if (reqQty > 0) {
+        steps.push({ icon: "⏳", label: "Work Order", val: "—", sub: "No WO yet", cls: "step-missing" });
+      }
+      if (jcs.length) {
+        steps.push({ icon: "🔧", label: "Job Cards",
+          val: `${jcs.length} JC${jcs.length > 1 ? "s" : ""}`,
+          sub: `${jcs.filter(n => n.status === "Completed").length} completed`,
+          cls: "step-sq" });
+      }
+    }
+
+    // ── Progress bar ───────────────────────────────────────────────────────────
+    const lastStep  = steps[steps.length - 1];
+    const isOk      = lastStep?.cls === "step-ok";
+    const isPartial = lastStep?.cls === "step-partial";
+    const pct       = isOk ? 100 : isPartial ? 50 : 10;
+    const barColor  = isOk ? "#16a34a" : isPartial ? "#d97706" : "#dc2626";
+
+    const stepsHtml = steps.map(s => `
+      <div class="sct-fulfill-step ${s.cls}">
+        <div class="sct-fulfill-step-icon">${s.icon}</div>
+        <div class="sct-fulfill-step-body">
+          <div class="sct-fulfill-step-label">${s.label}</div>
+          <div class="sct-fulfill-step-val">${s.val}</div>
+          ${s.sub ? `<div class="sct-fulfill-step-sub">${s.sub}</div>` : ""}
+        </div>
+      </div>`).join('<div class="sct-fulfill-arrow">→</div>');
+
+    const block = document.createElement("div");
+    block.className = "sct-fulfill-block";
+    block.innerHTML = `
+      <div class="sct-detail-block-title">📊 MR Fulfillment Progress</div>
+      <div style="height:4px;background:var(--stone-100);border-radius:99px;overflow:hidden;margin-bottom:10px">
+        <div style="width:${pct}%;height:100%;background:${barColor};border-radius:99px;transition:width 0.4s ease"></div>
+      </div>
+      <div class="sct-fulfill-steps">${stepsHtml}</div>
+    `;
+    bodyEl.appendChild(block);
   }
 
   /**
@@ -2104,13 +2525,19 @@ class SupplyChainTracker {
         document.querySelectorAll(".sct-view-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         // Show/hide the corresponding view container
-        document.getElementById("sct-tracker-wrap").classList.toggle("active",  view === "tracker");
-        document.getElementById("sct-pipeline-wrap").classList.toggle("active", view === "pipeline");
+        document.getElementById("sct-view-tracker").classList.toggle("active",  view === "tracker");
+        document.getElementById("sct-view-pipeline").classList.toggle("active", view === "pipeline");
         this._clearSelection();
         this._closePanel();
         // Pipeline view must be explicitly re-rendered on switch (tracker is always up-to-date)
         if (view === "pipeline") this.render();
       });
+    });
+
+    // ── Pipeline Clear Selection ────────────────────────────────────────────────
+    document.getElementById("sct-clear-btn")?.addEventListener("click", () => {
+      this._clearSelection();
+      this._closePanel();
     });
 
     // ── Filter panel toggle ────────────────────────────────────────────────────
@@ -2122,7 +2549,7 @@ class SupplyChainTracker {
     });
 
     // ── Days-back window change (server-side) ──────────────────────────────────
-    document.getElementById("sct-days-select")?.addEventListener("change", (e) => {
+    document.getElementById("sct-days-back")?.addEventListener("change", (e) => {
       this.f.days_back = parseInt(e.target.value);
       this.load();  // Requires new server fetch — changes document set
     });
@@ -2132,7 +2559,7 @@ class SupplyChainTracker {
     // positions shift, so edges must be redrawn from scratch.
     // We use a rAF-debounce to avoid firing dozens of times per scroll frame.
     // liveMode is preserved: if a card is selected, redrawn edges keep .live class.
-    const scroll = document.getElementById("sct-pipeline-scroll");
+    const scroll = document.getElementById("sct-pl-scroll");
     if (scroll) {
       let raf;
       const redraw = () => {
@@ -2153,7 +2580,7 @@ class SupplyChainTracker {
     // ── Background click: deselect ─────────────────────────────────────────────
     // Clicking empty canvas (not a card) clears selection and closes panel.
     // Must check both .sct-card (tracker) and .sct-card-v2 (pipeline).
-    document.getElementById("sct-pipeline-scroll")?.addEventListener("click", e => {
+    document.getElementById("sct-pl-scroll")?.addEventListener("click", e => {
       if (!e.target.closest(".sct-card") && !e.target.closest(".sct-card-v2")) {
         this._clearSelection();
         this._closePanel();
