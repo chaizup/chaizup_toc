@@ -2428,10 +2428,15 @@ class SupplyChainTracker {
   _reachable(seeds, nodeIdSet) {
     const nodeSet = new Set(nodeIdSet);
     const fwd = {}, bwd = {};
-    // Build adjacency restricted to the filtered node set
+    // Build adjacency restricted to edges where BOTH endpoints are in the filtered
+    // node set.  Checking only one endpoint allows the BFS to escape the nodeSet
+    // boundary and include nodes that were filtered out by other active filters
+    // (e.g. search or doctype), producing incorrect combined-filter results.
     this.edges.forEach(e => {
-      if (nodeSet.has(e.source)) (fwd[e.source] = fwd[e.source] || []).push(e.target);
-      if (nodeSet.has(e.target)) (bwd[e.target] = bwd[e.target] || []).push(e.source);
+      if (nodeSet.has(e.source) && nodeSet.has(e.target)) {
+        (fwd[e.source] = fwd[e.source] || []).push(e.target);
+        (bwd[e.target] = bwd[e.target] || []).push(e.source);
+      }
     });
     const visited = new Set(seeds);
     const q = [...seeds];
@@ -2605,8 +2610,7 @@ class SupplyChainTracker {
   /** Bind the ✕ close button inside the detail panel header. */
   _bindPanel() {
     document.getElementById("sct-panel-close")?.addEventListener("click", () => {
-      this._clearSelection();
-      this._closePanel();
+      this._closePanel();   // _closePanel already calls _clearSelection() internally
     });
   }
 

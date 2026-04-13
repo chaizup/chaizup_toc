@@ -171,11 +171,17 @@ def get_pipeline_data(
 
 @frappe.whitelist()
 def get_filter_options():
-    """Return distinct values for filter dropdowns (suppliers, warehouses)."""
+    """Return distinct values for filter dropdowns (suppliers, item_groups, warehouses)."""
     suppliers = frappe.db.sql("""
         SELECT DISTINCT supplier FROM `tabPurchase Order`
         WHERE docstatus < 2 AND supplier IS NOT NULL AND supplier != ''
         ORDER BY supplier LIMIT 200
+    """, as_dict=False)
+
+    item_groups = frappe.db.sql("""
+        SELECT DISTINCT item_group FROM `tabItem`
+        WHERE item_group IS NOT NULL AND item_group != '' AND disabled = 0
+        ORDER BY item_group LIMIT 200
     """, as_dict=False)
 
     warehouses = frappe.db.sql("""
@@ -185,8 +191,9 @@ def get_filter_options():
     """, as_dict=False)
 
     return {
-        "suppliers":  [r[0] for r in suppliers],
-        "warehouses": [r[0] for r in warehouses],
+        "suppliers":   [r[0] for r in suppliers],
+        "item_groups": [r[0] for r in item_groups],
+        "warehouses":  [r[0] for r in warehouses],
     }
 
 
@@ -557,6 +564,17 @@ def _build_graph(items, toc_map, output_ics, mrs, rfqs, pps, sqs, wos, pos, jcs,
     for ic in output_ics:
         toc = toc_map.get(ic, {})
         nodes.append(_output_node(ic, toc))
+
+    # Deduplicate nodes by id — multi-item documents (e.g. a PO that covers two
+    # active items) produce one SQL row per item_code, which creates duplicate
+    # node ids.  Keep first occurrence (preserves the highest-priority item row).
+    seen_ids = set()
+    deduped = []
+    for n in nodes:
+        if n["id"] not in seen_ids:
+            seen_ids.add(n["id"])
+            deduped.append(n)
+    nodes = deduped
 
     edges = _build_edges(items, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, qis, ses, output_ics)
     return nodes, edges
