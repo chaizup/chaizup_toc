@@ -1,0 +1,378 @@
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  wo_kitting_planner.html  --  WO Kitting Planner UI Template            ║
+  ║  Part of chaizup_toc app  |  Page: wo-kitting-planner                   ║
+  ║  Last updated: 2026-04-14                                                ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+  PURPOSE
+  ───────
+  Declarative HTML structure for the WO Kitting Planner page.
+  All dynamic rendering (rows, modals, charts) is done by wo_kitting_planner.js.
+  This file provides only the static skeleton: command bar, summary strip,
+  empty state, table shell, and modal shells.
+
+  ══════════════════════════════════════════════════════════════════════════
+  🔒 RESTRICTED — DO NOT CHANGE WITHOUT EXPLICIT USER PERMISSION
+  ══════════════════════════════════════════════════════════════════════════
+
+  1. ZERO SINGLE QUOTES IN THIS FILE (CRITICAL)
+     ─────────────────────────────────────────────
+     Frappe wraps HTML templates in a JS single-quoted string at runtime:
+       page.main.html('...TEMPLATE CONTENT...')
+     Any apostrophe or single quote inside the template breaks the JS with:
+       SyntaxError: Unexpected identifier
+     The page loads blank with no visible error. EXTREMELY HARD TO DEBUG.
+
+     RULES:
+       ✗ Never: it's  don't  won't  can't  you're
+       ✓ Use:   &apos;  or rephrase: "it is"  "do not"  etc.
+       ✓ Double quotes in attribute values: title="some text" is fine
+       ✓ HTML entities: &amp; &lt; &gt; &ndash; &mdash; &hellip; &rarr;
+
+     After ANY change to this file:
+       redis-cli -h redis-cache -p 6379 FLUSHALL
+
+  2. ELEMENT IDs — JS binds to these directly; changing breaks functionality silently
+     ─────────────────────────────────────────────────────────────────────────────────
+     Command bar:       #wkp-root  #wkp-cmd  #wkp-seg-stock  #wkp-seg-calc
+                        #wkp-multilevel-btn  #wkp-ml-dot
+                        #wkp-status-filter   #wkp-refresh
+
+     Context bar:       #wkp-hint-bar  #wkp-hint-mode  #wkp-hint-text
+                        #wkp-hint-icon  #wkp-drag-hint
+
+     Summary strip:     #wkp-summary
+                        #wsum-ready  #wsum-partial  #wsum-blocked
+                        #wsum-total  #wsum-shortage-val
+
+     Content area:      #wkp-content  #wkp-loader  #wkp-empty
+                        #wkp-table-wrap  #wkp-table  #wkp-tbody
+
+     Help system:       #wkp-tooltip  #wkp-popover
+                        #wkp-pop-title  #wkp-pop-body  #wkp-pop-example
+                        #wkp-pop-ex-text  #wkp-pop-action  #wkp-pop-close
+
+     Shortage modal:    #wkp-modal  #wkp-modal-title  #wkp-modal-sub
+                        #wkp-modal-reco  #wkp-modal-body  #wkp-modal-foot
+                        #wkp-create-mr-btn  #wkp-modal-close
+
+     WO detail modal:   #wkp-wo-modal  #wkp-wo-title  #wkp-wo-sub
+                        #wkp-wo-body  #wkp-wo-close
+
+  3. data-val ATTRIBUTES on .wkp-seg-btn — JS reads these for mode switching
+     ────────────────────────────────────────────────────────────────────────
+     data-val="current_only"          → Stock mode X (Physical Only)
+     data-val="current_and_expected"  → Stock mode Y (Physical + Expected)
+     data-val="isolated"              → Scenario A (Independent Check)
+     data-val="sequential"            → Scenario B (Priority Queue)
+
+  4. data-popover ATTRIBUTES on .wkp-th-help — must match WKP_POPOVERS keys in JS
+     ────────────────────────────────────────────────────────────────────────────────
+     "remaining_qty" | "shortage" | "est_cost" | "prev_so" | "curr_so" | "total_so"
+     If you add a new column with a ? button, add the matching key to WKP_POPOVERS
+     in wo_kitting_planner.js.
+
+  5. CSS CLASS NAMES on structural elements — JS applies/reads these at runtime
+     ───────────────────────────────────────────────────────────────────────────
+     .wkp-seg-btn        (JS toggles .active on these)
+     .wkp-pill-btn       (JS toggles .active + reads state)
+     .wkp-th-help        (JS delegates click via closest())
+     .wkp-tbody          (JS replaces innerHTML here)
+     .wkp-overlay        (JS sets display:flex/none)
+     .wkp-modal          (structure expected by JS _showShortageModal)
+     .wkp-pill-sublabel  (JS updates textContent on BOM toggle)
+
+  ══════════════════════════════════════════════════════════════════════════
+  ✅ SAFE TO MODIFY (no JS impact)
+  ══════════════════════════════════════════════════════════════════════════
+  - Any visible label text (button labels, column headers, option text)
+  - title="" attribute values (browser tooltips — purely informational)
+  - data-tip="" attribute values (custom tooltip text — read by JS but display only)
+  - Adding new .wkp-sum-card blocks to the summary strip
+  - Adding new table columns: add <th> here AND matching <td> in JS _buildRow()
+  - Changing placeholder text inside #wkp-loader and #wkp-empty divs
+
+  ⚠️ CAUTION — THINK BEFORE CHANGING
+  ══════════════════════════════════════════════════════════════════════════
+  - Table column ORDER: JS _buildRow() generates <td> cells in a fixed order.
+    If you reorder <th> elements, reorder the matching <td>s in _buildRow() too.
+  - Modal div structure: JS injects innerHTML into specific child divs (#wkp-modal-reco,
+    #wkp-modal-body, #wkp-wo-body). Do not add extra wrapping divs inside modals.
+
+  ══════════════════════════════════════════════════════════════════════════
+  SECTION MAP
+  ══════════════════════════════════════════════════════════════════════════
+  1. COMMAND BAR      — toggles, filters, refresh
+  2. CONTEXT BAR      — live simulation result summary + mode indicator
+  3. SUMMARY STRIP    — 5 stat cards: Ready / Partial / Blocked / Total / Cost
+  4. MAIN CONTENT     — loading overlay + empty state + WO table
+  5. FLOATING TOOLTIP — follows cursor; text from [data-tip] on hovered element
+  6. COLUMN POPOVER   — appears on ? button click; content from WKP_POPOVERS in JS
+  7. SHORTAGE MODAL   — material breakdown for one WO; injected by JS
+  8. WO DETAIL MODAL  — full WO info + decision card; injected by JS
+-->
+
+<div class="wkp-root" id="wkp-root">
+
+  <!-- ════ 1. COMMAND BAR ════ -->
+  <div class="wkp-cmd" id="wkp-cmd">
+
+    <div class="wkp-cmd-left">
+
+      <!-- Stock View: Physical Only vs Physical + Expected -->
+      <div class="wkp-toggle-group">
+        <div class="wkp-toggle-label-block">
+          <span class="wkp-toggle-label">Stock View</span>
+          <span class="wkp-toggle-sublabel">What stock to count?</span>
+        </div>
+        <div class="wkp-seg" id="wkp-seg-stock">
+          <button class="wkp-seg-btn active" data-val="current_only"
+                  data-tip="Physical Only (Conservative)&#10;Counts materials that are physically in the warehouse RIGHT NOW.&#10;&#10;Best for: Ground-truth check before committing to production.&#10;If it shows green here, you can start immediately.">
+            X &ndash; Physical Only
+          </button>
+          <button class="wkp-seg-btn" data-val="current_and_expected"
+                  data-tip="Physical + Expected (Optimistic)&#10;Counts current stock PLUS materials already ordered:&#10; &bull; Open Purchase Orders (materials coming from suppliers)&#10; &bull; Open Material Requests (materials requested but not yet PO)&#10; &bull; Open Work Orders for sub-assemblies (items being produced)&#10;&#10;Best for: Checking if shortages will resolve before you actually need to produce.">
+            Y &ndash; Physical + Expected
+          </button>
+        </div>
+      </div>
+
+      <!-- Mode: Independent Check vs Priority Queue -->
+      <div class="wkp-toggle-group">
+        <div class="wkp-toggle-label-block">
+          <span class="wkp-toggle-label">Planning Mode</span>
+          <span class="wkp-toggle-sublabel">How to allocate stock?</span>
+        </div>
+        <div class="wkp-seg" id="wkp-seg-calc">
+          <button class="wkp-seg-btn active" data-val="isolated"
+                  data-tip="Independent Check (Mode A)&#10;Each Work Order is checked against the FULL warehouse stock independently. One WO does not affect another.&#10;&#10;Best for: Seeing which WOs can run if you had unlimited capacity.&#10;Order of rows does not matter in this mode.">
+            A &ndash; Independent Check
+          </button>
+          <button class="wkp-seg-btn" data-val="sequential"
+                  data-tip="Priority Queue (Mode B)&#10;Work Orders compete for limited stock in row order. The TOP row gets first pick of materials. When a WO uses stock, that stock is no longer available for the WOs below.&#10;&#10;Best for: Deciding WHICH orders to run when you cannot run all of them.&#10;Drag rows up/down to set your priority order.">
+            B &ndash; Priority Queue
+          </button>
+        </div>
+      </div>
+
+      <!-- Deep BOM Check toggle -->
+      <div class="wkp-pill-group">
+        <button class="wkp-pill-btn" id="wkp-multilevel-btn"
+                data-tip="Deep BOM Check (Multi-Level)&#10;OFF (default): Checks only the direct ingredients listed in the recipe. Fast.&#10;&#10;ON: Also traces each ingredient&apos;s own recipe, all the way down to raw materials. Slower, but reveals hidden shortages in complex products with sub-assemblies.&#10;&#10;Example: A product needs &quot;Premix Blend&quot;. With Deep BOM ON, it also checks if flour, spices, etc. needed to MAKE the blend are available.">
+          <span class="wkp-pill-dot" id="wkp-ml-dot"></span>
+          Deep BOM Check
+        </button>
+        <span class="wkp-pill-sublabel">Sub-assemblies: OFF</span>
+      </div>
+
+    </div>
+
+    <div class="wkp-cmd-right">
+      <!-- Status filter -->
+      <div class="wkp-filter-group">
+        <label class="wkp-filter-label" for="wkp-status-filter">Show WOs:</label>
+        <select class="wkp-select" id="wkp-status-filter"
+                data-tip="Filter by production stage:&#10;&bull; All Open WOs = everything not yet completed&#10;&bull; Not Started = created but production not begun&#10;&bull; Material Transferred = materials sent to production floor&#10;&bull; In Process = actively being manufactured">
+          <option value="">All Open WOs</option>
+          <option value="Not Started">Not Started</option>
+          <option value="Material Transferred">Material Transferred</option>
+          <option value="In Process">In Process</option>
+        </select>
+      </div>
+
+      <button class="wkp-refresh-btn" id="wkp-refresh"
+              data-tip="Reload all data from the ERP system.&#10;Use this after:&#10; &bull; Receiving a material delivery&#10; &bull; Creating a new Purchase Order&#10; &bull; Any warehouse stock movement">
+        &#x21BB; Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- ════ 2. CONTEXT BAR (replaces old hint bar) ════ -->
+  <div class="wkp-hint-bar" id="wkp-hint-bar">
+    <div class="wkp-hint-left">
+      <span class="wkp-hint-icon" id="wkp-hint-icon">&#x1F4CA;</span>
+      <div class="wkp-hint-texts">
+        <span class="wkp-hint-mode" id="wkp-hint-mode">Mode A &mdash; Independent Check</span>
+        <span class="wkp-hint-detail" id="wkp-hint-text">
+          Loading Work Orders&hellip;
+        </span>
+      </div>
+    </div>
+    <span class="wkp-hint-drag" id="wkp-drag-hint" style="display:none">
+      &#x2630; Drag rows up/down to set production priority
+    </span>
+  </div>
+
+  <!-- ════ 3. SUMMARY STRIP ════ -->
+  <div class="wkp-summary" id="wkp-summary">
+
+    <div class="wkp-sum-card wkp-sum-ok"
+         data-tip="Ready to Start&#10;These Work Orders have ALL required materials available in the warehouse right now.&#10;&#10;Action: You can release these to production immediately.">
+      <div class="wkp-sum-icon">&#x2705;</div>
+      <div>
+        <div class="wkp-sum-val" id="wsum-ready">--</div>
+        <div class="wkp-sum-lbl">Ready to Start</div>
+        <div class="wkp-sum-hint">All materials in stock</div>
+      </div>
+    </div>
+
+    <div class="wkp-sum-card wkp-sum-warn"
+         data-tip="Partial Shortage&#10;Some materials are available, some are missing. These WOs can produce partially, or need urgent procurement.&#10;&#10;Action: Click the yellow chip on any row to see which materials are missing.">
+      <div class="wkp-sum-icon">&#x26A0;</div>
+      <div>
+        <div class="wkp-sum-val" id="wsum-partial">--</div>
+        <div class="wkp-sum-lbl">Partial Shortage</div>
+        <div class="wkp-sum-hint">Some materials missing</div>
+      </div>
+    </div>
+
+    <div class="wkp-sum-card wkp-sum-err"
+         data-tip="Cannot Start&#10;Critical materials are missing. These Work Orders are fully blocked and CANNOT begin production.&#10;&#10;Action: Click the red chip to see what is missing, then create a Purchase MR to order it.">
+      <div class="wkp-sum-icon">&#x1F534;</div>
+      <div>
+        <div class="wkp-sum-val" id="wsum-blocked">--</div>
+        <div class="wkp-sum-lbl">Cannot Start</div>
+        <div class="wkp-sum-hint">Materials not available</div>
+      </div>
+    </div>
+
+    <div class="wkp-sum-card"
+         data-tip="Total Work Orders&#10;Total number of open Work Orders (Not Started + In Process + Material Transferred) included in this simulation.">
+      <div class="wkp-sum-icon">&#x1F4E6;</div>
+      <div>
+        <div class="wkp-sum-val" id="wsum-total">--</div>
+        <div class="wkp-sum-lbl">Total Work Orders</div>
+        <div class="wkp-sum-hint">Open &amp; in progress</div>
+      </div>
+    </div>
+
+    <div class="wkp-sum-card wkp-sum-cost"
+         data-tip="Total Materials to Buy&#10;Estimated purchase cost of ALL missing materials across every blocked and partially-blocked Work Order.&#10;&#10;This is roughly how much you need to spend to unblock all production.">
+      <div class="wkp-sum-icon">&#x20B9;</div>
+      <div>
+        <div class="wkp-sum-val wkp-sum-val-sm" id="wsum-shortage-val">--</div>
+        <div class="wkp-sum-lbl">Materials to Buy</div>
+        <div class="wkp-sum-hint">To unblock all WOs</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════ 4. MAIN CONTENT ════ -->
+  <div class="wkp-content" id="wkp-content">
+
+    <!-- Loading overlay -->
+    <div class="wkp-loading" id="wkp-loader">
+      <div class="wkp-spinner"></div>
+      <div class="wkp-load-title">Simulating kitting plan&hellip;</div>
+      <div class="wkp-load-sub">Checking warehouse stock against all Work Order requirements</div>
+    </div>
+
+    <!-- Empty state -->
+    <div class="wkp-empty" id="wkp-empty" style="display:none">
+      <div class="wkp-empty-icon">&#x1F4ED;</div>
+      <div class="wkp-empty-title">No open Work Orders found</div>
+      <div class="wkp-empty-sub">
+        Create Work Orders in the Manufacturing module, or change the &ldquo;Show WOs&rdquo; filter above.
+      </div>
+    </div>
+
+    <!-- WO Table -->
+    <div class="wkp-table-wrap" id="wkp-table-wrap" style="display:none">
+      <table class="wkp-table" id="wkp-table">
+        <thead>
+          <tr>
+            <th class="wkp-th-drag"
+                title="Drag rows in Priority Queue mode (Mode B) to set which WO gets materials first"></th>
+            <th class="wkp-th-seq"
+                title="Priority order (drag in Mode B to change)">#</th>
+            <th>Work Order</th>
+            <th>Product Being Made</th>
+            <th class="ta-r">
+              Qty Still to Produce
+              <span class="wkp-th-help" data-popover="remaining_qty" title="What does this column mean?">?</span>
+            </th>
+            <th>
+              Material Status
+              <span class="wkp-th-help" data-popover="shortage" title="What does this column mean?">?</span>
+            </th>
+            <th class="ta-r">
+              Production Cost
+              <span class="wkp-th-help" data-popover="est_cost" title="What does this column mean?">?</span>
+            </th>
+            <th class="ta-r">
+              Last Month Orders
+              <span class="wkp-th-help" data-popover="prev_so" title="What does this column mean?">?</span>
+            </th>
+            <th class="ta-r">
+              This Month Orders
+              <span class="wkp-th-help" data-popover="curr_so" title="What does this column mean?">?</span>
+            </th>
+            <th class="ta-r">
+              Total Unshipped
+              <span class="wkp-th-help" data-popover="total_so" title="What does this column mean?">?</span>
+            </th>
+            <th>Production Stage</th>
+            <th class="ta-r"></th>
+          </tr>
+        </thead>
+        <tbody id="wkp-tbody">
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ════ FLOATING TOOLTIP (JS-positioned) ════ -->
+  <div class="wkp-tooltip" id="wkp-tooltip" style="display:none"></div>
+
+  <!-- ════ COLUMN HELP POPOVER (appears on ? click) ════ -->
+  <div class="wkp-popover" id="wkp-popover" style="display:none" role="tooltip">
+    <div class="wkp-pop-header">
+      <span class="wkp-pop-title" id="wkp-pop-title"></span>
+      <button class="wkp-pop-close" id="wkp-pop-close">&#x2715;</button>
+    </div>
+    <div class="wkp-pop-body" id="wkp-pop-body"></div>
+    <div class="wkp-pop-example" id="wkp-pop-example" style="display:none">
+      <span class="wkp-pop-ex-label">Example</span>
+      <span id="wkp-pop-ex-text"></span>
+    </div>
+    <div class="wkp-pop-action" id="wkp-pop-action" style="display:none"></div>
+  </div>
+
+  <!-- ════ 5. MATERIAL SHORTAGE MODAL ════ -->
+  <div class="wkp-overlay" id="wkp-modal" style="display:none">
+    <div class="wkp-modal">
+      <div class="wkp-modal-head">
+        <div>
+          <div class="wkp-modal-title" id="wkp-modal-title">Material Shortage Detail</div>
+          <div class="wkp-modal-sub" id="wkp-modal-sub"></div>
+        </div>
+        <button class="wkp-modal-close" id="wkp-modal-close" title="Close">&#x2715;</button>
+      </div>
+      <!-- Recommendation card injected here by JS -->
+      <div id="wkp-modal-reco"></div>
+      <div class="wkp-modal-body" id="wkp-modal-body"></div>
+      <div class="wkp-modal-foot" id="wkp-modal-foot">
+        <button class="wkp-btn wkp-btn-brand" id="wkp-create-mr-btn" style="display:none">
+          &#x1F6D2; Order Missing Materials &mdash; Create Purchase MR
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════ 6. WORK ORDER DETAIL MODAL ════ -->
+  <div class="wkp-overlay" id="wkp-wo-modal" style="display:none">
+    <div class="wkp-modal wkp-modal-wide">
+      <div class="wkp-modal-head">
+        <div>
+          <div class="wkp-modal-title" id="wkp-wo-title">Work Order Detail</div>
+          <div class="wkp-modal-sub" id="wkp-wo-sub"></div>
+        </div>
+        <button class="wkp-modal-close" id="wkp-wo-close" title="Close">&#x2715;</button>
+      </div>
+      <div class="wkp-modal-body" id="wkp-wo-body"></div>
+    </div>
+  </div>
+
+</div>

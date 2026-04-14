@@ -1,0 +1,19 @@
+{
+  "doctype": "Page",
+  "name": "wo-kitting-planner",
+  "page_name": "wo-kitting-planner",
+  "title": "WO Kitting Planner",
+  "module": "Chaizup Toc",
+  "standard": "Yes",
+  "roles": [
+    {"role": "System Manager"},
+    {"role": "TOC Manager"},
+    {"role": "TOC User"},
+    {"role": "Stock Manager"},
+    {"role": "Stock User"},
+    {"role": "Purchase Manager"},
+    {"role": "Purchase User"},
+    {"role": "Manufacturing Manager"},
+    {"role": "Manufacturing User"}
+  ]
+}

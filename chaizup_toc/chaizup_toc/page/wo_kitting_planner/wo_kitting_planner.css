@@ -1,0 +1,977 @@
+/*
+ * ╔═══════════════════════════════════════════════════════════════════════╗
+ * ║  wo_kitting_planner.css  --  WO Kitting Planner Styles               ║
+ * ║  Tiger Theme  |  Part of chaizup_toc app                             ║
+ * ║  Last updated: 2026-04-14                                             ║
+ * ╚═══════════════════════════════════════════════════════════════════════╝
+ *
+ * DESIGN SYSTEM: Tiger Theme
+ * ──────────────────────────
+ * Shared design language with supply_chain_tracker.css.
+ * Same fonts, same color tokens, same border-radius scale.
+ * DO NOT mix in other design systems (Bootstrap, Frappe defaults, etc.)
+ * All rules are scoped under the .wkp- prefix.
+ *
+ * NAMESPACE PREFIX: wkp-
+ * ───────────────────────
+ * ALL classes in this file start with "wkp-" to avoid collision with:
+ *   kit-   (kitting_report page)
+ *   sct-   (supply_chain_tracker page)
+ *   Frappe built-in classes (form-*, page-*, btn-*)
+ * Never remove this prefix from any class. Never add un-prefixed classes.
+ *
+ * LAYOUT HIERARCHY (flex column, fills viewport height):
+ * ──────────────────────────────────────────────────────
+ *   .wkp-root           flex column, height set by JS (_applyHeight)
+ *   ├── .wkp-cmd        command bar: flex-shrink:0
+ *   ├── .wkp-hint-bar   context bar: flex-shrink:0
+ *   ├── .wkp-summary    summary strip: flex-shrink:0, overflow-x:auto
+ *   └── .wkp-content    flex:1, overflow:hidden (contains loader/empty/table)
+ *       └── .wkp-table-wrap   flex:1, overflow:auto (scrollable table)
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * 🔒 RESTRICTED ZONES — DO NOT CHANGE WITHOUT EXPLICIT USER PERMISSION
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * R1. CSS CUSTOM PROPERTIES (:root block)
+ *     Color tokens, font variables, spacing, shadow, transition values.
+ *     The entire :root block is a SHARED CONTRACT with the JS and HTML.
+ *     Changing a token name breaks every rule that uses it.
+ *     Changing a color changes the visual identity of the whole page.
+ *     → Only change values if the user explicitly requests a color change.
+ *     → Never add/rename variables — extend by adding NEW ones at the bottom.
+ *
+ * R2. FONT @import URL
+ *     The Google Fonts URL loads 3 families: DM Sans, Oswald, Geist Mono.
+ *     Changing it could break typography across the page.
+ *     → Ask user before changing fonts.
+ *
+ * R3. CLASS NAMES referenced by JS
+ *     These class names are read or applied by wo_kitting_planner.js.
+ *     Renaming them here without updating JS silently breaks functionality:
+ *       .wkp-seg-btn      → JS toggles .active on click
+ *       .wkp-pill-btn     → JS toggles .active, reads for state
+ *       .wkp-pill-dot     → JS toggles .active for on/off dot color
+ *       .wkp-pill-sublabel→ JS updates textContent on BOM toggle
+ *       .wkp-drag-handle  → JS sets opacity/cursor in _setDragHandleState()
+ *       .wkp-dragging     → JS adds/removes during HTML5 drag
+ *       .wkp-drag-over    → JS adds/removes during HTML5 drag-over
+ *       .wkp-tr           → JS queries all rows for drag-drop binding
+ *       .wkp-td-seq       → JS updates textContent after drag-drop reorder
+ *       .wkp-short-chip   → JS delegates click for shortage modal
+ *       .wkp-th-help      → JS delegates click for column popover
+ *       .wkp-tip-visible  → JS adds/removes to show/hide tooltip
+ *       .wkp-row-ok/warn/block/kitted → JS assigns per row kit_status
+ *       .wkp-short-ok/warn/block/kitted → JS assigns per row kit_status
+ *       .wkp-badge-gray/blue/amber/green/red → JS assigns per WO status
+ *       .wkp-stage-green/blue/teal/orange/red → JS assigns per supply stage
+ *       .wkp-status-ok/warn/block/kitted → JS assigns in WO detail modal
+ *       .wkp-reco-ok/warn/err/buy → JS assigns in shortage modal reco card
+ *       .wkp-decision-ok/warn/err/buy → JS assigns in WO detail decision card
+ *       .wkp-pressure-high/med/none → JS assigns based on SO urgency
+ *
+ * R4. Z-INDEX HIERARCHY (do not change — layers depend on this order)
+ *     5     → sticky thead (position:sticky)
+ *     1000  → modal overlay (.wkp-overlay)
+ *     9998  → column popover (#wkp-popover)
+ *     9999  → floating tooltip (#wkp-tooltip)
+ *
+ * R5. ANIMATION NAMES
+ *     @keyframes wkp-spin    → table loading spinner
+ *     @keyframes wkp-pulse   → blocked chip attention pulse
+ *     @keyframes wkp-pop-in  → popover card entrance animation
+ *     Renaming breaks the animation-name references in the rules below.
+ *
+ * R6. ROW STATUS LEFT BORDER SYSTEM
+ *     The left border on .wkp-row-* applies to td:nth-child(2).
+ *     This works because td:first-child is the drag handle column (no border).
+ *     If you add a new column BEFORE the drag column, this selector breaks.
+ *     Structure must remain: [drag] [seq] [wo] [item] [qty] [shortage]...
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ✅ SAFE TO MODIFY (low risk, can change without breaking JS/HTML)
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * S1. Spacing: padding, margin, gap values — adjust for visual comfort
+ * S2. Font sizes — stay within ±2px of documented values to preserve hierarchy
+ * S3. Border-radius values — the --r-* variables are the reference
+ * S4. Box-shadow values — use the --sh-* variables for consistency
+ * S5. Hover/transition effects — :hover rules, transition durations
+ * S6. .wkp-sum-hint text color and size — purely decorative sub-label
+ * S7. .wkp-reco-* and .wkp-decision-* background tints — aesthetic only
+ * S8. .wkp-tooltip max-width — adjust if tooltip text is long
+ * S9. .wkp-popover width (300px) — adjust if popover content needs more space
+ * S10. @keyframes wkp-pulse animation timing — adjust urgency feel
+ *
+ * ⚠️ CAUTION ZONES (can change but test thoroughly)
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * C1. .wkp-root height: JS overrides this with inline style (_applyHeight).
+ *     The CSS value is only a FALLBACK if JS runs slowly.
+ *     Changing calc(100dvh - 110px) only affects first paint before JS runs.
+ *
+ * C2. .wkp-table-wrap flex:1 + overflow:auto — this makes the table scroll
+ *     while the header stays fixed. Changing display or overflow breaks scroll.
+ *
+ * C3. .wkp-table thead th position:sticky + z-index:5 — sticky header system.
+ *     Removing position:sticky makes the header scroll away with the table.
+ *
+ * C4. .wkp-loading position:absolute inset:0 — full-area overlay.
+ *     Must stay absolute/fixed with inset:0 to cover the table during loading.
+ *
+ * C5. .wkp-tooltip position:fixed — tooltip is positioned by JS using clientX/Y.
+ *     Changing to absolute would break JS positioning calculations.
+ *
+ * C6. .wkp-popover position:fixed — same reason as tooltip.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * COLOR SEMANTICS (Tiger Theme)
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ *   GREEN  (#10b981 / ok)    → Ready to Produce / In Stock / All good
+ *   AMBER  (#f59e0b / warn)  → Partial shortage / Needs attention
+ *   RED    (#ef4444 / err)   → Blocked / Cannot start / Critical shortage
+ *   CYAN   (#06b6d4 / buy)   → Expected/upcoming / Kitted / Info
+ *   ORANGE (#f97316 / brand) → Brand accent, active state, highlights
+ *   STONE  (#78716c family)  → Neutral UI: borders, text, backgrounds
+ *
+ * SEMANTIC CLASSES:
+ *   .wkp-short-ok    = green  → no shortage
+ *   .wkp-short-warn  = amber  → partial shortage
+ *   .wkp-short-block = red    → fully blocked (+ pulse animation)
+ *   .wkp-short-kitted= cyan   → already transferred to floor
+ *   .wkp-row-ok      = green left border
+ *   .wkp-row-warn    = amber left border
+ *   .wkp-row-block   = red left border
+ *   .wkp-row-kitted  = cyan left border
+ *   .wkp-stage-green = In Stock supply stage
+ *   .wkp-stage-blue  = In Production supply stage
+ *   .wkp-stage-teal  = PO Raised supply stage
+ *   .wkp-stage-orange= MR Raised supply stage
+ *   .wkp-stage-red   = Short / No Action supply stage
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * SECTION INDEX
+ * ═══════════════════════════════════════════════════════════════════════
+ *   §1  DESIGN TOKENS (:root)         🔒 RESTRICTED
+ *   §2  ROOT SHELL (.wkp-root)        ⚠️ CAUTION (height managed by JS)
+ *   §3  COMMAND BAR                   ✅ SAFE (spacing/font tweaks ok)
+ *   §4  HINT BAR / CONTEXT BAR        ✅ SAFE
+ *   §5  SUMMARY STRIP                 ✅ SAFE
+ *   §6  CONTENT AREA + LOADING        ⚠️ CAUTION (position/overflow critical)
+ *   §7  TABLE                         ⚠️ CAUTION (sticky + nth-child selectors)
+ *   §8  SHORTAGE CHIP                 🔒 RESTRICTED (class names read by JS)
+ *   §9  MODALS                        ✅ SAFE (sizing/padding)
+ *   §10 COMMAND BAR ENHANCEMENTS      ✅ SAFE
+ *   §11 CONTEXT BAR ENHANCEMENTS      ✅ SAFE
+ *   §12 SUMMARY CARD ENHANCEMENTS     ✅ SAFE
+ *   §13 LOADING/EMPTY ENHANCEMENTS    ✅ SAFE
+ *   §14 COLUMN HELP BUTTON (?)        ✅ SAFE (sizing/color)
+ *   §15 FLOATING TOOLTIP              ⚠️ CAUTION (position:fixed required)
+ *   §16 COLUMN POPOVER CARD           ⚠️ CAUTION (position:fixed required)
+ *   §17 RECOMMENDATION CARD           ✅ SAFE (bg tints, spacing)
+ *   §18 WO DETAIL DECISION CARD       ✅ SAFE (bg tints, spacing)
+ *   §19 TABLE HEADER MULTI-LINE       ✅ SAFE
+ *   §20 URGENCY PULSE ANIMATION       ✅ SAFE (timing only)
+ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   🔒 R2 — FONT IMPORT  (DO NOT CHANGE URL without user permission)
+   Loads: DM Sans (body), Oswald (display/headings), Geist Mono (code/numbers)
+   ───────────────────────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;600;700&family=Oswald:wght@500;600;700&family=Geist+Mono:wght@400;500&display=swap");
+
+/* ─────────────────────────────────────────────────────────────────────────
+   §1  DESIGN TOKENS                                      🔒 RESTRICTED
+   ─────────────────────────────────────────────────────────────────────────
+   These CSS custom properties form the shared design contract across
+   HTML, CSS, and JS (JS reads class names that reference these tokens).
+
+   COLOR GROUPS:
+     --stone-*   Neutral grays (UI chrome, borders, muted text)
+     --brand-*   Orange accent (active states, primary buttons)
+     --ok        Green (ready, in-stock, success)
+     --warn      Amber (partial shortage, caution)
+     --err       Red (blocked, critical shortage, overdue)
+     --buy       Cyan (expected/upcoming, kitted, informational)
+
+   IF A COLOR MUST CHANGE: Change the variable VALUE here only.
+   Never change the variable NAME — all rules below reference the name.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --stone-50:  #faf9f8; --stone-100: #f5f5f4; --stone-200: #e7e5e4;
+  --stone-300: #d6d3d1; --stone-400: #a8a29e; --stone-500: #78716c;
+  --stone-600: #57534e; --stone-800: #292524; --stone-900: #1c1917;
+  --brand-500: #f97316; --brand-600: #ea580c;
+  --ok:  #10b981; --warn: #f59e0b; --err: #ef4444; --buy: #06b6d4;
+  --ok-bg: #ecfdf5; --ok-text: #047857; --ok-border: #a7f3d0;
+  --warn-bg: #fefce8; --warn-text: #ca8a04; --warn-border: #fde68a;
+  --err-bg: #fef2f2; --err-text: #dc2626; --err-border: #fca5a5;
+  --buy-bg: #ecfeff; --buy-text: #0e7490; --buy-border: #a5f3fc;
+  --border: #e7e5e4;
+  --bg-page: #faf9f8; --bg-surface: #ffffff;
+  --text-main: #292524; --text-muted: #78716c;
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --font-display: "Oswald", sans-serif;
+  --mono: "Geist Mono", monospace;
+  --r-sm: 5px; --r-md: 8px; --r-lg: 10px; --r-full: 999px;
+  --sh-sm: 0 1px 3px rgba(0,0,0,.06); --sh-md: 0 4px 12px rgba(0,0,0,.09);
+  --sh-lg: 0 8px 24px rgba(0,0,0,.12);
+  --tf: 0.15s ease; --tb: 0.25s cubic-bezier(0.16,1,0.3,1);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   §2  ROOT SHELL                                         ⚠️ CAUTION
+   ─────────────────────────────────────────────────────────────────────────
+   .wkp-root is the outermost flex column container.
+   JS calls _applyHeight() which sets height via inline style using:
+     window.innerHeight - getBoundingClientRect().top - 4
+   The CSS height is only a FALLBACK for the brief moment before JS runs.
+   → Do NOT remove the height property (needed as fallback).
+   → Do NOT change display:flex or flex-direction:column (layout depends on it).
+   → overflow:hidden is intentional — inner .wkp-table-wrap handles scrolling.
+   ───────────────────────────────────────────────────────────────────────── */
+.wkp-root {
+  font-family: var(--font-sans);
+  color: var(--text-main);
+  background: var(--bg-page);
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 110px);
+  min-height: 300px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  font-size: 13px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   §3  COMMAND BAR                                        ✅ SAFE TO MODIFY
+   ─────────────────────────────────────────────────────────────────────────
+   Contains: Stock X/Y toggle, Scenario A/B toggle, Deep BOM pill,
+             status filter select, refresh button.
+   flex-shrink:0 ensures the command bar never collapses when table is tall.
+   → Safe to adjust: padding, gap, font-size, colors on .wkp-seg-btn
+   → Class names .wkp-seg-btn and .active are read by JS (R3) — do not rename.
+   ───────────────────────────────────────────────────────────────────────── */
+.wkp-cmd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 20px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.wkp-cmd-left  { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.wkp-cmd-right { display: flex; align-items: center; gap: 8px; }
+
+.wkp-toggle-group {
+  display: flex; align-items: center; gap: 7px;
+}
+.wkp-toggle-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--stone-400); font-family: var(--font-display);
+}
+.wkp-seg {
+  display: flex;
+  background: var(--stone-100);
+  border-radius: var(--r-md);
+  padding: 2px;
+  gap: 2px;
+}
+.wkp-seg-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--stone-500);
+  transition: all var(--tf);
+  white-space: nowrap;
+}
+.wkp-seg-btn.active {
+  background: #fff;
+  color: var(--brand-600);
+  box-shadow: var(--sh-sm);
+}
+.wkp-seg-btn:hover:not(.active) { color: var(--brand-600); }
+
+/* Multi-level BOM pill toggle */
+.wkp-pill-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--stone-200);
+  border-radius: var(--r-full);
+  background: #fff;
+  font-size: 11.5px; font-weight: 600;
+  cursor: pointer; color: var(--stone-500);
+  transition: all var(--tf);
+}
+.wkp-pill-btn.active { border-color: var(--brand-500); color: var(--brand-600); background: var(--brand-50, #fff7ed); }
+.wkp-pill-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--stone-300);
+  transition: background var(--tf);
+}
+.wkp-pill-btn.active .wkp-pill-dot { background: var(--brand-500); }
+
+.wkp-select {
+  padding: 6px 10px;
+  border: 1px solid var(--stone-200);
+  border-radius: var(--r-md);
+  font-size: 11.5px; font-weight: 500;
+  background: #fff; color: var(--text-main);
+  cursor: pointer;
+}
+.wkp-refresh-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--stone-200);
+  border-radius: var(--r-md);
+  background: #fff;
+  font-size: 12px; font-weight: 600;
+  cursor: pointer; color: var(--stone-600);
+  transition: all var(--tf);
+}
+.wkp-refresh-btn:hover { background: var(--stone-50); border-color: var(--stone-300); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   §4  CONTEXT BAR (hint bar)                             ✅ SAFE TO MODIFY
+   ─────────────────────────────────────────────────────────────────────────
+   Shows current mode + live simulation results summary.
+   JS updates #wkp-hint-mode and #wkp-hint-text textContent after each run.
+   → Safe to change: background, border, font-size, padding
+   → Do not change display:flex — JS shows/hides #wkp-drag-hint inside it.
+   ───────────────────────────────────────────────────────────────────────── */
+.wkp-hint-bar {
+  padding: 7px 20px;
+  background: var(--buy-bg);
+  border-bottom: 1px solid var(--buy-border);
+  font-size: 11.5px; color: var(--buy-text);
+  font-weight: 500;
+  display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+}
+.wkp-hint-drag {
+  font-weight: 700; color: var(--brand-600);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   §5  SUMMARY STRIP                                      ✅ SAFE TO MODIFY
+   ─────────────────────────────────────────────────────────────────────────
+   Five stat cards: Ready / Partial / Blocked / Total WOs / Shortage Value.
+   JS updates the .wkp-sum-val textContent by ID:
+     #wsum-ready  #wsum-partial  #wsum-blocked  #wsum-total  #wsum-shortage-val
+   → Safe to add more .wkp-sum-card blocks for additional stats.
+   → Safe to change card colors (the .wkp-sum-ok/warn/err/cost modifier classes).
+   → overflow-x:auto allows horizontal scroll on small screens — keep it.
+   ───────────────────────────────────────────────────────────────────────── */
+.wkp-summary {
+  display: flex; gap: 10px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto; flex-shrink: 0;
+  scrollbar-width: none;
+}
+.wkp-summary::-webkit-scrollbar { display: none; }
+.wkp-sum-card {
+  background: #fff; border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 10px 18px;
+  display: flex; align-items: center; gap: 12px;
+  box-shadow: var(--sh-sm); white-space: nowrap; flex-shrink: 0;
+}
+.wkp-sum-val { font-family: var(--font-display); font-size: 22px; font-weight: 700; line-height: 1; }
+.wkp-sum-lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--stone-500); }
+.wkp-sum-ok   .wkp-sum-val { color: var(--ok-text); }
+.wkp-sum-warn .wkp-sum-val { color: var(--warn-text); }
+.wkp-sum-err  .wkp-sum-val { color: var(--err-text); }
+.wkp-sum-cost .wkp-sum-val { color: var(--err-text); font-size: 16px; }
+
+/* ── CONTENT AREA ── */
+.wkp-content {
+  flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column;
+}
+
+/* Loading overlay */
+.wkp-loading {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; background: rgba(250,249,248,.92); z-index: 20; font-weight: 500; color: var(--stone-500);
+}
+.wkp-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid var(--stone-200);
+  border-top-color: var(--brand-500);
+  border-radius: 50%;
+  animation: wkp-spin 0.75s linear infinite;
+}
+@keyframes wkp-spin { to { transform: rotate(360deg); } }
+
+/* Empty state */
+.wkp-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; color: var(--stone-400);
+  font-size: 14px; font-weight: 500;
+}
+.wkp-empty-icon { font-size: 40px; }
+
+/* ── TABLE ── */
+.wkp-table-wrap {
+  flex: 1; overflow: auto;
+  scrollbar-width: thin; scrollbar-color: var(--stone-300) transparent;
+}
+.wkp-table-wrap::-webkit-scrollbar { width: 5px; height: 5px; }
+.wkp-table-wrap::-webkit-scrollbar-thumb { background: var(--stone-300); border-radius: 10px; }
+
+.wkp-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12.5px;
+}
+.wkp-table thead th {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--stone-50);
+  border-bottom: 2px solid var(--stone-200);
+  padding: 9px 10px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--stone-500);
+  font-family: var(--font-display);
+  white-space: nowrap;
+}
+.wkp-table tbody td {
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--stone-100);
+  vertical-align: middle;
+}
+.wkp-table tbody tr { transition: background 0.1s; }
+.wkp-table tbody tr:hover { background: var(--stone-50); }
+
+/* Left-border status accent */
+.wkp-table tbody tr td:first-child { padding-left: 4px; }
+.wkp-row-ok    td:nth-child(2) { border-left: 3px solid var(--ok); }
+.wkp-row-warn  td:nth-child(2) { border-left: 3px solid var(--warn); }
+.wkp-row-block td:nth-child(2) { border-left: 3px solid var(--err); }
+.wkp-row-kitted td:nth-child(2){ border-left: 3px solid var(--buy); }
+
+/* Column-specific widths */
+.wkp-th-drag { width: 28px; padding: 0 4px !important; }
+.wkp-th-seq  { width: 36px; text-align: center !important; }
+.ta-r        { text-align: right; }
+
+/* Drag handle */
+.wkp-drag-handle {
+  cursor: grab; color: var(--stone-300);
+  font-size: 14px; text-align: center;
+  padding: 6px 4px;
+  border-radius: 3px;
+  display: none;          /* shown only in Scenario B */
+  transition: color var(--tf);
+}
+.wkp-drag-handle:hover { color: var(--stone-500); background: var(--stone-100); }
+.wkp-seq-num { text-align: center; color: var(--stone-400); font-family: var(--mono); font-size: 11px; }
+.wkp-dragging { opacity: 0.4; }
+.wkp-drag-over td { background: var(--buy-bg) !important; }
+
+/* WO name cell */
+.wkp-wo-name {
+  font-weight: 700; font-family: var(--mono); font-size: 12px;
+  color: var(--brand-600); cursor: pointer;
+}
+.wkp-wo-name:hover { text-decoration: underline; }
+.wkp-wo-status-badge {
+  font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+  margin-left: 4px; vertical-align: middle;
+}
+.wkp-ws-notstarted { background: var(--stone-100); color: var(--stone-600); }
+.wkp-ws-inprocess  { background: #eff6ff; color: #1d4ed8; }
+.wkp-ws-transferred{ background: var(--buy-bg); color: var(--buy-text); }
+
+/* Item cell */
+.wkp-item-code { font-family: var(--mono); font-size: 11px; color: var(--stone-600); font-weight: 600; }
+.wkp-item-name { font-size: 11px; color: var(--stone-400); margin-top: 1px; }
+
+/* Qty cell */
+.wkp-qty-val { font-family: var(--font-display); font-size: 15px; font-weight: 700; line-height: 1; }
+.wkp-qty-sub { font-size: 10px; color: var(--stone-400); margin-top: 1px; }
+
+/* Shortage chip */
+.wkp-short-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border-radius: var(--r-full);
+  font-size: 11px; font-weight: 700; cursor: pointer;
+  border: 1px solid transparent; transition: all var(--tf);
+}
+.wkp-short-chip:hover { transform: translateY(-1px); box-shadow: var(--sh-sm); }
+.wkp-short-ok     { background: var(--ok-bg);   color: var(--ok-text);   border-color: var(--ok-border); }
+.wkp-short-warn   { background: var(--warn-bg);  color: var(--warn-text); border-color: var(--warn-border); }
+.wkp-short-block  { background: var(--err-bg);   color: var(--err-text);  border-color: var(--err-border); }
+.wkp-short-kitted { background: var(--buy-bg);   color: var(--buy-text);  border-color: var(--buy-border); }
+
+/* Dispatch cells */
+.wkp-dispatch-val { font-family: var(--font-display); font-size: 13px; font-weight: 700; text-align: right; }
+.wkp-dispatch-zero { color: var(--stone-300); }
+
+/* Status pill (last column) */
+.wkp-status-pill {
+  display: inline-flex; align-items: center;
+  padding: 3px 10px; border-radius: var(--r-full);
+  font-size: 10.5px; font-weight: 700;
+}
+.wkp-sp-ok     { background: var(--ok-bg);   color: var(--ok-text); }
+.wkp-sp-warn   { background: var(--warn-bg);  color: var(--warn-text); }
+.wkp-sp-block  { background: var(--err-bg);   color: var(--err-text); }
+.wkp-sp-kitted { background: var(--buy-bg);   color: var(--buy-text); }
+
+/* Info icon */
+.wkp-info-btn {
+  background: none; border: none; cursor: pointer; color: var(--stone-400);
+  font-size: 14px; padding: 2px 4px; border-radius: 3px; transition: all var(--tf);
+}
+.wkp-info-btn:hover { color: var(--brand-600); background: var(--stone-100); }
+
+/* ── MODAL ── */
+.wkp-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.wkp-modal {
+  background: #fff; border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg); width: 100%; max-width: 580px;
+  max-height: 85vh; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.wkp-modal-wide { max-width: 820px; }
+.wkp-modal-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 18px 22px; border-bottom: 1px solid var(--stone-100); flex-shrink: 0;
+}
+.wkp-modal-title { font-size: 16px; font-weight: 700; color: var(--text-main); }
+.wkp-modal-sub   { font-size: 12px; color: var(--stone-400); margin-top: 3px; }
+.wkp-modal-close {
+  background: none; border: 1px solid var(--stone-200); border-radius: var(--r-sm);
+  width: 28px; height: 28px; cursor: pointer; font-size: 12px;
+  color: var(--stone-500); flex-shrink: 0; transition: all var(--tf);
+}
+.wkp-modal-close:hover { background: var(--err-bg); color: var(--err-text); border-color: var(--err-border); }
+.wkp-modal-body { flex: 1; overflow-y: auto; padding: 20px 22px; }
+.wkp-modal-foot {
+  padding: 12px 22px; border-top: 1px solid var(--stone-100); flex-shrink: 0;
+}
+
+/* Shortage table inside modal */
+.wkp-shortage-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wkp-shortage-tbl thead th {
+  background: var(--stone-50); border-bottom: 1px solid var(--stone-200);
+  padding: 7px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--stone-500); text-align: left;
+  font-family: var(--font-display);
+}
+.wkp-shortage-tbl thead th.ta-r { text-align: right; }
+.wkp-shortage-tbl tbody td { padding: 9px 10px; border-bottom: 1px solid var(--stone-100); vertical-align: middle; }
+.wkp-shortage-tbl tbody tr:last-child td { border-bottom: none; }
+.wkp-shortage-tbl tbody tr.is-short td { background: var(--err-bg); }
+.wkp-shortage-tbl tbody tr.is-short .wkp-short-qty { color: var(--err-text); font-weight: 700; }
+.wkp-shortage-tbl tbody tr.is-ok td { background: #f0fdf4; }
+.wkp-shortage-tbl tbody tr.is-ok .wkp-ok-qty { color: var(--ok-text); font-weight: 600; }
+.wkp-s-item-code { font-family: var(--mono); font-size: 11px; color: var(--stone-600); font-weight: 600; }
+.wkp-s-item-name { font-size: 11px; color: var(--stone-400); margin-top: 1px; }
+.wkp-num { font-family: var(--mono); font-size: 12px; text-align: right; }
+.wkp-short-qty { color: var(--err-text); }
+.wkp-ok-qty    { color: var(--ok-text); }
+
+/* WO lifecycle timeline */
+.wkp-timeline { display: flex; gap: 0; margin: 16px 0; }
+.wkp-tl-step {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  position: relative;
+}
+.wkp-tl-step::before {
+  content: ""; position: absolute; top: 14px; right: -50%;
+  height: 2px; width: 100%; background: var(--stone-200); z-index: 0;
+}
+.wkp-tl-step:last-child::before { display: none; }
+.wkp-tl-dot {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--stone-200); border: 2px solid var(--stone-300);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; z-index: 1; position: relative; transition: all var(--tb);
+}
+.wkp-tl-dot.done  { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok-text); }
+.wkp-tl-dot.active{ background: var(--buy-bg);  border-color: var(--buy);  color: var(--buy-text); }
+.wkp-tl-lbl { font-size: 10px; font-weight: 600; margin-top: 6px; color: var(--stone-500); text-align: center; }
+
+/* Info row in WO modal */
+.wkp-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.wkp-info-field { }
+.wkp-info-key { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--stone-400); font-family: var(--font-display); }
+.wkp-info-val { font-size: 13px; font-weight: 600; margin-top: 2px; }
+
+/* Buttons */
+.wkp-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: var(--r-md);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--border); background: #fff; color: var(--text-main);
+  transition: all var(--tf);
+}
+.wkp-btn:hover { background: var(--stone-50); }
+.wkp-btn-brand { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
+.wkp-btn-brand:hover { background: var(--brand-600); border-color: var(--brand-600); }
+
+/* Scenario B drag-active mode */
+body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
+
+/* ── DRAG HANDLE -- always visible (opacity controlled by JS) ── */
+.wkp-drag-handle {
+  display: flex;             /* override the old display:none */
+  opacity: 0.2;              /* dimmed by default (Scenario A) */
+  cursor: default;
+  align-items: center; justify-content: center;
+}
+.wkp-td-drag { width: 28px; padding: 0 4px !important; }
+.wkp-td-seq  { width: 36px; text-align: center; color: var(--stone-400);
+               font-family: var(--mono); font-size: 11px; }
+
+/* ── WO LINK ── */
+.wkp-wo-link {
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  color: var(--brand-600); text-decoration: none;
+}
+.wkp-wo-link:hover { text-decoration: underline; }
+
+/* ── STATUS BADGE (WO status pill in last column) ── */
+.wkp-status-badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: var(--r-full);
+  font-size: 10px; font-weight: 700; white-space: nowrap;
+}
+.wkp-badge-gray  { background: var(--stone-100); color: var(--stone-600); }
+.wkp-badge-blue  { background: #eff6ff;           color: #1d4ed8; }
+.wkp-badge-amber { background: var(--warn-bg);    color: var(--warn-text); }
+.wkp-badge-green { background: var(--ok-bg);      color: var(--ok-text); }
+.wkp-badge-red   { background: var(--err-bg);     color: var(--err-text); }
+
+/* ── SMALL BUTTON ── */
+.wkp-btn-sm { padding: 4px 10px; font-size: 11px; }
+
+/* ── MODAL TABLE (shortage breakdown) ── */
+.wkp-modal-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.wkp-modal-table thead th {
+  background: var(--stone-50); border-bottom: 1px solid var(--stone-200);
+  padding: 7px 10px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--stone-500); text-align: left;
+  font-family: var(--font-display);
+  white-space: nowrap;
+}
+.wkp-modal-table thead th.ta-r { text-align: right; }
+.wkp-modal-table tbody td {
+  padding: 9px 10px; border-bottom: 1px solid var(--stone-100);
+  vertical-align: middle;
+}
+.wkp-modal-table tbody tr:last-child td { border-bottom: none; }
+.wkp-modal-row-short td { background: #fff7f7; }
+.wkp-modal-empty { padding: 24px 0; color: var(--stone-400); text-align: center; font-size: 13px; }
+
+/* ── CELL COLORS ── */
+.wkp-cell-red   { color: var(--err-text);  font-weight: 700; }
+.wkp-cell-green { color: var(--ok-text);   font-weight: 600; }
+
+/* ── STAGE BADGE (supply stage: In Stock / MR Raised / PO Raised / In Production / Short) ── */
+.wkp-stage-badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: var(--r-full);
+  font-size: 10px; font-weight: 700; white-space: nowrap;
+}
+.wkp-stage-green  { background: var(--ok-bg);   color: var(--ok-text);   }
+.wkp-stage-blue   { background: #eff6ff;          color: #1d4ed8;          }
+.wkp-stage-teal   { background: var(--buy-bg);   color: var(--buy-text);  }
+.wkp-stage-orange { background: var(--warn-bg);  color: var(--warn-text); }
+.wkp-stage-red    { background: var(--err-bg);   color: var(--err-text);  }
+
+/* ── WO DETAIL MODAL LAYOUT ── */
+.wkp-wo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  padding-bottom: 8px;
+}
+.wkp-wo-section {
+  background: var(--stone-50); border: 1px solid var(--stone-200);
+  border-radius: var(--r-md); padding: 14px 16px;
+}
+.wkp-wo-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--stone-400);
+  font-family: var(--font-display); margin-bottom: 10px;
+}
+.wkp-wo-info-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; padding: 4px 0;
+  border-bottom: 1px solid var(--stone-200); font-size: 12px;
+}
+.wkp-wo-info-row:last-child { border-bottom: none; }
+.wkp-wo-info-row span:first-child { color: var(--stone-500); flex-shrink: 0; }
+.wkp-wo-info-row span:last-child  { text-align: right; font-weight: 600; }
+.wkp-wo-kit-status {
+  font-size: 13px; font-weight: 700; padding: 8px 12px;
+  border-radius: var(--r-md); text-align: center; margin-top: 4px;
+}
+.wkp-status-ok     { background: var(--ok-bg);   color: var(--ok-text);   }
+.wkp-status-warn   { background: var(--warn-bg);  color: var(--warn-text); }
+.wkp-status-block  { background: var(--err-bg);   color: var(--err-text);  }
+.wkp-status-kitted { background: var(--buy-bg);   color: var(--buy-text);  }
+
+/* WO modal footer (action buttons) */
+.wkp-wo-footer {
+  padding-top: 16px; margin-top: 4px;
+  border-top: 1px solid var(--stone-100);
+  display: flex; justify-content: flex-end;
+}
+
+/* Monospace helper */
+.mono { font-family: var(--mono); font-size: 12px; }
+
+/* Item name / code in table cells */
+.wkp-item-name { font-size: 12.5px; font-weight: 500; }
+.wkp-item-code { font-family: var(--mono); font-size: 10.5px; color: var(--stone-500); margin-top: 1px; }
+
+
+/* ═══════════════════════════════════════════════════════
+   COMMAND BAR ENHANCEMENTS
+   ═══════════════════════════════════════════════════════ */
+
+/* Toggle label block: two-line label+sublabel */
+.wkp-toggle-label-block { display: flex; flex-direction: column; gap: 1px; }
+.wkp-toggle-sublabel    { font-size: 9px; color: var(--stone-400); font-weight: 500; }
+
+/* Pill group: pill button + its sub-label */
+.wkp-pill-group   { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.wkp-pill-sublabel{ font-size: 9px; color: var(--stone-400); font-weight: 500;
+                    padding-left: 12px; transition: color var(--tf); }
+
+/* Filter label + select group */
+.wkp-filter-group { display: flex; align-items: center; gap: 6px; }
+.wkp-filter-label { font-size: 11px; font-weight: 600; color: var(--stone-500);
+                    white-space: nowrap; }
+
+
+/* ═══════════════════════════════════════════════════════
+   CONTEXT BAR (hint bar) ENHANCEMENTS
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-hint-left   { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.wkp-hint-texts  { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wkp-hint-mode   { font-size: 10px; font-weight: 700; text-transform: uppercase;
+                   letter-spacing: 0.7px; color: var(--buy-text); opacity: 0.75;
+                   font-family: var(--font-display); }
+.wkp-hint-detail { font-size: 12px; font-weight: 500; color: var(--buy-text);
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wkp-hint-icon   { font-size: 16px; flex-shrink: 0; }
+
+
+/* ═══════════════════════════════════════════════════════
+   SUMMARY CARD ENHANCEMENTS
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-sum-card  { cursor: default; }
+.wkp-sum-icon  { font-size: 22px; flex-shrink: 0; }
+.wkp-sum-hint  { font-size: 9.5px; color: var(--stone-400); margin-top: 2px;
+                 font-weight: 500; }
+.wkp-sum-val-sm{ font-size: 15px !important; }
+
+
+/* ═══════════════════════════════════════════════════════
+   LOADING OVERLAY ENHANCEMENTS
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-load-title { font-size: 14px; font-weight: 600; color: var(--stone-600); }
+.wkp-load-sub   { font-size: 11.5px; color: var(--stone-400); }
+
+/* Empty state */
+.wkp-empty-title { font-size: 15px; font-weight: 600; }
+.wkp-empty-sub   { font-size: 12px; color: var(--stone-400); margin-top: 4px;
+                   text-align: center; max-width: 340px; }
+
+
+/* ═══════════════════════════════════════════════════════
+   COLUMN HEADER HELP BUTTON (?)
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-th-help {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  background: var(--stone-200); color: var(--stone-600);
+  font-size: 9px; font-weight: 800;
+  cursor: pointer; border: none;
+  margin-left: 4px; vertical-align: middle;
+  transition: all var(--tf); line-height: 1;
+}
+.wkp-th-help:hover { background: var(--brand-500); color: #fff; transform: scale(1.1); }
+
+
+/* ═══════════════════════════════════════════════════════
+   FLOATING TOOLTIP (data-tip hover)
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-tooltip {
+  position: fixed; z-index: 9999;
+  background: var(--stone-900); color: #fff;
+  font-size: 11.5px; line-height: 1.55;
+  padding: 8px 12px; border-radius: var(--r-md);
+  max-width: 280px; width: max-content;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  white-space: pre-line;
+  font-family: var(--font-sans); font-weight: 400;
+  opacity: 0; transition: opacity 0.15s;
+}
+.wkp-tooltip.wkp-tip-visible { opacity: 1; }
+
+
+/* ═══════════════════════════════════════════════════════
+   COLUMN HELP POPOVER CARD
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-popover {
+  position: fixed; z-index: 9998;
+  background: #fff; border: 1px solid var(--stone-200);
+  border-radius: var(--r-lg); box-shadow: var(--sh-lg);
+  width: 300px; font-family: var(--font-sans);
+  overflow: hidden;
+  animation: wkp-pop-in 0.18s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes wkp-pop-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+.wkp-pop-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 8px; border-bottom: 1px solid var(--stone-100);
+}
+.wkp-pop-title {
+  font-size: 12.5px; font-weight: 700; color: var(--text-main);
+  font-family: var(--font-display);
+}
+.wkp-pop-close {
+  background: none; border: none; cursor: pointer; font-size: 11px;
+  color: var(--stone-400); padding: 2px 4px; border-radius: 3px;
+  line-height: 1; transition: all var(--tf);
+}
+.wkp-pop-close:hover { background: var(--stone-100); color: var(--stone-700); }
+.wkp-pop-body {
+  padding: 10px 14px; font-size: 12px; color: var(--stone-600);
+  line-height: 1.55;
+}
+.wkp-pop-example {
+  margin: 0 14px 10px;
+  background: var(--stone-50); border: 1px solid var(--stone-200);
+  border-radius: var(--r-sm); padding: 8px 10px; font-size: 11.5px;
+}
+.wkp-pop-ex-label {
+  display: block; font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--stone-400);
+  font-family: var(--font-display); margin-bottom: 3px;
+}
+.wkp-pop-action {
+  background: var(--buy-bg); border-top: 1px solid var(--buy-border);
+  padding: 8px 14px; font-size: 11px; font-weight: 600; color: var(--buy-text);
+  line-height: 1.45;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   RECOMMENDATION / DECISION CARD (inside shortage modal)
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-reco {
+  display: flex; align-items: flex-start; gap: 12px;
+  margin: 0; padding: 14px 22px;
+  border-bottom: 1px solid var(--stone-100);
+}
+.wkp-reco-ok   { background: #f0fdf4; }
+.wkp-reco-warn { background: #fffbeb; }
+.wkp-reco-err  { background: #fef2f2; }
+.wkp-reco-buy  { background: #ecfeff; }
+
+.wkp-reco-icon     { font-size: 20px; flex-shrink: 0; line-height: 1; margin-top: 1px; }
+.wkp-reco-body     { flex: 1; min-width: 0; }
+.wkp-reco-headline { font-size: 13px; font-weight: 700; color: var(--text-main); }
+.wkp-reco-detail   { font-size: 12px; color: var(--stone-500); margin-top: 3px; line-height: 1.45; }
+.wkp-reco-action   {
+  display: inline-block;
+  margin-top: 6px; font-size: 11px; font-weight: 600;
+  color: var(--buy-text); background: var(--buy-bg);
+  border: 1px solid var(--buy-border); border-radius: var(--r-sm);
+  padding: 3px 8px;
+}
+
+/* Urgency badge in recommendation card header */
+.wkp-reco-urgency {
+  display: inline-flex; align-items: center;
+  padding: 1px 8px; border-radius: var(--r-full);
+  font-size: 10px; font-weight: 700; margin-left: 8px; vertical-align: middle;
+}
+.wkp-urg-high { background: var(--err-bg); color: var(--err-text); border: 1px solid var(--err-border); }
+.wkp-urg-med  { background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-border); }
+.wkp-urg-low  { background: var(--ok-bg); color: var(--ok-text); border: 1px solid var(--ok-border); }
+
+
+/* ═══════════════════════════════════════════════════════
+   WO DETAIL MODAL: DECISION CARD
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-decision {
+  margin: 0 0 16px;
+  border: 1.5px solid;
+  border-radius: var(--r-md); padding: 14px 16px;
+}
+.wkp-decision-ok   { background: #f0fdf4; border-color: var(--ok-border); }
+.wkp-decision-warn { background: #fffbeb; border-color: var(--warn-border); }
+.wkp-decision-err  { background: #fef2f2; border-color: var(--err-border); }
+.wkp-decision-buy  { background: #ecfeff; border-color: var(--buy-border); }
+
+.wkp-decision-label {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px;
+  font-family: var(--font-display); margin-bottom: 5px;
+  color: var(--stone-500);
+}
+.wkp-decision-text  { font-size: 13px; font-weight: 700; }
+.wkp-decision-sub   { font-size: 12px; color: var(--stone-500); margin-top: 4px; line-height: 1.45; }
+
+/* Customer pressure indicator */
+.wkp-pressure {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: var(--r-full);
+  font-size: 10.5px; font-weight: 700;
+  margin-left: 6px;
+}
+.wkp-pressure-high { background: var(--err-bg);  color: var(--err-text); }
+.wkp-pressure-med  { background: var(--warn-bg); color: var(--warn-text); }
+.wkp-pressure-none { background: var(--stone-100); color: var(--stone-500); }
+
+
+/* ═══════════════════════════════════════════════════════
+   TABLE COLUMN HEADER MULTI-LINE SUPPORT
+   ═══════════════════════════════════════════════════════ */
+
+.wkp-table thead th { white-space: normal; vertical-align: bottom; line-height: 1.35; }
+
+
+/* ═══════════════════════════════════════════════════════
+   CHIP TEXT ENHANCEMENTS
+   ═══════════════════════════════════════════════════════ */
+
+/* Urgency pulse on blocked chips */
+@keyframes wkp-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.7; }
+}
+.wkp-short-block { animation: wkp-pulse 2s ease-in-out infinite; }
+.wkp-short-block:hover { animation: none; }
