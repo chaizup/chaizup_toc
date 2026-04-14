@@ -48,7 +48,9 @@
                         #wsum-total  #wsum-shortage-val
 
      Tab bar:           #wkp-tab-bar
-                        [data-tab="wo-plan"]  [data-tab="shortage-report"]  [data-tab="emergency"]
+                        [data-tab="wo-plan"]  [data-tab="shortage-report"]
+                        [data-tab="emergency"]  [data-tab="dispatch"]
+                        [data-tab="ai-chat"]
 
      Filter bar:        #wkp-filter-bar
                         #wkp-fbar-group  #wkp-fbar-status  #wkp-fbar-urgency
@@ -56,8 +58,17 @@
 
      Content area:      #wkp-content  #wkp-loader  #wkp-empty
                         #wkp-pane-wo-plan  #wkp-pane-shortage  #wkp-pane-emergency
+                        #wkp-pane-dispatch  #wkp-pane-ai-chat
                         #wkp-table-wrap  #wkp-table  #wkp-tbody
-                        #wkp-shortage-body  #wkp-emerg-body
+                        #wkp-shortage-body  #wkp-emerg-body  #wkp-dispatch-body
+
+     AI advisor panel:  #wkp-ai-insight-body   (auto-insight card content)
+                        #wkp-ai-messages        (chat message list)
+                        #wkp-ai-input           (textarea for user message)
+                        #wkp-ai-send            (send button)
+                        #wkp-ai-clear           (clear chat history button)
+                        #wkp-ai-status          (typing indicator)
+                        .wkp-ai-quick-btn       (suggested question chips)
 
      Help system:       #wkp-tooltip  #wkp-popover
                         #wkp-pop-title  #wkp-pop-body  #wkp-pop-example
@@ -116,13 +127,14 @@
   1. COMMAND BAR      — toggles, filters, refresh
   2. CONTEXT BAR      — live simulation result summary + mode indicator
   3. SUMMARY STRIP    — 5 stat cards: Ready / Partial / Blocked / Total / Cost
-  3.5 TAB BAR         — WO Kitting Plan | Shortage Report | Emergency Priorities
+  3.5 TAB BAR         — WO Kitting Plan | Shortage Report | Emergency Priorities | Dispatch | AI
   3.6 FILTER BAR      — client-side filters: item group, shortage status, urgency
-  4. MAIN CONTENT     — loading overlay + empty state + 3 tab panes
+  4. MAIN CONTENT     — loading overlay + empty state + 5 tab panes
   5. FLOATING TOOLTIP — follows cursor; text from [data-tip] on hovered element
   6. COLUMN POPOVER   — appears on ? button click; content from WKP_POPOVERS in JS
   7. SHORTAGE MODAL   — material breakdown for one WO; injected by JS
   8. WO DETAIL MODAL  — full WO info + decision card; injected by JS
+  9. AI ADVISOR PANE  — auto-insight card + session chat; powered by DeepSeek
 -->
 
 <div class="wkp-root" id="wkp-root">
@@ -285,6 +297,14 @@
             data-tip="Emergency Priorities&#10;Work Orders with unshipped customer orders (overdue or due this month).&#10;Use this to decide which WOs to push hardest.">
       &#x26A0; Emergency Priorities
     </button>
+    <button class="wkp-tab-btn" data-tab="dispatch"
+            data-tip="Dispatch Bottleneck&#10;Per finished-good item: compare Customer Orders vs (FG In Stock + Will Produce from WOs).&#10;Shows Pick List status, Stock Reservations, partial deliveries, and gaps.&#10;Use this to find items where production output will not cover customer commitments.">
+      &#x1F69A; Dispatch Bottleneck
+    </button>
+    <button class="wkp-tab-btn wkp-tab-btn-ai" data-tab="ai-chat"
+            data-tip="AI Production Advisor&#10;Get a plain-language briefing of your production situation.&#10;Ask questions about specific Work Orders, materials, or delivery commitments.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
+      &#x1F916; AI Advisor
+    </button>
   </div>
 
   <!-- ════ 3.6. FILTER BAR ════ -->
@@ -428,6 +448,163 @@
         </div>
       </div>
       <div id="wkp-emerg-body"></div>
+    </div>
+
+    <!-- ════ 9. AI ADVISOR PANE ════
+         Structure requirements:
+           #wkp-ai-insight-body  JS injects auto-briefing HTML here after simulation
+           #wkp-ai-messages      JS appends message bubbles here (user + AI)
+           #wkp-ai-input         User types question here (textarea)
+           #wkp-ai-send          Send button — JS binds click + Enter key
+           #wkp-ai-clear         Clears chat history (session + display)
+           #wkp-ai-status        Typing indicator shown during API call
+           .wkp-ai-quick-btn     Quick-question chips JS binds click events
+         ─────────────────────────────────────────────────────────────────
+         CSS note: wkp-ai- prefix used for all AI classes.
+         The pane uses a two-column layout on wide screens:
+           left  = auto-insight + chat (flex: 1)
+           right = quick-action guide (fixed 240px, hidden on narrow)
+    -->
+    <div class="wkp-tab-pane wkp-ai-pane" id="wkp-pane-ai-chat" style="display:none">
+
+      <!-- Left column: insight + chat -->
+      <div class="wkp-ai-left">
+
+        <!-- Auto-insight card (refreshed after each simulation) -->
+        <div class="wkp-ai-insight-card" id="wkp-ai-insight-card">
+          <div class="wkp-ai-card-header">
+            <span class="wkp-ai-bot-avatar">&#x1F916;</span>
+            <div>
+              <div class="wkp-ai-card-title">Production Briefing</div>
+              <div class="wkp-ai-card-sub">AI analysis of current simulation &mdash; refreshes with each load</div>
+            </div>
+            <span class="wkp-ai-model-badge"
+                  data-tip="Powered by DeepSeek AI (deepseek-chat model).&#10;Trained on manufacturing and production planning context.&#10;Responses are generated from your live ERP simulation data.">
+              DeepSeek AI
+            </span>
+          </div>
+          <div class="wkp-ai-insight-body" id="wkp-ai-insight-body">
+            <div class="wkp-ai-loading-row">
+              <div class="wkp-ai-dots"></div>
+              <span>Generating production briefing&hellip;</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat messages area -->
+        <div class="wkp-ai-chat-section">
+          <div class="wkp-ai-chat-header">
+            <span class="wkp-ai-chat-title">Ask the AI Advisor</span>
+            <button class="wkp-ai-clear-btn" id="wkp-ai-clear"
+                    data-tip="Clear the chat history. The auto-briefing above will remain.">
+              Clear Chat
+            </button>
+          </div>
+
+          <!-- Message list — JS appends bubbles here -->
+          <div class="wkp-ai-messages" id="wkp-ai-messages">
+            <!-- Populated by _appendAIMessage() and _appendUserMessage() -->
+          </div>
+
+          <!-- Typing indicator (shown during API call) -->
+          <div class="wkp-ai-status" id="wkp-ai-status" style="display:none">
+            <div class="wkp-ai-dots"></div>
+            <span>AI is thinking&hellip;</span>
+          </div>
+
+          <!-- Input area -->
+          <div class="wkp-ai-input-row">
+            <textarea class="wkp-ai-input" id="wkp-ai-input" rows="2"
+                      maxlength="1000"></textarea>
+            <button class="wkp-btn wkp-btn-brand wkp-ai-send-btn" id="wkp-ai-send"
+                    data-tip="Send message (or press Ctrl+Enter)">
+              &#x27A4; Send
+            </button>
+          </div>
+          <div class="wkp-ai-input-hint">
+            Press Ctrl+Enter to send &bull; Context: current simulation data &bull; Session clears on refresh
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right column: quick questions + guidance -->
+      <div class="wkp-ai-right">
+        <div class="wkp-ai-guide-card">
+          <div class="wkp-ai-guide-title">&#x26A1; Quick Questions</div>
+          <div class="wkp-ai-guide-sub">Click to ask instantly</div>
+          <div class="wkp-ai-quick-btns" id="wkp-ai-quick-btns">
+            <!-- Populated by JS _initAIPanel() -->
+          </div>
+        </div>
+
+        <div class="wkp-ai-guide-card">
+          <div class="wkp-ai-guide-title">&#x1F4AC; What can I ask?</div>
+          <ul class="wkp-ai-guide-list">
+            <li>Which WOs should I release today?</li>
+            <li>What materials do I need to buy urgently?</li>
+            <li>Can we fulfil all customer orders this month?</li>
+            <li>Which items will miss dispatch deadlines?</li>
+            <li>Explain WO-00123 shortage in detail</li>
+            <li>Which customers have overdue orders?</li>
+            <li>What is blocking WO-00456?</li>
+          </ul>
+        </div>
+
+        <div class="wkp-ai-guide-card wkp-ai-guide-note">
+          <div class="wkp-ai-guide-title">&#x2139; Data context</div>
+          <p>AI sees your current simulation snapshot: WO kit status, material shortages, dispatch gaps, and Sales Order commitments.</p>
+          <p>It does NOT have access to historical data or ERP records beyond the current simulation.</p>
+        </div>
+      </div>
+
+    </div>
+    <!-- end AI pane -->
+
+    <!-- ── TAB PANE: Dispatch Bottleneck ── -->
+    <div class="wkp-tab-pane" id="wkp-pane-dispatch" style="display:none">
+
+      <!-- Header bar with title + legend -->
+      <div class="wkp-dispatch-header">
+        <div>
+          <div class="wkp-shortage-title">
+            Dispatch Bottleneck Analysis
+          </div>
+          <div class="wkp-emerg-sub">
+            For each finished good being produced &mdash; compares customer order demand
+            against available FG stock plus planned production output.
+            Tracks Pick List creation, Stock Reservations, and partial deliveries.
+          </div>
+        </div>
+        <div class="wkp-dispatch-legend">
+          <span class="wkp-dsp-badge wkp-dsp-critical"
+                data-tip="Demand exceeds total supply (FG stock + all WO output). Even if ALL Work Orders complete, customer orders cannot be fully fulfilled. Immediate action required.">
+            &#x1F534; Critical
+          </span>
+          <span class="wkp-dsp-badge wkp-dsp-atrisk"
+                data-tip="Enough production to cover demand IF all WOs complete. But some WOs are blocked or partial. Risk: if blocked WOs are not resolved, shipment will be short.">
+            &#x1F7E1; At Risk
+          </span>
+          <span class="wkp-dsp-badge wkp-dsp-ok"
+                data-tip="Sufficient FG stock and planned production to cover all open customer orders.">
+            &#x1F7E2; On Track
+          </span>
+          <span class="wkp-dsp-badge wkp-dsp-surplus"
+                data-tip="Production output exceeds current customer demand. Consider reviewing WO qty or seeking additional orders.">
+            &#x1F535; Surplus
+          </span>
+        </div>
+      </div>
+
+      <!-- Loading indicator (shown while API call is in flight) -->
+      <div class="wkp-dispatch-loading" id="wkp-dispatch-loading" style="display:none">
+        <div class="wkp-spinner" style="width:28px;height:28px"></div>
+        <span>Loading dispatch data&hellip;</span>
+      </div>
+
+      <!-- Main table injected by JS _renderDispatchBottleneck() -->
+      <div id="wkp-dispatch-body"></div>
+
     </div>
 
   </div>

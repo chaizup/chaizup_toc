@@ -185,6 +185,19 @@
       "description": "Map item groups to buffer types. Items with a manual buffer type set (on the Item form) always take precedence. These rules auto-assign FG/SFG/RM/PM for items without a manual type. Lower priority number = wins on conflict. Enable Include Sub-Groups to apply a rule to all child groups."
     },
     {
+      "fieldname": "ai_section",
+      "fieldtype": "Section Break",
+      "label": "AI Advisor (DeepSeek)",
+      "collapsible": 1,
+      "description": "DeepSeek API key for the AI Advisor tab in WO Kitting Planner. Get a key at https://platform.deepseek.com/api_keys"
+    },
+    {
+      "fieldname": "custom_deepseek_api_key",
+      "fieldtype": "Password",
+      "label": "DeepSeek API Key",
+      "description": "Starts with sk-. Stored encrypted. Used by wo_kitting_planner AI Advisor tab. Fallback: site_config.json deepseek_api_key key."
+    },
+    {
       "fieldname": "demo_section",
       "fieldtype": "Section Break",
       "label": "Demo Data (Admin Only)",

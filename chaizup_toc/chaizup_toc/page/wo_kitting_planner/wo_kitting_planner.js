@@ -120,6 +120,20 @@ const WKP_POPOVERS = {
     action: "If Total Unshipped &gt; Qty to Produce, you may need to create additional Work Orders.",
   },
 
+  dispatch_coverage: {
+    title: "Total Coverage (FG Stock + Will Produce)",
+    body:  "How much of this finished good will be available to dispatch when all open Work Orders complete.\n\nCalculation:\n  FG In Stock = physical qty in warehouse (Bin.actual_qty)\n  Will Produce = sum of remaining_qty across all open WOs for this item\n  Total Coverage = FG In Stock + Will Produce",
+    example: "FG In Stock: 200 kg\nOpen WOs remaining: 600 kg\nTotal Coverage: 800 kg\nCustomer Orders: 750 kg\nGap: -50 kg (surplus = on track)",
+    action: "If Coverage is less than Customer Orders, you need either more WOs or to expedite blocked WOs.",
+  },
+
+  dispatch_gap: {
+    title: "Dispatch Gap (Coverage vs Customer Orders)",
+    body:  "Gap = Customer Orders (Pending Dispatch) minus Total Coverage (FG In Stock + Will Produce).\n\nPositive gap = SHORTAGE: customer demand exceeds what you can produce and deliver.\nNegative gap = SURPLUS: you will have more than enough.\nZero = exactly enough.\n\nNote: This does not account for WOs that are blocked or partially blocked.",
+    example: "Customer Orders: 1,000 kg\nTotal Coverage: 800 kg\nGap: +200 kg = 200 kg SHORT\nAction: Create additional Work Orders or find alternative stock.",
+    action: "Focus first on Critical items (positive gap) then At Risk items (enough coverage but WOs are blocked).",
+  },
+
   wo_status: {
     title: "ERP Production Stage (ERPNext Status)",
     body:  "The exact Work Order status as it appears in ERPNext Manufacturing:\n\nNot Started &mdash; Work Order created but production has not begun. Materials may not yet be issued.\n\nIn Process &mdash; Production is actively ongoing. Materials have been partially consumed.\n\nMaterial Transferred &mdash; All required materials have been issued (transferred) to the production floor via a Stock Entry. Production can now start.\n\nCompleted &mdash; Production is done. Finished goods received into warehouse.\n\nStopped &mdash; Work Order was manually stopped.",
@@ -178,7 +192,12 @@ class WOKittingPlanner {
     this._dragSrc = null;
 
     // Tab system
-    this._activeTab = "wo-plan";  // "wo-plan" | "shortage-report" | "emergency"
+    this._activeTab = "wo-plan";  // "wo-plan" | "shortage-report" | "emergency" | "dispatch"
+
+    // Dispatch bottleneck data (fetched from separate API call after load)
+    this._dispatchData   = {};   // {item_code: {fg_stock, total_pending, so_list, ...}}
+    this._dispatchLoaded = false; // true once API responded
+    this._dispatchLoading = false; // true while API call in-flight
 
     // Client-side filter state (applied in _getFilteredRows)
     this._filterItemGroup = "";   // item_group value from filter bar
@@ -189,6 +208,15 @@ class WOKittingPlanner {
     this._tipEl    = null;   // floating tooltip element
     this._popEl    = null;   // column help popover element
     this._tipTimer = null;
+
+    // ── AI Advisor state ──────────────────────────────────────────────
+    // Session ID: UUID persisted in sessionStorage so it survives tab
+    // navigation within the same browser session but resets on full refresh.
+    this._aiSessionId     = this._getOrCreateAISession();
+    this._aiContext       = null;   // compressed context object (set after simulate)
+    this._aiInsightLoaded = false;  // true once auto-insight has been fetched
+    this._aiTyping        = false;  // true while waiting for AI response
+    // ──────────────────────────────────────────────────────────────────
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -200,6 +228,7 @@ class WOKittingPlanner {
     this._bindTabs();
     this._bindFilterBar();
     this._initHelpSystem();
+    this._initAIPanel();
     this._setupFullHeight();
     this._updateHintBar();
     this.load();
@@ -509,6 +538,14 @@ class WOKittingPlanner {
     this._populateItemGroupFilter(this.rows);
     this._renderShortageReport(this.rows);
     this._renderEmergencyPanel(this.rows);
+    // Prefetch dispatch data in background (independent of active tab)
+    this._dispatchLoaded  = false;
+    this._dispatchData    = {};
+    this._fetchDispatchData();
+    // Reset AI insight so it regenerates with fresh simulation data
+    this._aiInsightLoaded = false;
+    this._aiContext       = null;
+    this._compressContextAndFetchInsight();
     this._switchTab(this._activeTab);  // show/render the active pane
   }
 
@@ -790,7 +827,7 @@ class WOKittingPlanner {
 
   _bindSeqInput() {
     document.querySelectorAll(".wkp-seq-input").forEach(inp => {
-      inp.addEventListener("change", e => {
+      inp.addEventListener("change", () => {
         if (this.calcMode !== "sequential") {
           inp.value = parseInt(inp.dataset.idx || 0) + 1;
           frappe.show_alert({
@@ -852,6 +889,8 @@ class WOKittingPlanner {
       "wo-plan"        : "wkp-pane-wo-plan",
       "shortage-report": "wkp-pane-shortage",
       "emergency"      : "wkp-pane-emergency",
+      "dispatch"       : "wkp-pane-dispatch",
+      "ai-chat"        : "wkp-pane-ai-chat",
     };
     Object.entries(panes).forEach(([tab, paneId]) => {
       const pane = document.getElementById(paneId);
@@ -862,10 +901,25 @@ class WOKittingPlanner {
     if (this._activeTab === "wo-plan" && this.rows.length) {
       this._renderTable(this.rows);
     }
+
+    // If switching to dispatch tab, render (or show loading if still fetching)
+    if (this._activeTab === "dispatch") {
+      if (this._dispatchLoaded) {
+        this._renderDispatchBottleneck();
+      } else if (!this._dispatchLoading) {
+        this._fetchDispatchData();
+      }
+    }
+
+    // If switching to AI tab, show insight if already loaded
+    if (this._activeTab === "ai-chat" && this._aiInsightLoaded) {
+      // Insight was pre-rendered; just ensure panel is visible
+    }
   }
 
   _showAllPanes(show) {
-    ["wkp-pane-wo-plan", "wkp-pane-shortage", "wkp-pane-emergency"].forEach(id => {
+    ["wkp-pane-wo-plan", "wkp-pane-shortage", "wkp-pane-emergency",
+     "wkp-pane-dispatch", "wkp-pane-ai-chat"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = show ? "" : "none";
     });
@@ -1669,6 +1723,626 @@ ${decisionHtml}
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  //  AI ADVISOR TAB (§9)
+  //
+  //  PURPOSE: Plain-language production decision support via DeepSeek AI.
+  //    1. Auto-insight: generated after every simulation (stateless call)
+  //    2. Chat: session-persistent Q&A about production/purchase/dispatch
+  //
+  //  ARCHITECTURE:
+  //    Session ID stored in sessionStorage → survives tab navigation,
+  //    resets on full page refresh (intentional — fresh simulation = fresh session).
+  //
+  //    Context: _compressContextAndFetchInsight() calls server-side
+  //    compress_context_for_ai() which builds a ~400-token summary.
+  //    This same context is sent with every chat message so the AI
+  //    always has the current simulation snapshot.
+  //
+  //    Function calling: Server runs a tool-call loop — AI may call
+  //    get_wo_shortage_detail, get_dispatch_detail, or get_top_shortage_items
+  //    before responding. Client never calls these directly.
+  //
+  //    HTML output: AI may return HTML tables/spans. _renderAIContent()
+  //    sanitises the HTML (removes script/on* attributes) before injecting
+  //    into the DOM via innerHTML.
+  //
+  //  ══════════════════════════════════════════════════════════════════
+  //  🔒 RESTRICTED — do not rename without updating HTML and CSS:
+  //    this._aiSessionId       (UUID for Redis cache key on server)
+  //    this._aiContext         (compressed simulation context object)
+  //    this._aiInsightLoaded   (gate: prevents duplicate auto-insight calls)
+  //    #wkp-ai-insight-body    (innerHTML target for auto-briefing)
+  //    #wkp-ai-messages        (chat bubble container — appended by JS)
+  //    #wkp-ai-input           (textarea for user message)
+  //    #wkp-ai-send            (send button)
+  //    #wkp-ai-status          (typing indicator row)
+  //    .wkp-msg-user           (user bubble class — R: JS assigns)
+  //    .wkp-msg-ai             (AI bubble class — R: JS assigns)
+  //  ✅ SAFE to change: quick question text, guide card text, bubble styling,
+  //    AI card subtitle, model badge label.
+  //  ══════════════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────
+
+  _getOrCreateAISession() {
+    const key = "wkp_ai_session";
+    let id = sessionStorage.getItem(key);
+    if (!id) {
+      // Generate UUID-like session ID
+      id = "wkp-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+      sessionStorage.setItem(key, id);
+    }
+    return id;
+  }
+
+  _initAIPanel() {
+    // Populate quick-question chips
+    const quickBtns = document.getElementById("wkp-ai-quick-btns");
+    if (quickBtns) {
+      const questions = [
+        "Which Work Orders should I release today?",
+        "What materials do I need to buy urgently?",
+        "Can we fulfil all customer orders this month?",
+        "Which items will miss dispatch deadlines?",
+        "Summarise the top 3 production risks",
+        "Which customers have overdue orders?",
+      ];
+      quickBtns.innerHTML = questions.map(q =>
+        `<button class="wkp-ai-quick-btn" data-q="${_esc(q)}">${_esc(q)}</button>`
+      ).join("");
+
+      quickBtns.addEventListener("click", e => {
+        const btn = e.target.closest(".wkp-ai-quick-btn");
+        if (btn) this._sendAIMessage(btn.dataset.q);
+      });
+    }
+
+    // Set textarea placeholder via JS (avoids single-quote risk in HTML)
+    const inp = document.getElementById("wkp-ai-input");
+    if (inp) {
+      inp.placeholder = "Ask about your production plan... e.g. Which WOs can I start today?";
+      inp.addEventListener("keydown", e => {
+        if (e.key === "Enter" && e.ctrlKey) {
+          e.preventDefault();
+          this._sendAIMessage(inp.value.trim());
+        }
+      });
+    }
+
+    const sendBtn = document.getElementById("wkp-ai-send");
+    if (sendBtn) {
+      sendBtn.addEventListener("click", () => {
+        const inp2 = document.getElementById("wkp-ai-input");
+        if (inp2) this._sendAIMessage(inp2.value.trim());
+      });
+    }
+
+    const clearBtn = document.getElementById("wkp-ai-clear");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        const msgs = document.getElementById("wkp-ai-messages");
+        if (msgs) msgs.innerHTML = "";
+        // Generate a new session ID so server-side history is abandoned
+        const newId = "wkp-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+        sessionStorage.setItem("wkp_ai_session", newId);
+        this._aiSessionId = newId;
+      });
+    }
+  }
+
+  _compressContextAndFetchInsight() {
+    // Called after every simulate() — sends full simulation data to server,
+    // gets back compressed context for AI + auto-insight content.
+    if (!this.rows.length) return;
+
+    const insightBody = document.getElementById("wkp-ai-insight-body");
+    if (insightBody) {
+      insightBody.innerHTML =
+        `<div class="wkp-ai-loading-row">
+           <div class="wkp-ai-dots"></div>
+           <span>Generating production briefing\u2026</span>
+         </div>`;
+    }
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.compress_context_for_ai",
+      args: {
+        simulation_rows_json: JSON.stringify(this.rows),
+        dispatch_json        : JSON.stringify(this._dispatchData || {}),
+        stock_mode           : this.stockMode,
+        calc_mode            : this.calcMode,
+      },
+      callback: r => {
+        if (r.exc || !r.message) {
+          if (insightBody) insightBody.innerHTML =
+            `<span class="wkp-ai-warn">Could not prepare AI context. Check server logs.</span>`;
+          return;
+        }
+        this._aiContext = r.message;
+        this._fetchAutoInsight();
+      },
+    });
+  }
+
+  _fetchAutoInsight() {
+    if (this._aiInsightLoaded || !this._aiContext) return;
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_ai_auto_insight",
+      args: { context_json: JSON.stringify(this._aiContext) },
+      callback: r => {
+        this._aiInsightLoaded = true;
+        const insightBody = document.getElementById("wkp-ai-insight-body");
+        if (!insightBody) return;
+        const data = r.message || {};
+        const text = data.insight || "<span class=\"wkp-ai-warn\">No insight returned.</span>";
+        insightBody.innerHTML = data.is_html ? _sanitizeAIHtml(text) : _esc(text);
+      },
+      error: () => {
+        this._aiInsightLoaded = true;
+        const insightBody = document.getElementById("wkp-ai-insight-body");
+        if (insightBody) insightBody.innerHTML =
+          `<span class="wkp-ai-warn">AI briefing failed. Verify API key and connectivity.</span>`;
+      },
+    });
+  }
+
+  _sendAIMessage(text) {
+    if (!text || this._aiTyping) return;
+
+    // Clear input
+    const inp = document.getElementById("wkp-ai-input");
+    if (inp) inp.value = "";
+
+    // Switch to AI tab if not already there
+    if (this._activeTab !== "ai-chat") this._switchTab("ai-chat");
+
+    // Append user bubble
+    this._appendChatBubble("user", text, false);
+
+    // Show typing indicator
+    this._setAITyping(true);
+
+    // Ensure context is ready; if not, send minimal placeholder
+    const ctx = this._aiContext || {
+      summary: { note: "Simulation data still loading. Please refresh and try again." },
+    };
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.chat_with_planner",
+      args: {
+        message     : text,
+        session_id  : this._aiSessionId,
+        context_json: JSON.stringify(ctx),
+      },
+      callback: r => {
+        this._setAITyping(false);
+        const data = r.message || {};
+        const reply = data.reply || "<span class=\"wkp-ai-warn\">No response from AI.</span>";
+        this._appendChatBubble("ai", reply, !!(data.is_html));
+      },
+      error: () => {
+        this._setAITyping(false);
+        this._appendChatBubble("ai",
+          "<span class=\"wkp-ai-err\">Request failed. Check server logs or API key.</span>",
+          true
+        );
+      },
+    });
+  }
+
+  _appendChatBubble(role, content, isHtml) {
+    const msgs = document.getElementById("wkp-ai-messages");
+    if (!msgs) return;
+
+    const div = document.createElement("div");
+    div.className = role === "user" ? "wkp-msg-user" : "wkp-msg-ai";
+
+    if (role === "ai") {
+      // AI avatar + bubble
+      div.innerHTML = `
+        <div class="wkp-msg-avatar">&#x1F916;</div>
+        <div class="wkp-msg-bubble wkp-msg-bubble-ai">
+          ${isHtml ? _sanitizeAIHtml(content) : _escHtml(content)}
+        </div>`;
+    } else {
+      div.innerHTML = `
+        <div class="wkp-msg-bubble wkp-msg-bubble-user">${_escHtml(content)}</div>`;
+    }
+
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  _setAITyping(on) {
+    this._aiTyping = on;
+    const statusEl = document.getElementById("wkp-ai-status");
+    if (statusEl) statusEl.style.display = on ? "flex" : "none";
+    const sendBtn = document.getElementById("wkp-ai-send");
+    if (sendBtn) {
+      sendBtn.disabled   = on;
+      sendBtn.textContent = on ? "Thinking\u2026" : "\u27A4 Send";
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  DISPATCH BOTTLENECK TAB
+  //
+  //  PURPOSE: For each finished-good item being produced, compare:
+  //    • Customer Orders (Pending Dispatch) — open SO qty not yet shipped
+  //    • FG In Stock  — physical warehouse qty of the finished good
+  //    • Will Produce — sum of remaining_qty across all open WOs
+  //    • Total Coverage = FG In Stock + Will Produce
+  //    • Gap = Customer Orders - Total Coverage
+  //
+  //  Also tracks per-SO:
+  //    • Pick List created (materials picked for delivery)?
+  //    • Stock Reserved (Stock Reservation entry exists)?
+  //    • Partial Delivery Notes already shipped?
+  //
+  //  STATUS LOGIC (computed here in JS, not server):
+  //    Critical  → Gap > 0  (demand exceeds total supply even with all WOs done)
+  //    At Risk   → Gap ≤ 0 but some WOs for this item are blocked/partial
+  //    On Track  → Gap ≤ 0 and all WOs ready
+  //    Surplus   → No customer orders (or negative gap with no SO urgency)
+  //    No Orders → Item has WOs but no pending customer orders
+  //
+  //  API: chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck
+  //  Data merges with this.rows (WO simulation results from simulate_kitting)
+  //
+  //  ══════════════════════════════════════════════════════════════════
+  //  🔒 RESTRICTED — do not rename:
+  //    this._dispatchData   (keyed by item_code from API response)
+  //    this._dispatchLoaded / this._dispatchLoading (state flags)
+  //    _renderDispatchBottleneck() / _fetchDispatchData() (called by _switchTab)
+  //    #wkp-dispatch-body (HTML target for innerHTML injection)
+  //    #wkp-dispatch-loading (spinner shown while API is in-flight)
+  //  ✅ SAFE to change: column labels, badge text, colours, sort order,
+  //    SO detail row layout, number of SO detail columns shown.
+  //  ══════════════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────
+
+  _fetchDispatchData() {
+    // Collect unique production item codes from current simulation rows
+    const itemCodes = [...new Set((this.rows || []).map(r => r.item_code))];
+    if (!itemCodes.length) {
+      this._dispatchLoaded  = true;
+      this._dispatchLoading = false;
+      return;
+    }
+
+    this._dispatchLoading = true;
+    const loadingEl = document.getElementById("wkp-dispatch-loading");
+    if (loadingEl) loadingEl.style.display = "flex";
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck",
+      args: { item_codes_json: JSON.stringify(itemCodes) },
+      callback: r => {
+        this._dispatchLoading = false;
+        this._dispatchLoaded  = true;
+        this._dispatchData    = r.message || {};
+        if (loadingEl) loadingEl.style.display = "none";
+        // If user is already on the dispatch tab, render now
+        if (this._activeTab === "dispatch") this._renderDispatchBottleneck();
+      },
+      error: () => {
+        this._dispatchLoading = false;
+        this._dispatchLoaded  = true;
+        if (loadingEl) loadingEl.style.display = "none";
+        const body = document.getElementById("wkp-dispatch-body");
+        if (body) body.innerHTML =
+          `<div class="wkp-reco wkp-reco-err" style="margin:16px">
+             <div class="wkp-reco-icon">\u26A0\uFE0F</div>
+             <div class="wkp-reco-body">
+               <div class="wkp-reco-headline">Failed to load dispatch data.</div>
+               <div class="wkp-reco-detail">Check the browser console and server logs. Try refreshing the page.</div>
+             </div>
+           </div>`;
+      },
+    });
+  }
+
+  _renderDispatchBottleneck() {
+    const body = document.getElementById("wkp-dispatch-body");
+    if (!body) return;
+
+    // ── Build per-item summary by merging simulation rows + dispatch API data ──
+    // this.rows: one row per WO (item_code, remaining_qty, kit_status, ...)
+    // this._dispatchData: {item_code: {fg_stock, total_pending, so_list, ...}}
+
+    // Step 1: aggregate WO remaining_qty per item_code
+    const woByItem = {};   // {item_code: {will_produce, wos: [...], kit_statuses: Set}}
+    (this.rows || []).forEach(row => {
+      const ic = row.item_code;
+      if (!woByItem[ic]) {
+        woByItem[ic] = {
+          item_code  : ic,
+          item_name  : row.item_name || ic,
+          item_group : row.item_group || "",
+          will_produce: 0,
+          wos        : [],
+          kit_statuses: new Set(),
+        };
+      }
+      woByItem[ic].will_produce   += (row.remaining_qty || 0);
+      woByItem[ic].wos.push(row.wo);
+      woByItem[ic].kit_statuses.add(row.kit_status);
+    });
+
+    // Step 2: merge dispatch API data
+    const items = Object.values(woByItem).map(item => {
+      const d            = this._dispatchData[item.item_code] || {};
+      const fg_stock     = d.fg_stock      || 0;
+      const total_pending= d.total_pending || 0;
+      const total_coverage = fg_stock + item.will_produce;
+      const gap          = total_pending - total_coverage;
+
+      // Determine dispatch status
+      let dspStatus;
+      if (total_pending === 0) {
+        dspStatus = "no-orders";
+      } else if (gap > 0) {
+        dspStatus = "critical";   // demand > supply even with all WOs done
+      } else {
+        // Coverage is enough, but are WOs actually ready?
+        const ks = item.kit_statuses;
+        const hasBlocked = ks.has("block") || ks.has("partial");
+        dspStatus = hasBlocked ? "atrisk" : "ok";
+      }
+
+      // Surplus: supply greatly exceeds demand
+      if (total_pending > 0 && gap < -(total_coverage * 0.25)) dspStatus = "surplus";
+
+      return {
+        ...item,
+        fg_stock,
+        total_pending,
+        total_coverage,
+        gap,
+        dsp_status     : dspStatus,
+        total_reserved : d.total_reserved || 0,
+        has_pick_list  : d.has_pick_list  || false,
+        so_list        : d.so_list        || [],
+      };
+    });
+
+    // Step 3: sort — Critical first, then At Risk, then On Track / No Orders
+    const sortOrder = { critical: 0, atrisk: 1, ok: 2, surplus: 3, "no-orders": 4 };
+    items.sort((a, b) => {
+      const sd = (sortOrder[a.dsp_status] || 0) - (sortOrder[b.dsp_status] || 0);
+      return sd !== 0 ? sd : (b.total_pending - a.total_pending);
+    });
+
+    if (!items.length) {
+      body.innerHTML = `<div class="wkp-reco wkp-reco-ok" style="margin:16px">
+        <div class="wkp-reco-icon">\u2705</div>
+        <div class="wkp-reco-body">
+          <div class="wkp-reco-headline">No open Work Orders to analyse.</div>
+          <div class="wkp-reco-detail">Load Work Orders first using the Refresh button.</div>
+        </div>
+      </div>`;
+      return;
+    }
+
+    // ── Step 4: Build table rows ───────────────────────────────────────────
+    const rowsHtml = items.map(item => {
+      const statusCfg = {
+        critical  : { cls: "wkp-dsp-critical",  icon: "\uD83D\uDD34", label: "Critical",  tip: "Demand exceeds total supply even with all WOs complete. Create more Work Orders." },
+        atrisk    : { cls: "wkp-dsp-atrisk",    icon: "\uD83D\uDFE1", label: "At Risk",   tip: "Coverage is enough IF all WOs complete. But some WOs are blocked or partially short." },
+        ok        : { cls: "wkp-dsp-ok",        icon: "\uD83D\uDFE2", label: "On Track",  tip: "Sufficient production + stock to cover all customer orders." },
+        surplus   : { cls: "wkp-dsp-surplus",   icon: "\uD83D\uDD35", label: "Surplus",   tip: "Production output exceeds current customer demand." },
+        "no-orders": { cls: "wkp-dsp-noorders", icon: "\u2610",       label: "No Orders", tip: "No open customer orders for this item. WOs exist but no dispatch demand." },
+      }[item.dsp_status] || { cls: "", icon: "?", label: item.dsp_status, tip: "" };
+
+      const gapCls  = item.gap > 0 ? "wkp-cell-red" : (item.gap < 0 ? "wkp-cell-green" : "");
+      const gapTxt  = item.gap > 0
+        ? `+${_fmt_num(item.gap, 0)} SHORT`
+        : (item.gap < 0 ? `\u2714 +${_fmt_num(-item.gap, 0)} surplus` : "\u2714 Exact");
+
+      // Pick list badge
+      const plBadge = item.has_pick_list
+        ? `<span class="wkp-dsp-pill wkp-dsp-pill-ok"
+                 data-tip="At least one Pick List has been created for a Sales Order of this item.&#10;Materials are being (or have been) picked for delivery.">\u2714 Pick List</span>`
+        : `<span class="wkp-dsp-pill wkp-dsp-pill-none"
+                 data-tip="No Pick List has been created yet for any open Sales Order of this item.">\u2610 No Pick List</span>`;
+
+      // Stock reservation badge
+      const resBadge = item.total_reserved > 0
+        ? `<span class="wkp-dsp-pill wkp-dsp-pill-ok"
+                 data-tip="Stock Reservation: ${_fmt_num(item.total_reserved, 2)} units are reserved against open Sales Orders.&#10;This stock is earmarked and cannot be used for other purposes.">\uD83D\uDD12 Reserved: ${_fmt_num(item.total_reserved, 0)}</span>`
+        : `<span class="wkp-dsp-pill wkp-dsp-pill-none"
+                 data-tip="No Stock Reservation entries exist for this item&apos;s open Sales Orders.">\u26AA No Reservation</span>`;
+
+      // SO count
+      const soCount = item.so_list.length;
+      const overdueCount = item.so_list.filter(s => s.is_overdue).length;
+
+      // Expandable SO detail table (hidden by default)
+      const soRowsHtml = item.so_list.length ? item.so_list.map(so => {
+        const isOverdue = so.is_overdue;
+        const dueCls    = isOverdue ? "wkp-cell-red" : "";
+        const dateStr   = so.delivery_date || "\u2014";
+        const plPill    = so.pick_list_count > 0
+          ? `<span class="wkp-dsp-pill wkp-dsp-pill-ok" data-tip="Pick List created for this SO">\u2714 PL (${so.pick_list_count})</span>`
+          : `<span class="wkp-dsp-pill wkp-dsp-pill-none" data-tip="No Pick List for this SO">\u2610</span>`;
+        const resPill   = (so.reserved_qty || 0) > 0
+          ? `<span class="wkp-dsp-pill wkp-dsp-pill-ok" data-tip="Reserved qty: ${_fmt_num(so.reserved_qty, 2)}">\uD83D\uDD12 ${_fmt_num(so.reserved_qty, 0)}</span>`
+          : `<span class="wkp-dsp-pill wkp-dsp-pill-none" data-tip="No stock reserved for this SO">&mdash;</span>`;
+        const dnPill    = (so.dn_qty || 0) > 0
+          ? `<span class="wkp-dsp-pill wkp-dsp-pill-ok" data-tip="Partial Delivery Note shipped: ${_fmt_num(so.dn_qty, 2)}">\uD83D\uDE9A ${_fmt_num(so.dn_qty, 0)} shipped</span>`
+          : "";
+        const overdueLbl= isOverdue
+          ? `<span class="wkp-dsp-overdue-badge" data-tip="Delivery date was ${_esc(dateStr)} &mdash; this order is overdue">\u26A0 OVERDUE</span>`
+          : "";
+
+        return `
+<tr class="wkp-dsp-so-row ${isOverdue ? "wkp-dsp-so-overdue" : ""}">
+  <td>
+    <a href="/app/sales-order/${_esc(so.so_name)}" target="_blank" class="wkp-wo-link">${_esc(so.so_name)}</a>
+    ${overdueLbl}
+  </td>
+  <td>${_esc(so.customer)}</td>
+  <td class="ta-r">${_fmt_num(so.qty, 0)}</td>
+  <td class="ta-r" style="color:var(--ok-text)">${_fmt_num(so.delivered_qty, 0)}</td>
+  <td class="ta-r ${dueCls}" data-tip="Qty still to be shipped for this Sales Order">
+    <strong>${_fmt_num(so.pending_qty, 0)}</strong>
+  </td>
+  <td class="${dueCls}" data-tip="Target delivery date from Sales Order">${_esc(dateStr)}</td>
+  <td>${plPill}</td>
+  <td>${resPill}</td>
+  <td>${dnPill}</td>
+</tr>`;
+      }).join("") : `<tr><td colspan="9" style="color:var(--stone-400);font-style:italic;padding:12px">No open Sales Orders for this item.</td></tr>`;
+
+      const soDetailId = "wkp-dsp-so-" + item.item_code.replace(/[^a-zA-Z0-9]/g, "_");
+
+      return `
+<tr class="wkp-dsp-row wkp-dsp-${item.dsp_status}" data-item="${_esc(item.item_code)}">
+  <td>
+    <span class="wkp-dsp-status-badge ${statusCfg.cls}" data-tip="${statusCfg.tip}">
+      ${statusCfg.icon} ${statusCfg.label}
+    </span>
+  </td>
+  <td>
+    <div class="wkp-item-name">${_esc(item.item_name)}</div>
+    <div class="wkp-item-code">${_esc(item.item_code)}</div>
+    ${item.item_group ? `<div class="wkp-item-group-tag">${_esc(item.item_group)}</div>` : ""}
+    <div class="wkp-dsp-wo-chips">
+      ${item.wos.slice(0, 3).map(wo => `<span class="wkp-dsp-wo-chip">${_esc(wo)}</span>`).join("")}
+      ${item.wos.length > 3 ? `<span class="wkp-dsp-wo-chip">+${item.wos.length - 3} more</span>` : ""}
+    </div>
+  </td>
+  <td class="ta-r"
+      data-tip="Customer Orders (Pending Dispatch)&#10;Total qty across all open Sales Orders not yet delivered.&#10;Source: Sales Order Items where (qty - delivered_qty) &gt; 0">
+    <strong>${_fmt_num(item.total_pending, 0)}</strong>
+    ${overdueCount > 0 ? `<div class="wkp-dsp-overdue-note" data-tip="${overdueCount} order(s) with overdue delivery dates">\u26A0 ${overdueCount} overdue</div>` : ""}
+  </td>
+  <td class="ta-r"
+      data-tip="FG In Stock&#10;Physical finished-good stock in all warehouses right now.&#10;Source: Bin.actual_qty (tabBin) for this item code.">
+    ${_fmt_num(item.fg_stock, 0)}
+  </td>
+  <td class="ta-r"
+      data-tip="Will Be Produced&#10;Sum of remaining_qty (Planned - Produced) across all open Work Orders for this item.&#10;Only counts WOs that have NOT yet completed production.">
+    ${_fmt_num(item.will_produce, 0)}
+    <div style="font-size:10px;color:var(--stone-400)">${item.wos.length} WO${item.wos.length !== 1 ? "s" : ""}</div>
+  </td>
+  <td class="ta-r wkp-dsp-coverage"
+      data-tip="Total Coverage = FG In Stock + Will Produce&#10;This is the maximum quantity available for dispatch once all open WOs complete.&#10;Does NOT account for WOs that are blocked or partially short.">
+    <strong>${_fmt_num(item.total_coverage, 0)}</strong>
+    <span class="wkp-th-help" data-popover="dispatch_coverage" title="How is this calculated?">?</span>
+  </td>
+  <td class="ta-r ${gapCls}"
+      data-tip="Gap = Customer Orders &minus; Total Coverage&#10;Positive (red) = shortage even if all WOs complete. Action needed.&#10;Negative (green) = surplus.&#10;Zero = exactly meets demand.">
+    <strong>${gapTxt}</strong>
+    <span class="wkp-th-help" data-popover="dispatch_gap" title="What does Gap mean?">?</span>
+  </td>
+  <td>
+    <div class="wkp-dsp-badges">${plBadge} ${resBadge}</div>
+    ${item.so_list.length
+      ? `<div>${soCount} SO${soCount !== 1 ? "s" : ""}${overdueCount > 0 ? ` (${overdueCount} overdue)` : ""}</div>` : ""}
+  </td>
+  <td class="ta-r">
+    ${soCount > 0
+      ? `<button class="wkp-btn wkp-btn-sm" onclick="document.getElementById('${soDetailId}').style.display =
+           document.getElementById('${soDetailId}').style.display === 'none' ? '' : 'none'"
+           title="Expand to see each Sales Order with delivery dates, pick list status, and reservations">
+           Details
+         </button>` : ""}
+  </td>
+</tr>
+<tr class="wkp-dsp-detail-row" id="${soDetailId}" style="display:none">
+  <td colspan="9" style="padding:0 0 0 40px">
+    <table class="wkp-modal-table wkp-dsp-so-table">
+      <thead>
+        <tr>
+          <th data-tip="Sales Order number (click to open in ERPNext)">Sales Order</th>
+          <th>Customer</th>
+          <th class="ta-r" data-tip="Total qty in the Sales Order">Ordered</th>
+          <th class="ta-r" data-tip="Qty already delivered via Delivery Notes">Delivered</th>
+          <th class="ta-r" data-tip="Qty still pending dispatch (Ordered &minus; Delivered)">Pending</th>
+          <th data-tip="Delivery date committed to customer in the Sales Order">Due Date</th>
+          <th data-tip="Has a Pick List been created? Pick Lists initiate warehouse picking before dispatch.">Pick List</th>
+          <th data-tip="Is stock reserved via Stock Reservation entry?">Reserved</th>
+          <th data-tip="Partial deliveries already shipped via Delivery Note">Shipped</th>
+        </tr>
+      </thead>
+      <tbody>${soRowsHtml}</tbody>
+    </table>
+  </td>
+</tr>`;
+    }).join("");
+
+    // ── Render summary banner ─────────────────────────────────────────────
+    const critCount = items.filter(i => i.dsp_status === "critical").length;
+    const riskCount = items.filter(i => i.dsp_status === "atrisk").length;
+    const okCount   = items.filter(i => i.dsp_status === "ok").length;
+
+    const bannerHtml = `
+<div class="wkp-dispatch-summary">
+  <div class="wkp-dispatch-sum-card wkp-dsp-critical" data-tip="Items where customer demand exceeds total supply. Immediate action required.">
+    <div class="wkp-dispatch-sum-num">${critCount}</div>
+    <div class="wkp-dispatch-sum-lbl">\uD83D\uDD34 Critical</div>
+  </div>
+  <div class="wkp-dispatch-sum-card wkp-dsp-atrisk" data-tip="Items with enough coverage IF all WOs complete, but some WOs are blocked.">
+    <div class="wkp-dispatch-sum-num">${riskCount}</div>
+    <div class="wkp-dispatch-sum-lbl">\uD83D\uDFE1 At Risk</div>
+  </div>
+  <div class="wkp-dispatch-sum-card wkp-dsp-ok" data-tip="Items fully covered with all WOs on track.">
+    <div class="wkp-dispatch-sum-num">${okCount}</div>
+    <div class="wkp-dispatch-sum-lbl">\uD83D\uDFE2 On Track</div>
+  </div>
+  <div class="wkp-dispatch-sum-card" style="background:var(--stone-50);border-color:var(--stone-200)" data-tip="Unique finished-good items across all open Work Orders.">
+    <div class="wkp-dispatch-sum-num">${items.length}</div>
+    <div class="wkp-dispatch-sum-lbl">Total Items</div>
+  </div>
+</div>`;
+
+    body.innerHTML = bannerHtml + `
+<table class="wkp-table wkp-dsp-table">
+  <thead>
+    <tr>
+      <th data-tip="Overall dispatch status for this item. Click Details to see individual Sales Orders.">Status</th>
+      <th>
+        Item
+        <span class="wkp-th-help" data-popover="item_name" title="What is shown here?">?</span>
+      </th>
+      <th class="ta-r"
+          data-tip="Total open customer order qty for this item (all open SOs, all dates).&#10;Source: Sales Order Items where status is not Closed/Cancelled.">
+        Customer Orders
+      </th>
+      <th class="ta-r"
+          data-tip="Physical finished-good stock in all warehouses.&#10;Source: SUM(Bin.actual_qty) for this item across all warehouses.">
+        FG In Stock
+      </th>
+      <th class="ta-r"
+          data-tip="Sum of remaining production qty across all open Work Orders for this item.&#10;Remaining = Planned Qty &minus; Already Produced Qty">
+        Will Produce
+      </th>
+      <th class="ta-r"
+          data-tip="Total Coverage = FG In Stock + Will Produce&#10;Maximum available supply once all open WOs complete.">
+        Total Coverage
+        <span class="wkp-th-help" data-popover="dispatch_coverage" title="How is Coverage calculated?">?</span>
+      </th>
+      <th class="ta-r"
+          data-tip="Gap = Customer Orders &minus; Total Coverage&#10;Positive = short (cannot fulfill all orders). Negative = surplus.">
+        Gap
+        <span class="wkp-th-help" data-popover="dispatch_gap" title="What does Gap mean?">?</span>
+      </th>
+      <th data-tip="Pick List and Stock Reservation status. Click Details to see per-SO breakdown.">Fulfillment Tracking</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>${rowsHtml}</tbody>
+</table>
+<div class="wkp-dispatch-footer">
+  <strong>How to read this table:</strong>
+  Critical = demand cannot be met even if all WOs complete &mdash; need more WOs or stock transfer.
+  At Risk = enough coverage on paper but blocked WOs must be unblocked first.
+  Click &ldquo;Details&rdquo; on any row to see individual Sales Orders with pick list, reservation, and delivery status.
+</div>`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   //  UI HELPERS
   // ─────────────────────────────────────────────────────────────────────
 
@@ -1710,6 +2384,56 @@ function _esc(val) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/**
+ * Escape plain text for innerHTML (used for user messages in AI chat).
+ * Same as _esc but preserves newlines as <br>.
+ */
+function _escHtml(val) {
+  if (val == null) return "";
+  return String(val)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/\n/g, "<br>");
+}
+
+/**
+ * Sanitise AI-generated HTML before injecting into the DOM.
+ * Allows safe formatting tags and our custom CSS classes.
+ * Strips <script>, event handlers (on*=), javascript: hrefs, and iframes.
+ *
+ * This is a defence-in-depth measure — DeepSeek is trusted but we still
+ * sanitise to prevent accidental XSS from unexpected model output.
+ *
+ * SAFE tags: table, thead, tbody, tr, th, td, ul, ol, li, p, br, strong,
+ *   em, span, div, a, code, h3, h4
+ * STRIPPED: script, iframe, object, embed, form, input, button
+ * STRIPPED attributes: on*, javascript:, data: URIs
+ */
+function _sanitizeAIHtml(html) {
+  if (!html) return "";
+
+  // Remove script and dangerous tags entirely
+  let clean = html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<object[\s\S]*?<\/object>/gi, "")
+    .replace(/<form[\s\S]*?<\/form>/gi, "")
+    .replace(/<input[^>]*>/gi, "")
+    .replace(/<button[^>]*>[\s\S]*?<\/button>/gi, "");
+
+  // Strip event handler attributes (onclick, onload, etc.)
+  clean = clean.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, "");
+  clean = clean.replace(/\s+on\w+\s*=\s*[^\s>]*/gi, "");
+
+  // Strip javascript: and data: URIs in href/src
+  clean = clean.replace(/href\s*=\s*["']\s*javascript:[^"']*/gi, 'href="#"');
+  clean = clean.replace(/src\s*=\s*["']\s*data:[^"']*/gi, 'src=""');
+
+  return clean;
 }
 
 function _status_badge_class(status) {
