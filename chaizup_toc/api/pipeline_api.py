@@ -1,17 +1,160 @@
 """
 pipeline_api.py — Supply Chain Tracker Data API
+════════════════════════════════════════════════════════════════════════════════
 
+PURPOSE
+───────
 Fetches the complete open-action lifecycle for all TOC-managed items across both
 the purchase chain (MR → RFQ → SQ → PO → PR → QI) and the production chain
 (MR → Production Plan → Work Order → Job Card → Stock Entry → FG output).
 
 Returns two representations of the same data:
-  • nodes + edges  → for the Pipeline (column) view
-  • tracks         → for the Tracker (item-centric) view
+  • nodes + edges  → Pipeline (column) view
+  • tracks         → Tracker (item-centric) view
 
 Each document node carries enriched metadata: days_open, is_overdue, next_action,
 supplier, warehouse, and amounts — so the UI has everything it needs without
 extra round trips.
+
+CALLING FROM JS
+───────────────
+  frappe.call({
+      method: "chaizup_toc.api.pipeline_api.get_pipeline_data",
+      args: { days_back: 30, zone: "Red", supplier: "" },
+      callback(r) { /* r.message = { nodes, edges, tracks, summary, ... } */ }
+  });
+
+  frappe.call({
+      method: "chaizup_toc.api.pipeline_api.get_filter_options",
+      callback(r) { /* r.message = { suppliers: [...], item_groups: [...] } */ }
+  });
+
+PUBLIC FUNCTIONS
+─────────────────
+  get_pipeline_data(item_code, buffer_type, zone, days_back, supplier,
+                    warehouse, show_overdue_only)
+      → { nodes, edges, tracks, summary, stage_counts, meta }
+
+  get_filter_options()
+      → { suppliers: [...], item_groups: [...], warehouses: [...] }
+
+RETURN SCHEMA: nodes[]
+──────────────────────
+  Each node represents ONE document in the supply chain:
+
+  {
+    "id"                : "MR-00123"          # unique node ID (== doc name)
+    "stage"             : "material_request"  # pipeline stage key
+    "sub_type"          : "Purchase"          # MR sub-type or None
+    "doctype"           : "Material Request"  # Frappe doctype name
+    "doc_name"          : "MR-00123"          # same as id (Frappe doc name)
+    "status"            : "Submitted"         # current doc status
+    "zone"              : "Red"               # TOC zone (Title Case)
+    "bp_pct"            : 87.5               # Buffer Penetration %
+    "buffer_type"       : "RM"               # RM/PM/SFG/FG
+    "mr_type"           : "Purchase"         # for Material Request nodes
+    "item_code"         : "ITEM-001"
+    "item_name"         : "Widget Base"
+    "supplier"          : "SUP-001"          # for purchase docs
+    "qty"               : 100.0
+    "rate"              : 25.0
+    "grand_total"       : 2500.0
+    "is_overdue"        : True               # days_open > SLA threshold
+    "days_open"         : 14
+    "days_overdue"      : 2                  # days beyond SLA
+    "toc_enabled"       : True
+    "on_hand"           : 50.0
+    "inventory_position": 120.0              # IP = On-Hand + On-Order - Committed
+    "target_buffer"     : 300.0              # F1: Target = ADU × RLT × VF
+    "order_qty"         : 180.0              # F4: Order Qty = Target - IP
+    "progress_pct"      : 65.0              # WO/JC: produced/planned × 100
+    "produced_qty"      : 65.0              # WO: qty manufactured
+    "next_action"       : "Approve PO"      # human-readable next step
+    "warehouse"         : "Stores - CHZ"
+    "creation"          : "2026-04-01"
+    "modified"          : "2026-04-10"
+    "_parents"          : ["MR-00123"]       # list of parent node IDs
+    "_children"         : ["PO-00456"]       # list of child node IDs
+  }
+
+RETURN SCHEMA: edges[]
+──────────────────────
+  [
+    { "from": "MR-00123", "to": "RFQ-00789", "type": "buy" },
+    { "from": "MR-00456", "to": "WO-00111",  "type": "mfg" }
+  ]
+  type: "buy" | "mfg" | "item"   (used by JS for edge color)
+
+RETURN SCHEMA: tracks[]
+───────────────────────
+  One track per item, groups all related documents:
+  {
+    "item_code": "ITEM-001",
+    "item_name": "Widget Base",
+    "buffer_type": "RM",
+    "zone": "Red",
+    "bp_pct": 87.5,
+    "on_hand": 50.0,
+    "inventory_position": 120.0,
+    "target_buffer": 300.0,
+    "order_qty": 180.0,
+    "warehouse": "Stores - CHZ",
+    "docs": [ ...list of node dicts for this item... ]
+  }
+
+RETURN SCHEMA: summary{}
+────────────────────────
+  {
+    "total_items": 42,
+    "red": 8, "yellow": 15, "green": 17, "black": 2,
+    "overdue_docs": 5,
+    "total_docs": 134
+  }
+
+RETURN SCHEMA: stage_counts{}
+──────────────────────────────
+  { "material_request": 12, "rfq_pp": 8, "sq_wo": 6, ... }
+
+PIPELINE STAGE KEYS (7 stages, matching pl-col in JS)
+───────────────────────────────────────────────────────
+  Stage 1: "items"            — TOC Buffer item cards (zone/BP%)
+  Stage 2: "material_request" — Material Request (Purchase + Manufacture)
+  Stage 3: "rfq_pp"           — RFQ (buy) or Production Plan (mfg)
+  Stage 4: "sq_wo"            — Supplier Quotation (buy) or Work Order (mfg)
+  Stage 5: "po_jc"            — Purchase Order (buy) or Job Card (mfg)
+  Stage 6: "receipt_qc"       — Purchase Receipt + Quality Inspection
+  Stage 7: "output"           — Stock Entry SE output (production FG)
+
+INTERNAL FETCH FUNCTIONS (private, prefix _)
+────────────────────────────────────────────
+  _fetch_items()              — TOC items + non-TOC with active docs
+  _fetch_material_requests()  — MR with docstatus=1 (Submitted)
+  _fetch_rfqs()               — Request for Quotation
+  _fetch_production_plans()   — Production Plan
+  _fetch_work_orders()        — Work Order
+  _fetch_supplier_quotations()— Supplier Quotation (linked via RFQ)
+  _fetch_purchase_orders()    — Purchase Order
+  _fetch_job_cards()          — Job Card (linked via WO)
+  _fetch_purchase_receipts()  — Purchase Receipt (linked via PO)
+  _fetch_quality_inspections()— Quality Inspection (linked via PR)
+  _fetch_stock_entries()      — Stock Entry of type Manufacture (linked via WO)
+  _build_graph()              — Assembles nodes + edges, deduplicates via seen_ids
+  _get_toc_map()              — Returns {item_code: {zone, bp_pct, buffer_type, ...}}
+  _enrich_node()              — Adds days_open, is_overdue, next_action to a node
+  _empty_response()           — Returns zero-result structure
+
+KNOWN GOTCHAS
+─────────────
+1. days_back defaults to 30 — use 90 to catch older Purchase Orders
+2. seen_ids set in _build_graph() prevents duplicate nodes when one doc
+   links to multiple items (e.g. PO with 3 items shows once per item only)
+3. zone and buffer_type filters are applied server-side via toc_map
+   BEFORE document fetching to minimize DB load
+4. supplier filter uses LIKE %supplier% — pass exact name for precision
+5. SLA thresholds (days before "overdue") are hardcoded per stage:
+   MR→7d, RFQ→3d, SQ→2d, PO→14d, WO→5d
+
+════════════════════════════════════════════════════════════════════════════════
 """
 
 import frappe

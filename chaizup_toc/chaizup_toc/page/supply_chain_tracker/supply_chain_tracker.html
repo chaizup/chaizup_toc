@@ -1,7 +1,41 @@
 <!--
   supply_chain_tracker.html — Supply Chain Tracker Page Template
-  ══════════════════════════════════════════════════════════════
-  Updated with Tiger Theme structure and improved pipeline layout.
+  ══════════════════════════════════════════════════════════════════════════════
+
+  ⚠️  CRITICAL — READ BEFORE EDITING ⚠️
+  ══════════════════════════════════════
+
+  FRAPPE HTML TEMPLATE LOADING MECHANISM:
+    Frappe's page loader (frappe/model/utils/page.py → load_assets) reads this
+    HTML file and wraps its contents in a JavaScript single-quoted string:
+
+        frappe.templates["supply_chain_tracker"] = '<HTML_CONTENT_HERE>';
+
+    The function scrub_html_template() does NOT escape single quotes.
+
+    RESULT: Any single quote (') anywhere in this file will break the JS string
+    literal and cause:   SyntaxError: Unexpected identifier 'X'
+    The page will load BLANK with no error indicator.
+
+  RULES FOR THIS FILE:
+    ✓ Use double quotes for all HTML attributes:  class="foo", id="bar"
+    ✓ For apostrophes in text, use:  &apos;  or rephrase to avoid
+    ✓ NEVER write:  it's  can't  Click 'View'  style='...'
+    ✓ NEVER use single quotes in placeholder text, button labels, or comments
+      that will be rendered inside HTML elements
+
+  HOW CACHE WORKS:
+    After any change to HTML/JS/CSS, flush Redis:
+      redis-cli -h redis-cache -p 6379 FLUSHALL
+
+  FILE ROLES:
+    supply_chain_tracker.html  — Template (this file, NO single quotes!)
+    supply_chain_tracker.js    — Controller + SVG rendering + all logic
+    supply_chain_tracker.css   — Tiger Theme styles
+    supply_chain_tracker.json  — Page metadata + role permissions
+    chaizup_toc/api/pipeline_api.py — Backend data API
+
+  ══════════════════════════════════════════════════════════════════════════════
 -->
 
 <div class="sct-root">

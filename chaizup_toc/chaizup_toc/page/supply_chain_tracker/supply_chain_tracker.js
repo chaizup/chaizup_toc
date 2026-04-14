@@ -1,110 +1,278 @@
 /*
- * supply_chain_tracker.js -- Supply Chain Tracker Controller
- * ===========================================================
+ * supply_chain_tracker.js — Supply Chain Tracker Controller
+ * ═══════════════════════════════════════════════════════════════════════════════
  *
- * ARCHITECTURE OVERVIEW
- * ---------------------
- * The page operates in two mutually-exclusive view modes that share the
- * same server data pipeline:
+ * ── WHAT THIS PAGE DOES ──────────────────────────────────────────────────────
+ * Displays the live TOC-driven supply chain in two view modes.
+ * All data comes from:  chaizup_toc.api.pipeline_api.get_pipeline_data
+ * Cache clear needed:   redis-cli -h redis-cache -p 6379 FLUSHALL
  *
- *   Tracker View (default)
- *     One collapsible row per TOC-managed item. Each row shows a buffer
- *     zone bar (BP%), next-action hint, and an expandable document chain
- *     (MR -> RFQ/PP -> SQ/WO -> PO/JC -> PR/SE/QI). Bodies are lazy-built
- *     on first expand to keep the initial render fast.
+ * ── FILE LOCATIONS ───────────────────────────────────────────────────────────
+ * HTML template : chaizup_toc/page/supply_chain_tracker/supply_chain_tracker.html
+ * CSS           : chaizup_toc/page/supply_chain_tracker/supply_chain_tracker.css
+ * JS (this)     : chaizup_toc/page/supply_chain_tracker/supply_chain_tracker.js
+ * Python API    : chaizup_toc/api/pipeline_api.py
+ * Page JSON     : chaizup_toc/page/supply_chain_tracker/supply_chain_tracker.json
  *
- *   Pipeline View
- *     A horizontal 7-stage Kanban. Cards sit in stage columns; directed SVG
- *     Bezier edges connect source -> target. Clicking a card:
- *       1. Runs BFS forward (descendants) + BFS backward (ancestors)
- *       2. Hides (display:none) all non-lineage cards so the layout
- *          collapses around the relevant chain
- *       3. After a double-rAF browser reflow, redraws only relevant edges
- *          with marching-ants animation (.live class)
+ * ── HOW FRAPPE LOADS PAGE SCRIPTS ───────────────────────────────────────────
+ * Frappe's page.py load_assets() method:
+ *   1. Reads supply_chain_tracker.js
+ *   2. Reads supply_chain_tracker.html and wraps it in a JS string:
+ *      frappe.templates["supply_chain_tracker"] = '<HTML_CONTENT>';
+ *   3. PREPENDS that string declaration to the JS file content
+ *   4. Appends "//# sourceURL=supply_chain_tracker.js" for DevTools naming
+ *   5. Evaluates the combined string via new Function(txt)()
  *
- * DATA MODEL (from server: pipeline_api.get_pipeline_data)
- * ---------------------------------------------------------
- *   nodes[]  -- Every pipeline entity: item buffers, MRs, RFQs, POs, WOs,
- *               JCs, PRs, SEs, QIs. Key fields per node:
- *                 id, stage, sub_type, doctype, doc_name, status, zone,
- *                 bp_pct, is_overdue, days_open, days_overdue, supplier...
- *               Node IDs are stable composite keys (e.g. "MR::MR-0001").
+ * ⚠ CRITICAL — HTML SINGLE QUOTE RULE:
+ *   Frappe's scrub_html_template() does NOT escape single quotes in HTML.
+ *   The HTML is placed inside a JS single-quoted string literal.
+ *   ANY unescaped single quote in supply_chain_tracker.html will cause:
+ *     SyntaxError: Unexpected identifier '...' (at supply_chain_tracker.js:3)
+ *   The page will show BLANK or show the previously-visited page.
+ *   RULE: Never use ' characters in supply_chain_tracker.html.
+ *   Use &apos; or rephrase text. Double quotes (") are safe.
  *
- *   edges[]  -- Directed pairs { source, target } encoding document lineage.
- *               e.g. { source:"MR::MR-0001", target:"PO::PO-0001" }
+ * ── VIEW MODES ───────────────────────────────────────────────────────────────
  *
- *   tracks[] -- Item-centric aggregations for the Tracker view. Each track
- *               bundles its documents with pending/overdue counts and a
- *               pre-computed next_action recommendation string.
+ * TRACKER VIEW (default)
+ *   Vertical list, one .sct-track row per TOC-managed item.
+ *   Each row: zone colour bar (left) | item info | BP% bar | zone badge |
+ *             pending/overdue counts | next_action hint | toggle arrow
+ *   Click to expand: shows stock chips (F1-F4), next action box, document rows
+ *   grouped by pipeline stage: MR → RFQ/PP → SQ/WO → PO/JC → PR/QI/SE
+ *   Bodies are LAZY-BUILT on first expand (data-built="0" → "1") to keep
+ *   initial render fast when there are 100+ items.
  *
- *   summary  -- Server-side aggregate counts (red/yellow/green items, open
- *               MRs, WOs, POs) for the summary strip.
+ * PIPELINE VIEW
+ *   Horizontal 7-stage Kanban. Cards (.sct-card-v2) sit in .stage columns.
+ *   Directed SVG Bezier edges (.sct-edge paths) connect source → target nodes.
  *
- * FILTER TIERS
- * ------------
- *   Server-side (trigger load()):
- *     days_back, supplier -- change the underlying dataset.
+ *   Click a card:
+ *     1. BFS forward (descendants) + BFS backward (ancestors) from selected node
+ *     2. Non-lineage cards get .hide (display:none) — layout collapses
+ *     3. Empty stages get .hide-stage (display:none) — columns collapse
+ *     4. double-rAF waits for browser reflow
+ *     5. _drawEdges(relevant, liveMode=true) — marching-ants animation (.live)
  *
- *   Client-side (trigger render() only):
- *     search, zone, item_group, doctype, overdue, auto, noaction
- *     Applied in _applyClientFilters() against already-loaded arrays.
- *     Zone filter uses BFS propagation: seed items matching the zone, then
- *     expand to all reachable nodes via the edge graph.
+ *   Click VIEW button on card: same as above + opens detail side panel
+ *   Click background / Clear: _clearSelection() restores full view
  *
- * SVG EDGE COORDINATE SYSTEM
- * --------------------------
- *   The SVG overlay lives INSIDE .sct-pl-grid (the expanding flex container
- *   that also holds stage columns). This is critical: SVG must scroll with
- *   the cards. If SVG were a direct child of .sct-pl-scroll instead,
- *   it would stay fixed while cards scroll, breaking all coordinates.
+ * ── DATA MODEL (from get_pipeline_data) ─────────────────────────────────────
  *
- *   Coordinate anchor: (card.getBoundingClientRect().right - grid.getBCR().left)
- *   Both rects are in viewport space. When the user scrolls the scroll
- *   container, BOTH shift by the same delta, so the subtraction stays
- *   constant -- a stable grid-space coordinate.
+ *   nodes[] — Every pipeline entity. Key fields per node object:
+ *     id           : Composite key "PREFIX::DOC_NAME" e.g. "MR::MR-0001"
+ *                    Prefixes: ITEM, MR, RFQ, PP, SQ, WO, PO, JC, PR, QI, SE, OUT
+ *     stage        : Column assignment: "items" | "material_request" | "rfq_pp" |
+ *                    "sq_wo" | "po_jc" | "receipt_qc" | "output"
+ *     sub_type     : Lowercase node type: "mr"|"rfq"|"pp"|"sq"|"wo"|"po"|"jc"|
+ *                    "pr"|"qi"|"se"|"output"
+ *     doctype      : ERPNext DocType string (e.g. "Purchase Order")
+ *     doc_name     : ERPNext document name (e.g. "PO-0001")
+ *     label        : Display name (often same as doc_name)
+ *     status       : Document status string
+ *     zone         : "Red"|"Yellow"|"Green"|"Black" (item/output nodes only)
+ *     bp_pct       : Buffer penetration % (0-100+)
+ *     buffer_type  : "RM"|"PM"|"SFG"|"FG" (item/output nodes only)
+ *     mr_type      : "Purchase"|"Manufacture" (MR nodes only)
+ *     item_code    : Item code
+ *     item_name    : Item name (long)
+ *     supplier     : Supplier name (buy-chain docs)
+ *     qty          : Quantity
+ *     rate         : Unit rate (SQ/PO)
+ *     grand_total  : Total amount (SQ/PO)
+ *     is_overdue   : Boolean
+ *     days_open    : Days since creation
+ *     days_overdue : Days past due date
+ *     toc_enabled  : Boolean (item nodes)
+ *     on_hand      : Current stock
+ *     inventory_position : IP value (F2)
+ *     target_buffer      : Target buffer size (F1)
+ *     order_qty          : Replenishment deficit (F4)
+ *     progress_pct       : Completion % (WO/JC)
+ *     produced_qty       : Qty produced (WO/SE)
+ *     next_action        : Server-computed recommendation string
+ *     warehouse, required_qty, required_date, expected_delivery,
+ *     operation, planned_qty, produced_qty, received_qty, rejected_qty,
+ *     description, creation_date, transaction_date, posting_date
  *
- *   Bezier curve formula: M x1,y1 C x1+dx,y1 x2-dx,y2 x2,y2
- *   where dx = |x2-x1| * 0.42 (tension factor).
- *   - 0.42 produces smooth S-curves that elongate proportionally when
- *     nodes span multiple skipped stages.
- *   - Lower values make straighter lines; higher values tighten bends.
+ *   edges[] — Directed pairs: { source: nodeId, target: nodeId }
+ *     Encodes document lineage. e.g. MR→PO, PO→PR, WO→JC, etc.
  *
- * ANIMATION SYSTEM (edge wire behaviour)
- * ---------------------------------------
- *   State 1 -- Default (no selection):
- *     All edges drawn at opacity 0.15 via CSS .sct-edge rule.
- *     Hover over a card -> direct edges get .hl (opacity 0.9), others .dim.
+ *   tracks[] — Item-centric view. Key fields:
+ *     item_code, item_name, item_group, warehouse, buffer_type
+ *     zone, bp_pct, on_hand, inventory_position, target_buffer, order_qty
+ *     toc_enabled, overdue_count, pending_count, doc_count
+ *     next_action, documents[] (array of doc objects)
  *
- *   State 2 -- Card selected:
- *     _applyLineageHighlight(id):
- *       a. BFS ancestors (bwd graph) + BFS descendants (fwd graph)
- *       b. Non-lineage cards: .hide -> display:none -> layout collapses
- *       c. double-rAF: waits for browser reflow after layout change
- *       d. _drawEdges(relevant, liveMode=true):
- *            - Skips cards with .hide (getBCR would return zeros)
- *            - All drawn paths get .live -> marching-ants CSS animation
+ *   summary — { red, yellow, green, mrs, wos, pos }
+ *   meta    — { total_items }
  *
- *   State 3 -- Clear selection:
- *     _clearSelection(): removes .hide from all cards, double-rAF redraws
- *     all edges at default opacity 0.15 (liveMode=false).
+ * ── PIPELINE CARD ANATOMY (.sct-card-v2) ─────────────────────────────────────
  *
- *   WHY hide instead of dim: display:none removes the card from layout,
- *   so the remaining cards repack into the column. After reflow, the bezier
- *   coordinates are computed only from visible cards, giving clean paths.
- *   Opacity-based dimming leaves cards in layout, causing wires to route
- *   around invisible obstacles.
+ *   CSS class        Purpose
+ *   ─────────────    ────────────────────────────────────────────────
+ *   .sct-card-v2     Base card (white bg, border, r-md, shadow, cursor)
+ *   .bt-rm/pm/sfg/fg/buy/mfg/item  Left accent stripe colour (::before)
+ *   .selected        Orange border + double ring (currently selected node)
+ *   .ancestor        Green border ring (upstream in lineage)
+ *   .descendant      Amber border ring (downstream in lineage)
+ *   .hide            display:none — removes from layout during filtering
+ *   .v2-type-chip    Top-left chip: "Raw Mat", "Purchase MR", "Work Order"…
+ *   .v2tc-rm/pm/sfg/fg/buy/mfg/item  Chip colour variants
+ *   .v2-top          Flex row: [name+ref block] [actions: VIEW btn + status]
+ *   .v2-name         Card title (12px bold)
+ *   .v2-ref          Mono subtitle (supplier, item code, operation)
+ *   .v2-actions      Flex container for VIEW button + status widget
+ *   .v2-view-btn     Hover-reveal button → opens panel + lineage
+ *   .v2-dot          Status dot for items/output: .dok .dwarn .derr .didle
+ *   .v2-badge        Text badge for doc nodes: .v2b-ok .v2b-run .v2b-draft .v2b-warn .v2b-err
+ *   .v2-body         Key-value rows
+ *   .v2-row          Single label+value row (font-size 11px)
+ *   .v2-lbl          Label text (muted)
+ *   .v2-val          Value text (bold, optional .ok .warn .err .mfg colour)
+ *   .v2-ports        In/out degree badges (injected by _injectPorts)
+ *   .v2-port-in      "← N in" badge (emerald tint)
+ *   .v2-port-out     "N out →" badge (rose tint)
  *
- * TOC FORMULA REFERENCE
- * ---------------------
- *   F1: Target = ADU x RLT x VF
- *   F2a (FG):  IP = On-Hand + WIP - Backorders
- *   F2b (RM):  IP = On-Hand + On-Order - Committed
- *   F3: BP% = (Target - IP) / Target * 100
+ * ── PIPELINE STAGE COLUMNS ───────────────────────────────────────────────────
+ *   Stage ID          Column Label             Flow    CSS class
+ *   ──────────────    ──────────────────       ──────  ─────────
+ *   items             Items                    item    .sl-item
+ *   material_request  Material Request         both    .sl-both
+ *   rfq_pp            RFQ / Prod. Plan         both    .sl-both
+ *   sq_wo             Quotation / WO           both    .sl-both
+ *   po_jc             PO / Job Card            both    .sl-both
+ *   receipt_qc        Receipt / QC / SE        both    .sl-both
+ *   output            FG / SFG Buffer          out     .sl-out
+ *
+ * ── TRACKER VIEW CLASSES (.sct-track-*) ──────────────────────────────────────
+ *   .sct-track              Container row (border, rounded, overflow hidden)
+ *   .sct-track.overdue-track  Red border when overdue_count > 0
+ *   .sct-track.expanded     Show body (max-height 2000px transition)
+ *   .sct-track-zone-bar     position:absolute left stripe coloured by zone
+ *   .sct-track-header       Flex row: [zone-bar] [item-info] [meta] [toggle]
+ *   .sct-track-item-name    Item code (bold 13px)
+ *   .sct-track-item-sub     Tags: buffer type, TOC status, item group, warehouse
+ *   .sct-track-bp           BP% bar + percentage value
+ *   .sct-track-bp-bar       Bar container (72px wide, 5px tall)
+ *   .sct-track-bp-fill      Fill (coloured by zone: .bp-Red/Yellow/Green/Black)
+ *   .sct-track-bp-val       BP% number (Oswald, 14px bold)
+ *   .sct-track-counts       Chip row: .count-open .count-overdue .count-done
+ *   .sct-track-next-action  Truncated next-action text (.urgent = red)
+ *   .sct-track-toggle       "v" chevron arrow (rotates 180° when expanded)
+ *   .sct-track-body         Collapsible body (lazy-built on first expand)
+ *   .sct-stock-row          Flex row of F1/F2/F3/F4 chips
+ *   .sct-stock-chip         Individual chip (.urgent = red border)
+ *   .sct-next-action-box    Action recommendation box (.urgent = red)
+ *   .sct-doc-stage-group    Per-stage section inside expanded body
+ *   .sct-doc-stage-label    Stage label header
+ *   .sct-doc-row            Single document row (.overdue = red)
+ *   .sct-doc-row-status     Status badge (class from _statusBadgeClass)
+ *
+ * ── STATUS BADGE CLASSES (tracker doc rows) ──────────────────────────────────
+ *   _statusBadgeClass() maps ERPNext status → CSS class:
+ *   "Draft"/"Open"/"Not Started" → .sct-badge-draft     (grey)
+ *   "Pending"/"Material Transferred" → .sct-badge-pending (amber)
+ *   "Submitted"/"Ordered"/"In Process"/"Approved" → .sct-badge-submitted (blue)
+ *   "Completed"/"Closed"/"Received" → .sct-badge-completed (green)
+ *   "Stopped"/"Cancelled"/"Overdue" → .sct-badge-stopped (red)
+ *
+ * ── ZONE BADGE CLASSES ───────────────────────────────────────────────────────
+ *   _zoneBadge(zone) → <span class="sct-zone-badge zone-{zone}">
+ *   CSS classes: .zone-Red .zone-Yellow .zone-Green .zone-Black
+ *   ⚠ These use Title Case (zone-Red not zone-red) — matches JS output exactly
+ *
+ * ── DETAIL PANEL ─────────────────────────────────────────────────────────────
+ *   .sct-panel           Fixed right panel (width 420px, slides from right:-440px)
+ *   .sct-panel.open      Slides to right:0
+ *   .sct-panel-header    Title + subtitle + close button
+ *   .sct-panel-title     Oswald 18px uppercase
+ *   .sct-panel-subtitle  Brand-600 colour, doctype + overdue warning
+ *   .sct-panel-body      Scrollable content area
+ *   .sct-toc-box         TOC buffer status block (zone, BP%, F1/F2 formula)
+ *   .sct-toc-box-row     Label+value row inside toc-box
+ *   .sct-toc-formula     Monospace formula text
+ *   .sct-panel-section   Standard section wrapper
+ *   .sct-panel-section-title  10px uppercase label
+ *   .sct-panel-row       Label+value pair with dashed bottom border
+ *   .sct-p-link          Clickable neighbour node card in panel
+ *   .sct-p-link-name     Node name with orange dot prefix
+ *   .sct-p-link-ref      Mono doctype text
+ *   .sct-panel-actions   Footer button bar
+ *   .sct-panel-btn       Button base (.sct-panel-btn-brand/.default/.primary)
+ *   .sct-bom-block       BOM component list (lazy loaded)
+ *   .sct-bom-row         Item+qty row in BOM block
+ *   .sct-prod-block      Work Order production detail (lazy loaded)
+ *   .sct-prod-row        SE item row (.sct-prod-out green, .sct-prod-in grey)
+ *   .sct-recv-block      Purchase Receipt detail (lazy loaded)
+ *   .sct-fulfill-block   MR fulfillment progress (client-side, no API)
+ *   .sct-fulfill-steps   Step-by-step progress rail
+ *   .sct-fulfill-step    Single step (.step-ok .step-partial .step-missing)
+ *
+ * ── SVG EDGE SYSTEM ──────────────────────────────────────────────────────────
+ *   SVG #sct-svg-overlay is position:absolute inside .pl-grid (NOT .sct-pl-scroll).
+ *   Coordinates: subtract grid.getBoundingClientRect() from card.getBCR().
+ *   This is scroll-stable because both rects shift by same delta when scrolled.
+ *   Path formula: M x1,y1 C (x1+dx),y1 (x2-dx),y2 x2,y2
+ *   where dx = |x2-x1| × 0.42  (42% tension — smooth S-curves at all distances)
+ *
+ *   Edge CSS classes (on <path> elements):
+ *   .sct-edge       base (opacity 0.14, stroke-width 1.5)
+ *   .hl             highlighted (opacity 0.75, stroke-width 2.5) — hover
+ *   .dim            dimmed (opacity 0.03) — non-hovered edges
+ *   .live           marching-ants (selected lineage, stroke-dasharray animation)
+ *   data-source     source node ID (for hover matching from card mouseenter)
+ *   data-target     target node ID
+ *
+ * ── FILTER SYSTEM ────────────────────────────────────────────────────────────
+ *   Server-side (triggers load() + API call):
+ *     days_back   — look-back window (15/30/60/90 days)
+ *     supplier    — supplier name filter (SQL LIKE)
+ *
+ *   Client-side (triggers render() only, no API call):
+ *     search      — substring match across item_code, item_name, doc_name, supplier
+ *     zone        — "All"|"Red"|"Yellow"|"Green"|"Black"
+ *                   Zone filter uses BFS: seeds items matching zone, then
+ *                   expands to ALL nodes reachable via edge graph (both directions)
+ *                   BFS MUST check both endpoints in nodeIdSet to prevent escape
+ *     item_group  — exact item group name
+ *     doctype     — "All"|"MR"|"PO"|"WO"|...
+ *     overdue     — boolean: only items with is_overdue doc
+ *     auto        — boolean: only TOC-generated MRs (recorded_by="By System")
+ *     noaction    — boolean: items with NO open MR
+ *
+ * ── KNOWN PAST BUGS (FIXED — do not reintroduce) ─────────────────────────────
+ *   [HTML-BUG-1]  Unescaped single quotes in HTML broke entire page
+ *                 Fix: removed ' from "Click 'View' for ERP details." text
+ *   [JS-BUG-1]    _bindPanel() called _clearSelection() before _closePanel()
+ *                 which also calls _clearSelection() → double SVG redraw
+ *                 Fix: _bindPanel only calls _closePanel()
+ *   [JS-BUG-2]    _reachable() BFS adjacency used single-endpoint check
+ *                 allowing BFS to traverse outside nodeIdSet → wrong zone filter
+ *                 Fix: require BOTH endpoints in nodeIdSet
+ *   [API-BUG-1]   get_filter_options() missing item_groups key → JS showed
+ *                 warehouses in Item Group dropdown instead
+ *                 Fix: added item_groups SQL query to pipeline_api.py
+ *   [API-BUG-2]   Multi-item SQL JOINs produced duplicate node IDs for POs/SQs/PRs
+ *                 Fix: added seen_ids deduplication in _build_graph()
+ *
+ * ── TOC FORMULA REFERENCE ────────────────────────────────────────────────────
+ *   F1: Target = ADU × RLT × VF
+ *   F2a (FG/SFG): IP = On-Hand + WIP - Backorders
+ *   F2b (RM/PM):  IP = On-Hand + On-Order - Committed
+ *   F3: BP% = (Target - IP) / Target × 100
  *   F4: Order Qty = Target - IP   (replenishment deficit)
  *
- * Brand: Oswald (headings) + DM Sans (body)
- *        --brand-500 #f97316 (Chaizup tiger orange)
- *        Warm stone: buy=cyan #06b6d4, mfg=violet #8b5cf6, out=emerald #10b981
+ * ── BRAND / DESIGN TOKENS ────────────────────────────────────────────────────
+ *   Fonts:   Oswald (--font-display) for headings/badges, DM Sans (--font-sans) for body
+ *   --brand-500: #f97316  Tiger Orange (Chaizup brand)
+ *   --buy:   #06b6d4  Purchase chain edges / cards (cyan)
+ *   --mfg:   #7c3aed  Manufacturing chain edges / cards (violet)
+ *   --rm:    #3b82f6  Raw Material accent stripe (blue)
+ *   --pm:    #f59e0b  Packaging Material stripe (amber)
+ *   --sfg:   #8b5cf6  Semi-FG stripe (purple)
+ *   --fg:    #10b981  Finished Goods stripe (emerald)
+ *   Stone palette: stone-50 bg, stone-200 borders, stone-400 muted text
  */
 frappe.pages["supply-chain-tracker"].on_page_load = function (wrapper) {
   if (wrapper.sct_initialized) return;
