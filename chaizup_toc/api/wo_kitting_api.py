@@ -215,11 +215,33 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
     wo_item_codes = list({w["production_item"] for w in wos})
     dispatch_map  = _get_dispatch_info(wo_item_codes)
 
+    # ── Step 4.5: Supply detail (PO/MR qty per component for display) ───
+    supply_detail = _build_supply_detail(all_comp_codes)
+
+    # ── Step 4.6: Consumption data (Stock Entries per WO) ───────────────
+    consumed_map  = _get_consumed_by_wo(wo_names)
+
     # ── Step 5: Simulate ────────────────────────────────────────────────
     if calc_mode == "sequential":
-        return _simulate_sequential(wos, stock_pool, bom_items, dispatch_map)
+        results = _simulate_sequential(wos, stock_pool, bom_items, dispatch_map)
     else:
-        return _simulate_isolated(wos, stock_pool, bom_items, dispatch_map)
+        results = _simulate_isolated(wos, stock_pool, bom_items, dispatch_map)
+
+    # ── Step 6: Overlay supply detail + consumed qty on each component ──
+    # Build item_group lookup from wos list
+    ig_map = {w["name"]: w.get("item_group", "") for w in wos}
+
+    for row in results:
+        row["item_group"] = ig_map.get(row["wo"], "")
+        wo_consumed = consumed_map.get(row["wo"], {})
+        for comp in row.get("shortage_items", []):
+            ic  = comp["item_code"]
+            sd  = supply_detail.get(ic, {})
+            comp["po_qty"]       = flt(sd.get("po_qty", 0))
+            comp["mr_qty"]       = flt(sd.get("mr_qty", 0))
+            comp["consumed_qty"] = round(flt(wo_consumed.get(ic, 0)), 4)
+
+    return results
 
 
 @frappe.whitelist()
@@ -298,6 +320,7 @@ def _get_wo_details(wo_names):
                wo.status,
                wo.company,
                i.item_name,
+               i.item_group,
                i.stock_uom,
                i.valuation_rate
         FROM   `tabWork Order` wo
@@ -793,6 +816,7 @@ def _assemble_result(wo, comps, stage_map, dispatch_map):
         "wo"               : wo["name"],
         "item_code"        : item_code,
         "item_name"        : wo.get("item_name", item_code),
+        "item_group"       : wo.get("item_group", ""),
         "bom_no"           : wo.get("bom_no", ""),
         "status"           : wo.get("status", ""),
         "planned_qty"      : flt(wo.get("qty", 0)),
@@ -859,6 +883,107 @@ def _assemble_result(wo, comps, stage_map, dispatch_map):
         "shortage_value": round(total_short_val, 2),
         "shortage_items": shortage_items,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SUPPLY DETAIL (PO / MR open quantities per component)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _build_supply_detail(item_codes):
+    """
+    For each BOM component item code, return the total open PO and MR quantities
+    that have been raised but not yet received/fulfilled.
+
+    This is DISPLAY-ONLY — it is overlaid on each shortage_item in simulate_kitting
+    so the user can see what procurement is already in motion.
+
+    Differs from _build_stock_pool:
+        _build_stock_pool  — adds PO/MR qty to the AVAILABLE pool (Stock mode Y)
+        _build_supply_detail — always returns the raw PO/MR figures (both modes)
+
+    Returns:
+        dict: {item_code: {"po_qty": float, "mr_qty": float}}
+    """
+    if not item_codes:
+        return {}
+
+    detail = {ic: {"po_qty": 0.0, "mr_qty": 0.0} for ic in item_codes}
+
+    # Open PO remaining qty per item
+    po_rows = frappe.db.sql("""
+        SELECT poi.item_code,
+               SUM(poi.qty - COALESCE(poi.received_qty, 0)) AS qty
+        FROM   `tabPurchase Order Item` poi
+        JOIN   `tabPurchase Order` po ON po.name = poi.parent
+        WHERE  poi.item_code IN %(items)s
+          AND  po.docstatus = 1
+          AND  po.status NOT IN ('Closed', 'Cancelled')
+          AND  (poi.qty - COALESCE(poi.received_qty, 0)) > 0
+        GROUP BY poi.item_code
+    """, {"items": item_codes}, as_dict=True)
+
+    for r in po_rows:
+        detail[r.item_code]["po_qty"] = flt(r.qty)
+
+    # Open Purchase MR remaining qty (not yet converted to PO)
+    mr_rows = frappe.db.sql("""
+        SELECT mri.item_code,
+               SUM(mri.qty - COALESCE(mri.ordered_qty, 0)) AS qty
+        FROM   `tabMaterial Request Item` mri
+        JOIN   `tabMaterial Request` mr ON mr.name = mri.parent
+        WHERE  mri.item_code IN %(items)s
+          AND  mr.docstatus = 1
+          AND  mr.material_request_type = 'Purchase'
+          AND  mr.status NOT IN ('Cancelled', 'Stopped', 'Ordered')
+          AND  (mri.qty - COALESCE(mri.ordered_qty, 0)) > 0
+        GROUP BY mri.item_code
+    """, {"items": item_codes}, as_dict=True)
+
+    for r in mr_rows:
+        detail[r.item_code]["mr_qty"] = flt(r.qty)
+
+    return detail
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CONSUMPTION DATA (Stock Entries per WO)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _get_consumed_by_wo(wo_names):
+    """
+    Fetch actual material consumption from Stock Entries of type 'Manufacture'
+    linked to each Work Order.
+
+    Items with s_warehouse (source warehouse) in a Manufacture entry are
+    raw materials being consumed in production.
+
+    Returns:
+        dict: {wo_name: {item_code: consumed_qty}}
+    """
+    if not wo_names:
+        return {}
+
+    rows = frappe.db.sql("""
+        SELECT  se.work_order,
+                sed.item_code,
+                SUM(sed.qty) AS consumed_qty
+        FROM    `tabStock Entry Detail` sed
+        JOIN    `tabStock Entry` se ON se.name = sed.parent
+        WHERE   se.work_order IN %(wos)s
+          AND   se.docstatus   = 1
+          AND   se.purpose     = 'Manufacture'
+          AND   sed.s_warehouse IS NOT NULL
+        GROUP BY se.work_order, sed.item_code
+    """, {"wos": wo_names}, as_dict=True)
+
+    result = {}
+    for r in rows:
+        wo = r.work_order
+        if wo not in result:
+            result[wo] = {}
+        result[wo][r.item_code] = flt(r.consumed_qty)
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════

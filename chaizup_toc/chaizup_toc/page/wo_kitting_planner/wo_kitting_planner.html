@@ -18,15 +18,16 @@
 
   1. ZERO SINGLE QUOTES IN THIS FILE (CRITICAL)
      ─────────────────────────────────────────────
-     Frappe wraps HTML templates in a JS single-quoted string at runtime:
-       page.main.html('...TEMPLATE CONTENT...')
+     Frappe wraps HTML templates in a JS single-quoted string at runtime.
      Any apostrophe or single quote inside the template breaks the JS with:
        SyntaxError: Unexpected identifier
      The page loads blank with no visible error. EXTREMELY HARD TO DEBUG.
 
      RULES:
-       ✗ Never: it's  don't  won't  can't  you're
-       ✓ Use:   &apos;  or rephrase: "it is"  "do not"  etc.
+       DO NOT use: apostrophes, it-is contractions, possessives
+       USE instead: &amp;apos;  or rephrase without apostrophes
+       Double quotes in attribute values: title="some text" is fine
+       HTML entities: &amp;amp; &amp;lt; &amp;gt; &amp;ndash; &amp;mdash; &amp;hellip; &amp;rarr;
        ✓ Double quotes in attribute values: title="some text" is fine
        ✓ HTML entities: &amp; &lt; &gt; &ndash; &mdash; &hellip; &rarr;
 
@@ -46,8 +47,17 @@
                         #wsum-ready  #wsum-partial  #wsum-blocked
                         #wsum-total  #wsum-shortage-val
 
+     Tab bar:           #wkp-tab-bar
+                        [data-tab="wo-plan"]  [data-tab="shortage-report"]  [data-tab="emergency"]
+
+     Filter bar:        #wkp-filter-bar
+                        #wkp-fbar-group  #wkp-fbar-status  #wkp-fbar-urgency
+                        #wkp-fbar-clear
+
      Content area:      #wkp-content  #wkp-loader  #wkp-empty
+                        #wkp-pane-wo-plan  #wkp-pane-shortage  #wkp-pane-emergency
                         #wkp-table-wrap  #wkp-table  #wkp-tbody
+                        #wkp-shortage-body  #wkp-emerg-body
 
      Help system:       #wkp-tooltip  #wkp-popover
                         #wkp-pop-title  #wkp-pop-body  #wkp-pop-example
@@ -106,7 +116,9 @@
   1. COMMAND BAR      — toggles, filters, refresh
   2. CONTEXT BAR      — live simulation result summary + mode indicator
   3. SUMMARY STRIP    — 5 stat cards: Ready / Partial / Blocked / Total / Cost
-  4. MAIN CONTENT     — loading overlay + empty state + WO table
+  3.5 TAB BAR         — WO Kitting Plan | Shortage Report | Emergency Priorities
+  3.6 FILTER BAR      — client-side filters: item group, shortage status, urgency
+  4. MAIN CONTENT     — loading overlay + empty state + 3 tab panes
   5. FLOATING TOOLTIP — follows cursor; text from [data-tip] on hovered element
   6. COLUMN POPOVER   — appears on ? button click; content from WKP_POPOVERS in JS
   7. SHORTAGE MODAL   — material breakdown for one WO; injected by JS
@@ -259,10 +271,68 @@
 
   </div>
 
+  <!-- ════ 3.5. TAB BAR ════ -->
+  <div class="wkp-tab-bar" id="wkp-tab-bar">
+    <button class="wkp-tab-btn active" data-tab="wo-plan"
+            data-tip="WO Kitting Plan&#10;Main table: all open Work Orders with material availability simulation.&#10;Drag rows (Mode B) or enter a number to set priority order.">
+      &#x1F4CB; WO Kitting Plan
+    </button>
+    <button class="wkp-tab-btn" data-tab="shortage-report"
+            data-tip="Material Shortage Report&#10;Consolidated view: all materials that are short across EVERY open Work Order.&#10;Sorted by gap size. Use this to plan bulk procurement.">
+      &#x1F6D2; Material Shortage Report
+    </button>
+    <button class="wkp-tab-btn" data-tab="emergency"
+            data-tip="Emergency Priorities&#10;Work Orders with unshipped customer orders (overdue or due this month).&#10;Use this to decide which WOs to push hardest.">
+      &#x26A0; Emergency Priorities
+    </button>
+  </div>
+
+  <!-- ════ 3.6. FILTER BAR ════ -->
+  <div class="wkp-filter-bar" id="wkp-filter-bar">
+    <span class="wkp-fbar-label">Filter:</span>
+
+    <div class="wkp-fbar-group">
+      <label for="wkp-fbar-group">Item Group</label>
+      <select id="wkp-fbar-group" class="wkp-fbar-select"
+              data-tip="Filter by item group (e.g. Finished Goods, Raw Materials). Populated from the loaded Work Orders.">
+        <option value="">All Groups</option>
+      </select>
+    </div>
+
+    <div class="wkp-fbar-group">
+      <label for="wkp-fbar-status">Kit Status</label>
+      <select id="wkp-fbar-status" class="wkp-fbar-select"
+              data-tip="Filter by material availability status:&#10;Ready = all materials in stock&#10;Partial = some materials missing&#10;Blocked = cannot start, critical shortages&#10;Kitted = already produced or kitted">
+        <option value="">All Statuses</option>
+        <option value="ok">Ready to Start</option>
+        <option value="partial">Partial Shortage</option>
+        <option value="block">Cannot Start</option>
+        <option value="kitted">Kitted / Done</option>
+      </select>
+    </div>
+
+    <div class="wkp-fbar-group">
+      <label for="wkp-fbar-urgency">Customer Urgency</label>
+      <select id="wkp-fbar-urgency" class="wkp-fbar-select"
+              data-tip="Filter by customer order pressure:&#10;Overdue Orders = delivery was due LAST MONTH, customer is waiting&#10;Orders Due = customer orders due this month&#10;No Orders = no pending customer demand">
+        <option value="">All WOs</option>
+        <option value="overdue">Overdue Orders</option>
+        <option value="due">Orders Due This Month</option>
+        <option value="none">No Customer Orders</option>
+      </select>
+    </div>
+
+    <button class="wkp-fbar-clear" id="wkp-fbar-clear"
+            data-tip="Clear all filters and show all Work Orders">
+      Clear Filters
+    </button>
+    <span class="wkp-fbar-count" id="wkp-fbar-count"></span>
+  </div>
+
   <!-- ════ 4. MAIN CONTENT ════ -->
   <div class="wkp-content" id="wkp-content">
 
-    <!-- Loading overlay -->
+    <!-- Loading overlay (shared across all tabs) -->
     <div class="wkp-loading" id="wkp-loader">
       <div class="wkp-spinner"></div>
       <div class="wkp-load-title">Simulating kitting plan&hellip;</div>
@@ -278,49 +348,88 @@
       </div>
     </div>
 
-    <!-- WO Table -->
-    <div class="wkp-table-wrap" id="wkp-table-wrap" style="display:none">
-      <table class="wkp-table" id="wkp-table">
-        <thead>
-          <tr>
-            <th class="wkp-th-drag"
-                title="Drag rows in Priority Queue mode (Mode B) to set which WO gets materials first"></th>
-            <th class="wkp-th-seq"
-                title="Priority order (drag in Mode B to change)">#</th>
-            <th>Work Order</th>
-            <th>Product Being Made</th>
-            <th class="ta-r">
-              Qty Still to Produce
-              <span class="wkp-th-help" data-popover="remaining_qty" title="What does this column mean?">?</span>
-            </th>
-            <th>
-              Material Status
-              <span class="wkp-th-help" data-popover="shortage" title="What does this column mean?">?</span>
-            </th>
-            <th class="ta-r">
-              Production Cost
-              <span class="wkp-th-help" data-popover="est_cost" title="What does this column mean?">?</span>
-            </th>
-            <th class="ta-r">
-              Last Month Orders
-              <span class="wkp-th-help" data-popover="prev_so" title="What does this column mean?">?</span>
-            </th>
-            <th class="ta-r">
-              This Month Orders
-              <span class="wkp-th-help" data-popover="curr_so" title="What does this column mean?">?</span>
-            </th>
-            <th class="ta-r">
-              Total Unshipped
-              <span class="wkp-th-help" data-popover="total_so" title="What does this column mean?">?</span>
-            </th>
-            <th>Production Stage</th>
-            <th class="ta-r"></th>
-          </tr>
-        </thead>
-        <tbody id="wkp-tbody">
-        </tbody>
-      </table>
+    <!-- ── TAB PANE: WO Kitting Plan ── -->
+    <div class="wkp-tab-pane" id="wkp-pane-wo-plan" style="display:none">
+      <div class="wkp-table-wrap" id="wkp-table-wrap">
+        <table class="wkp-table" id="wkp-table">
+          <thead>
+            <tr>
+              <th class="wkp-th-drag"
+                  data-tip="Drag handle for Priority Queue (Mode B).&#10;Drag rows up and down to set which Work Order gets materials first.&#10;Handle is dimmed in Mode A (Independent Check) &mdash; order does not matter there."
+                  title="Drag to reprioritize (Mode B only)"></th>
+              <th class="wkp-th-seq"
+                  data-tip="Priority sequence number.&#10;In Mode B (Priority Queue): type a new number to move this WO up or down.&#10;In Mode A: order does not affect results."
+                  title="Priority number &mdash; type to change order in Mode B">#</th>
+              <th>Work Order</th>
+              <th>
+                Item Name
+                <span class="wkp-th-help" data-popover="item_name" title="What does this column show?">?</span>
+              </th>
+              <th class="ta-r">
+                Qty to Produce
+                <span class="wkp-th-help" data-popover="remaining_qty" title="What does this column mean?">?</span>
+              </th>
+              <th>
+                Material Status
+                <span class="wkp-th-help" data-popover="shortage" title="What does this column mean?">?</span>
+              </th>
+              <th class="ta-r">
+                Est. Cost
+                <span class="wkp-th-help" data-popover="est_cost" title="What does this column mean?">?</span>
+              </th>
+              <th class="ta-r">
+                Last Month SO
+                <span class="wkp-th-help" data-popover="prev_so" title="What does this column mean?">?</span>
+              </th>
+              <th class="ta-r">
+                This Month SO
+                <span class="wkp-th-help" data-popover="curr_so" title="What does this column mean?">?</span>
+              </th>
+              <th class="ta-r">
+                Total Unshipped
+                <span class="wkp-th-help" data-popover="total_so" title="What does this column mean?">?</span>
+              </th>
+              <th>
+                ERP Status
+                <span class="wkp-th-help" data-popover="wo_status" title="What does this column mean?">?</span>
+              </th>
+              <th class="ta-r"></th>
+            </tr>
+          </thead>
+          <tbody id="wkp-tbody">
+          </tbody>
+        </table>
+      </div>
     </div>
+
+    <!-- ── TAB PANE: Material Shortage Report ── -->
+    <div class="wkp-tab-pane" id="wkp-pane-shortage" style="display:none">
+      <div class="wkp-shortage-header" id="wkp-shortage-header">
+        <div class="wkp-shortage-title">
+          Consolidated Material Shortage Report
+          <span class="wkp-shortage-sub" id="wkp-shortage-sub">
+            &mdash; across all open Work Orders
+          </span>
+        </div>
+        <button class="wkp-btn wkp-btn-brand" id="wkp-shortage-mr-btn" style="display:none">
+          &#x1F6D2; Create Consolidated Purchase MR
+        </button>
+      </div>
+      <div id="wkp-shortage-body"></div>
+    </div>
+
+    <!-- ── TAB PANE: Emergency Priorities ── -->
+    <div class="wkp-tab-pane" id="wkp-pane-emergency" style="display:none">
+      <div class="wkp-emerg-header">
+        <div class="wkp-shortage-title">Emergency Production Priorities</div>
+        <div class="wkp-emerg-sub">
+          Work Orders with unshipped customer orders &mdash; sorted by urgency.
+          Overdue orders (past last month delivery date) appear first.
+        </div>
+      </div>
+      <div id="wkp-emerg-body"></div>
+    </div>
+
   </div>
 
   <!-- ════ FLOATING TOOLTIP (JS-positioned) ════ -->

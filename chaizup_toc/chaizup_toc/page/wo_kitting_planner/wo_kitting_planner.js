@@ -71,46 +71,60 @@
 
 const WKP_POPOVERS = {
 
+  item_name: {
+    title: "Item Name &amp; Item Group",
+    body:  "The ERPNext item name (product description) for what this Work Order will produce.\n\nBelow the item name, the Item Group is shown &mdash; this is the category the item belongs to in your Item master (e.g. Finished Goods, Raw Materials, Packaging).",
+    example: "Item Name: Masala Blend 500g Pouch\nItem Group: Finished Goods\nItem Code: MBLND-500G",
+    action: "Use the Item Group filter above the table to narrow the list to a specific product category.",
+  },
+
   remaining_qty: {
     title: "Qty Still to Produce",
-    body:  "How many units of this product still need to be manufactured to complete this Work Order. Already-produced units are subtracted.",
-    example: "Work Order: 500 kg Masala Blend\nAlready produced: 120 kg\nStill to produce: 380 kg",
-    action: "Focus on WOs with high remaining qty AND unshipped customer orders — those are your highest urgency.",
+    body:  "How many units of this product still need to be manufactured to complete this Work Order.\n\nCalculated as: Planned Qty &minus; Already Produced Qty.\n\nData source: Work Order &rarr; Qty, Produced Qty fields.",
+    example: "Work Order planned: 500 kg\nAlready produced: 120 kg\nStill to produce: 380 kg",
+    action: "Focus on WOs with high remaining qty AND unshipped customer orders &mdash; those are your highest urgency.",
   },
 
   shortage: {
     title: "Material Status",
-    body:  "Whether all the raw materials and ingredients needed for this production run are available in the warehouse.\n\n\u2714 Ready to Produce \u2014 Everything is in stock. Can start now.\n\u26A0 N materials missing \u2014 Some items are short. Click to see which ones.\n\u26D4 Cannot Start \u2014 Critical materials are missing. Production is blocked.",
-    example: "A 500 kg Masala Blend needs:\n  Chili Powder: need 80kg, have 120kg \u2714\n  Salt: need 50kg, have 20kg \u2716\n  \u2192 Status: 1 material missing",
-    action: "Click any chip to see the full material breakdown and order missing items.",
+    body:  "Whether all the raw materials needed for this production run are available in the warehouse.\n\n\u2714 Ready to Produce &mdash; Everything is in stock. Can start now.\n\u26A0 N materials missing &mdash; Some items are short. Click to see which ones.\n\u26D4 Cannot Start &mdash; Critical materials are missing. Production is blocked.\n\nData source: BOM components vs Bin (warehouse stock).",
+    example: "Masala Blend 500g BOM needs:\n  Chili Powder: need 80kg, have 120kg \u2714\n  Salt: need 50kg, have 20kg \u2716\n  Result: 1 material missing",
+    action: "Click any chip to see the full material breakdown with PO/MR quantities and consumption data.",
   },
 
   est_cost: {
     title: "Estimated Production Cost",
-    body:  "Approximate cost to produce the remaining quantity. Calculated as:\n  Valuation Rate (from BOM) \u00D7 Remaining Qty\n\nThis is a rough estimate — actual costs may vary based on current material prices.",
+    body:  "Approximate cost to produce the remaining quantity.\n\nCalculation: Valuation Rate (Item master) \u00D7 Remaining Qty\n\nThis is a rough estimate &mdash; actual costs may vary based on current material prices.",
     example: "Remaining: 380 kg\nValuation rate: \u20B9120 per kg\nEst. cost: \u20B945,600",
     action: "Use this to prioritize high-value WOs or identify where material shortages are most expensive.",
   },
 
   prev_so: {
     title: "Last Month Unshipped Orders",
-    body:  "Quantity of this product that was due for delivery in the PREVIOUS calendar month but has NOT yet been shipped to customers.\n\nThese orders are OVERDUE. Customers are already waiting.",
-    example: "If today is April 15th, this shows undelivered customer orders with delivery dates in March.",
-    action: "Any value here means you have overdue deliveries. Prioritize these WOs to avoid customer escalations.",
+    body:  "Qty of this product that was due for delivery in the PREVIOUS calendar month but has NOT yet been shipped to customers.\n\nThese orders are OVERDUE. Customers are already waiting.\n\nData source: Sales Order Items where delivery_date is in previous month and delivered_qty &lt; qty.",
+    example: "Today is April 15. This column shows undelivered customer orders with delivery dates in March.",
+    action: "Any value here means overdue deliveries. Prioritize these WOs immediately.",
   },
 
   curr_so: {
     title: "This Month Customer Orders",
-    body:  "Quantity of this product that customers have ordered with delivery due in the CURRENT calendar month, not yet shipped.\n\nThese are upcoming commitments that need to be met.",
-    example: "If today is April 15th, this shows undelivered orders due by April 30th.",
-    action: "Compare against \u2018Qty Still to Produce\u2019 to check if you can fulfil this month's commitments.",
+    body:  "Qty of this product that customers have ordered with delivery due in the CURRENT calendar month, not yet shipped.\n\nThese are upcoming commitments that need to be met.\n\nData source: Sales Order Items where delivery_date is in current month.",
+    example: "Today is April 15. This shows undelivered orders due by April 30.",
+    action: "Compare against Qty to Produce to check if you can fulfil this month&apos;s commitments.",
   },
 
   total_so: {
     title: "Total Unshipped Customer Orders",
-    body:  "Total pending customer order quantity across both last month (overdue) and this month (due soon).\n\nThis is the total demand pressure on this Work Order.",
+    body:  "Total pending customer order quantity across both last month (overdue) and this month (due soon).\n\nThis is the total demand pressure on this Work Order.\n\nCalculation: Last Month Unshipped + This Month Orders.",
     example: "Last month unshipped: 200 kg\nThis month orders: 300 kg\nTotal unshipped: 500 kg",
-    action: "If Total Unshipped is higher than Qty Still to Produce, you may need to create additional Work Orders.",
+    action: "If Total Unshipped &gt; Qty to Produce, you may need to create additional Work Orders.",
+  },
+
+  wo_status: {
+    title: "ERP Production Stage (ERPNext Status)",
+    body:  "The exact Work Order status as it appears in ERPNext Manufacturing:\n\nNot Started &mdash; Work Order created but production has not begun. Materials may not yet be issued.\n\nIn Process &mdash; Production is actively ongoing. Materials have been partially consumed.\n\nMaterial Transferred &mdash; All required materials have been issued (transferred) to the production floor via a Stock Entry. Production can now start.\n\nCompleted &mdash; Production is done. Finished goods received into warehouse.\n\nStopped &mdash; Work Order was manually stopped.",
+    example: "A WO showing Material Transferred but kit_status=block means the kitting simulation is using fresh stock (the transferred materials may have already been issued).",
+    action: "Use the Show WOs filter in the command bar to narrow by this status.",
   },
 };
 
@@ -163,6 +177,14 @@ class WOKittingPlanner {
     this._loading = false;
     this._dragSrc = null;
 
+    // Tab system
+    this._activeTab = "wo-plan";  // "wo-plan" | "shortage-report" | "emergency"
+
+    // Client-side filter state (applied in _getFilteredRows)
+    this._filterItemGroup = "";   // item_group value from filter bar
+    this._filterKitStatus = "";   // kit_status value
+    this._filterUrgency   = "";   // "overdue" | "due" | "none" | ""
+
     // Help system
     this._tipEl    = null;   // floating tooltip element
     this._popEl    = null;   // column help popover element
@@ -175,6 +197,8 @@ class WOKittingPlanner {
 
   init() {
     this._bindControls();
+    this._bindTabs();
+    this._bindFilterBar();
     this._initHelpSystem();
     this._setupFullHeight();
     this._updateHintBar();
@@ -429,7 +453,7 @@ class WOKittingPlanner {
         if (!wos.length) {
           this._showLoader(false);
           this._showEmpty(true);
-          this._showTable(false);
+          this._showAllPanes(false);
           this._resetSummary();
           this._setHintText("No open Work Orders found. Create Work Orders in the Manufacturing module.");
           return;
@@ -471,15 +495,21 @@ class WOKittingPlanner {
   _render() {
     if (!this.rows.length) {
       this._showEmpty(true);
-      this._showTable(false);
+      this._showAllPanes(false);
+      const fbar = document.getElementById("wkp-filter-bar");
+      if (fbar) fbar.style.display = "none";
       this._resetSummary();
       return;
     }
+    const fbar = document.getElementById("wkp-filter-bar");
+    if (fbar) fbar.style.display = this._activeTab === "wo-plan" ? "" : "none";
     this._showEmpty(false);
-    this._showTable(true);
     this._updateSummary(this.rows);
-    this._renderTable(this.rows);
     this._updateHintBar(this.rows);
+    this._populateItemGroupFilter(this.rows);
+    this._renderShortageReport(this.rows);
+    this._renderEmergencyPanel(this.rows);
+    this._switchTab(this._activeTab);  // show/render the active pane
   }
 
   _updateSummary(rows) {
@@ -506,11 +536,41 @@ class WOKittingPlanner {
   }
 
   _renderTable(rows) {
-    const tbody = document.getElementById("wkp-tbody");
-    tbody.innerHTML = rows.map((row, idx) => this._buildRow(row, idx)).join("");
+    const filtered = this._getFilteredRows(rows);
+    const tbody    = document.getElementById("wkp-tbody");
+    tbody.innerHTML = filtered.map((row, idx) => this._buildRow(row, idx)).join("");
+    this._updateFilterCount(filtered.length, rows.length);
     this._bindRowActions();
+    this._bindSeqInput();
     if (this.calcMode === "sequential") this._bindDragDrop();
     this._setDragHandleState(this.calcMode === "sequential");
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  CLIENT-SIDE FILTERING
+  // ─────────────────────────────────────────────────────────────────────
+
+  _getFilteredRows(rows) {
+    return rows.filter(r => {
+      if (this._filterItemGroup && r.item_group !== this._filterItemGroup) return false;
+      if (this._filterKitStatus && r.kit_status !== this._filterKitStatus) return false;
+      if (this._filterUrgency === "overdue" && !(r.prev_month_so > 0)) return false;
+      if (this._filterUrgency === "due"     && !(r.curr_month_so > 0 || r.prev_month_so > 0)) return false;
+      if (this._filterUrgency === "none"    && (r.total_pending_so > 0)) return false;
+      return true;
+    });
+  }
+
+  _updateFilterCount(shown, total) {
+    const el = document.getElementById("wkp-fbar-count");
+    if (!el) return;
+    if (shown < total) {
+      el.textContent = "Showing " + shown + " of " + total + " WOs";
+      el.style.display = "";
+    } else {
+      el.textContent = "";
+      el.style.display = "none";
+    }
   }
 
   _buildRow(row, idx) {
@@ -557,21 +617,31 @@ class WOKittingPlanner {
       : (row.kit_status === "ok" ? "All materials available in warehouse" : "");
     const stageBadgeCls = _status_badge_class(row.status);
 
-    // Stage label (business-friendly)
-    const stageLbl = {
-      "Not Started"          : "Not Started",
-      "Material Transferred" : "Kitted \u2714",
-      "In Process"           : "On Floor",
-      "Completed"            : "Done",
-      "Stopped"              : "Stopped",
-    }[row.status] || (row.status || "");
+    // Use EXACT ERPNext status name — no translation, no alias.
+    // Tooltip on the column header (? button) explains each status in plain language.
+    const stageLbl = row.status || "\u2014";
+
+    // Status tooltip — explains the ERPNext term in plain language
+    const statusTip = {
+      "Not Started"         : "Work Order created. Production has not started. Materials not yet issued.",
+      "In Process"          : "Production is actively ongoing. Materials being consumed on the floor.",
+      "Material Transferred": "All materials have been issued to the production floor via Stock Entry.",
+      "Completed"           : "Production complete. Finished goods received into warehouse.",
+      "Stopped"             : "Work Order manually stopped. No further production expected.",
+    }[row.status] || row.status || "";
+
+    // Sequence input (active in Mode B, read-only in Mode A)
+    const seqInput = `<input class="wkp-seq-input" type="number" min="1"
+      value="${idx + 1}" data-wo="${_esc(row.wo)}" data-idx="${idx}"
+      title="Type a number to change priority order (applies only in Mode B &mdash; Priority Queue)"
+      ${this.calcMode !== "sequential" ? "readonly" : ""}>`;
 
     return `
 <tr class="wkp-tr ${statusClass}" data-wo="${_esc(row.wo)}" data-idx="${idx}">
   <td class="wkp-td-drag">
     <span class="wkp-drag-handle" title="Drag to change priority (Mode B only)">\u2630</span>
   </td>
-  <td class="wkp-td-seq">${idx + 1}</td>
+  <td class="wkp-td-seq">${seqInput}</td>
   <td>
     <a href="/app/work-order/${_esc(row.wo)}" target="_blank" class="wkp-wo-link"
        title="Open this Work Order in ERPNext">${_esc(row.wo)}</a>
@@ -579,6 +649,7 @@ class WOKittingPlanner {
   <td>
     <div class="wkp-item-name">${_esc(row.item_name || row.item_code)}</div>
     <div class="wkp-item-code">${_esc(row.item_code)}</div>
+    ${row.item_group ? `<div class="wkp-item-group-tag">${_esc(row.item_group)}</div>` : ""}
   </td>
   <td class="ta-r">
     <strong>${_fmt_num(row.remaining_qty, 0)}</strong>
@@ -588,7 +659,7 @@ class WOKittingPlanner {
     <span class="wkp-short-chip ${chipClass}"
           data-wo="${_esc(row.wo)}"
           style="cursor:${isClickable ? "pointer" : "default"}"
-          title="${chipTip}">
+          data-tip="${chipTip}">
       ${chipText}
     </span>
   </td>
@@ -596,11 +667,17 @@ class WOKittingPlanner {
   <td class="ta-r ${(row.prev_month_so || 0) > 0 ? "wkp-cell-red" : ""}">${prevSo}</td>
   <td class="ta-r">${currSo}</td>
   <td class="ta-r">${totalSoTxt}</td>
-  <td><span class="wkp-status-badge ${stageBadgeCls}" title="${_esc(row.status || "")}">${_esc(stageLbl)}</span></td>
+  <td>
+    <span class="wkp-status-badge ${stageBadgeCls}"
+          data-tip="${statusTip}"
+          title="${_esc(row.status || "")}">
+      ${_esc(stageLbl)}
+    </span>
+  </td>
   <td class="ta-r">
     <button class="wkp-btn wkp-btn-sm" data-action="wo-detail" data-wo="${_esc(row.wo)}"
-            title="View full detail: quantities, customer orders, production cost">
-      View Detail
+            title="View full detail: quantities, customer orders, material breakdown">
+      View
     </button>
   </td>
 </tr>`;
@@ -696,6 +773,437 @@ class WOKittingPlanner {
     if (thDrag) thDrag.style.opacity = enabled ? "1" : "0.3";
     const dragHint = document.getElementById("wkp-drag-hint");
     if (dragHint) dragHint.style.display = enabled ? "" : "none";
+    // Sequence inputs: active only in Mode B
+    document.querySelectorAll(".wkp-seq-input").forEach(inp => {
+      inp.readOnly = !enabled;
+      inp.title = enabled
+        ? "Type a number to change priority order"
+        : "Sequence input is active only in Mode B (Priority Queue)";
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  SEQUENCE NUMBER INPUT (Priority Queue numeric edit)
+  //  Allows typing a sequence number as an alternative to drag-drop.
+  //  Only reorders in Mode B; in Mode A shows a message and resets.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _bindSeqInput() {
+    document.querySelectorAll(".wkp-seq-input").forEach(inp => {
+      inp.addEventListener("change", e => {
+        if (this.calcMode !== "sequential") {
+          inp.value = parseInt(inp.dataset.idx || 0) + 1;
+          frappe.show_alert({
+            message: "Sequence editing applies only in Mode B (Priority Queue). Switch mode to reorder.",
+            indicator: "orange",
+          });
+          return;
+        }
+        const wo     = inp.dataset.wo;
+        const maxSeq = this.woOrder.length;
+        let   newSeq = parseInt(inp.value) || 1;
+        newSeq = Math.max(1, Math.min(newSeq, maxSeq));
+        inp.value = newSeq;
+        this._applySeqChange(wo, newSeq - 1);  // convert 1-based → 0-based
+      });
+      // Prevent drag accidentally triggering when clicking the input
+      inp.addEventListener("mousedown", e => e.stopPropagation());
+    });
+  }
+
+  _applySeqChange(wo, newIdx) {
+    const oldIdx = this.woOrder.indexOf(wo);
+    if (oldIdx === -1 || oldIdx === newIdx) return;
+    this.woOrder.splice(oldIdx, 1);
+    this.woOrder.splice(newIdx, 0, wo);
+    this.simulate();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  TAB SYSTEM
+  //  Three tabs: WO Kitting Plan | Material Shortage Report | Emergency Priorities
+  //  Data is pre-rendered for all tabs in _render(); switching is instant.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _bindTabs() {
+    const bar = document.getElementById("wkp-tab-bar");
+    if (!bar) return;
+    bar.addEventListener("click", e => {
+      const btn = e.target.closest(".wkp-tab-btn");
+      if (!btn) return;
+      this._switchTab(btn.dataset.tab);
+    });
+  }
+
+  _switchTab(tabName) {
+    this._activeTab = tabName || "wo-plan";
+
+    // Update tab button active state
+    document.querySelectorAll(".wkp-tab-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.tab === this._activeTab);
+    });
+
+    // Show/hide filter bar (only relevant for WO plan tab)
+    const filterBar = document.getElementById("wkp-filter-bar");
+    if (filterBar) filterBar.style.display = this._activeTab === "wo-plan" ? "" : "none";
+
+    // Show/hide panes
+    const panes = {
+      "wo-plan"        : "wkp-pane-wo-plan",
+      "shortage-report": "wkp-pane-shortage",
+      "emergency"      : "wkp-pane-emergency",
+    };
+    Object.entries(panes).forEach(([tab, paneId]) => {
+      const pane = document.getElementById(paneId);
+      if (pane) pane.style.display = tab === this._activeTab ? "" : "none";
+    });
+
+    // If switching to WO plan, render the table (respects current filters)
+    if (this._activeTab === "wo-plan" && this.rows.length) {
+      this._renderTable(this.rows);
+    }
+  }
+
+  _showAllPanes(show) {
+    ["wkp-pane-wo-plan", "wkp-pane-shortage", "wkp-pane-emergency"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = show ? "" : "none";
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  FILTER BAR
+  //  Client-side filters: item group, kit status, customer urgency.
+  //  All filtering is done in _getFilteredRows() — no API call needed.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _bindFilterBar() {
+    const grpSel     = document.getElementById("wkp-fbar-group");
+    const statusSel  = document.getElementById("wkp-fbar-status");
+    const urgSel     = document.getElementById("wkp-fbar-urgency");
+    const clearBtn   = document.getElementById("wkp-fbar-clear");
+
+    if (grpSel) grpSel.addEventListener("change", e => {
+      this._filterItemGroup = e.target.value;
+      if (this._activeTab === "wo-plan" && this.rows.length) this._renderTable(this.rows);
+    });
+    if (statusSel) statusSel.addEventListener("change", e => {
+      this._filterKitStatus = e.target.value;
+      if (this._activeTab === "wo-plan" && this.rows.length) this._renderTable(this.rows);
+    });
+    if (urgSel) urgSel.addEventListener("change", e => {
+      this._filterUrgency = e.target.value;
+      if (this._activeTab === "wo-plan" && this.rows.length) this._renderTable(this.rows);
+    });
+    if (clearBtn) clearBtn.addEventListener("click", () => {
+      this._filterItemGroup = "";
+      this._filterKitStatus = "";
+      this._filterUrgency   = "";
+      if (grpSel)    grpSel.value    = "";
+      if (statusSel) statusSel.value = "";
+      if (urgSel)    urgSel.value    = "";
+      if (this._activeTab === "wo-plan" && this.rows.length) this._renderTable(this.rows);
+    });
+  }
+
+  _populateItemGroupFilter(rows) {
+    const sel = document.getElementById("wkp-fbar-group");
+    if (!sel) return;
+    const groups = [...new Set(rows.map(r => r.item_group || "").filter(Boolean))].sort();
+    // Preserve current selection
+    const current = sel.value;
+    // Remove old options (keep first "All Groups" option)
+    while (sel.options.length > 1) sel.remove(1);
+    groups.forEach(g => {
+      const opt = document.createElement("option");
+      opt.value = g;
+      opt.textContent = g;
+      sel.appendChild(opt);
+    });
+    if (groups.includes(current)) sel.value = current;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  MATERIAL SHORTAGE REPORT TAB
+  //  Aggregates shortage_items across all WOs to show consolidated demand.
+  //  Sorted by net_gap DESC (unmet shortages with no PO/MR action first).
+  //  Computed entirely from this.rows — no extra API call.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _renderShortageReport(rows) {
+    const body    = document.getElementById("wkp-shortage-body");
+    const mrBtn   = document.getElementById("wkp-shortage-mr-btn");
+    const subEl   = document.getElementById("wkp-shortage-sub");
+    if (!body) return;
+
+    // Aggregate shortage items across all WOs
+    const agg = {};  // item_code → aggregated data
+    rows.forEach(row => {
+      (row.shortage_items || []).forEach(comp => {
+        if ((comp.shortage || 0) <= 0) return;  // Only show items with actual shortage
+        const ic = comp.item_code;
+        if (!agg[ic]) {
+          agg[ic] = {
+            item_code    : ic,
+            item_name    : comp.item_name || ic,
+            uom          : comp.uom || "",
+            total_required  : 0,
+            total_available : 0,
+            total_shortage  : 0,
+            total_value     : 0,
+            po_qty          : 0,
+            mr_qty          : 0,
+            wo_list         : [],
+          };
+        }
+        const a = agg[ic];
+        a.total_required  += comp.required      || 0;
+        a.total_available += comp.available     || 0;
+        a.total_shortage  += comp.shortage      || 0;
+        a.total_value     += comp.shortage_value || 0;
+        a.po_qty           = Math.max(a.po_qty, comp.po_qty || 0);  // Take max (same item, same PO)
+        a.mr_qty           = Math.max(a.mr_qty, comp.mr_qty || 0);
+        if (!a.wo_list.includes(row.wo)) a.wo_list.push(row.wo);
+      });
+    });
+
+    const aggList = Object.values(agg);
+    // Sort: net_gap = shortage - po_qty - mr_qty; highest first (most unmet)
+    aggList.sort((a, b) => {
+      const gapA = a.total_shortage - a.po_qty - a.mr_qty;
+      const gapB = b.total_shortage - b.po_qty - b.mr_qty;
+      return gapB - gapA;
+    });
+
+    if (!aggList.length) {
+      body.innerHTML = `<div class="wkp-reco wkp-reco-ok" style="margin:16px">
+        <div class="wkp-reco-icon">\u2705</div>
+        <div class="wkp-reco-body">
+          <div class="wkp-reco-headline">No material shortages found across any open Work Order.</div>
+          <div class="wkp-reco-detail">All materials are available for all active Work Orders in this simulation.</div>
+        </div>
+      </div>`;
+      if (mrBtn) mrBtn.style.display = "none";
+      if (subEl) subEl.textContent = " \u2014 No shortages found";
+      return;
+    }
+
+    const totalItems = aggList.length;
+    const totalVal   = aggList.reduce((s, a) => s + a.total_value, 0);
+    if (subEl) subEl.textContent =
+      " \u2014 " + totalItems + " unique item" + (totalItems === 1 ? "" : "s") + " short"
+      + " \u00B7 Total value: \u20B9" + _fmt_num(totalVal, 0);
+
+    const rowsHtml = aggList.map(a => {
+      const netGap  = Math.max(0, a.total_shortage - a.po_qty - a.mr_qty);
+      const netCls  = netGap > 0 ? "wkp-cell-red" : "wkp-cell-green";
+      const netTxt  = netGap > 0 ? _fmt_num(netGap, 2) : "\u2714 Covered";
+      const poTxt   = a.po_qty  > 0 ? _fmt_num(a.po_qty,  2) : "\u2014";
+      const mrTxt   = a.mr_qty  > 0 ? _fmt_num(a.mr_qty,  2) : "\u2014";
+      const wos     = a.wo_list.slice(0, 3).join(", ") + (a.wo_list.length > 3 ? " +" + (a.wo_list.length - 3) + " more" : "");
+      return `
+<tr>
+  <td>
+    <div class="wkp-item-name">${_esc(a.item_name)}</div>
+    <div class="wkp-item-code">${_esc(a.item_code)}</div>
+  </td>
+  <td class="ta-r" data-tip="Total qty of this material needed across all WOs in this simulation">${_fmt_num(a.total_required, 2)} <small>${_esc(a.uom)}</small></td>
+  <td class="ta-r" data-tip="Qty available in warehouse (physical stock)">${_fmt_num(a.total_available, 2)}</td>
+  <td class="ta-r wkp-cell-red" data-tip="Total shortage across all WOs">${_fmt_num(a.total_shortage, 2)}</td>
+  <td class="ta-r" data-tip="Qty on open Purchase Orders (ordered from supplier, not yet received)">${poTxt}</td>
+  <td class="ta-r" data-tip="Qty on open Material Requests (requested but not yet converted to PO)">${mrTxt}</td>
+  <td class="ta-r ${netCls}" data-tip="Net Gap = Shortage &minus; PO Qty &minus; MR Qty. If positive, this material has NO procurement action and needs immediate attention.">${netTxt}</td>
+  <td class="ta-r" data-tip="Estimated purchase cost of total shortage quantity">\u20B9${_fmt_num(a.total_value, 0)}</td>
+  <td style="font-size:11px;color:var(--stone-400)" data-tip="Work Orders that need this material">${_esc(wos)}</td>
+</tr>`;
+    }).join("");
+
+    body.innerHTML = `
+<div class="wkp-shortage-hint" data-tip="Items with positive Net Gap have no purchase order or request raised yet. These are the most urgent.">
+  Items sorted by Net Gap (unmet shortage) &mdash; highest first.
+  <strong>Net Gap &gt; 0</strong> = no procurement action taken yet, needs immediate attention.
+</div>
+<table class="wkp-modal-table wkp-shortage-table">
+  <thead>
+    <tr>
+      <th>Material</th>
+      <th class="ta-r" data-tip="Total quantity needed across all open WOs">Total Required</th>
+      <th class="ta-r" data-tip="Physical warehouse stock (Bin)">In Stock</th>
+      <th class="ta-r" data-tip="Total shortage (Required &minus; In Stock)">Shortage</th>
+      <th class="ta-r" data-tip="Open PO quantity (ordered from supplier, not yet received)">PO Raised</th>
+      <th class="ta-r" data-tip="Open MR quantity (not yet converted to Purchase Order)">MR Raised</th>
+      <th class="ta-r" data-tip="Net Gap = Shortage &minus; PO &minus; MR. Positive = needs action NOW.">Net Gap</th>
+      <th class="ta-r">Est. Value (\u20B9)</th>
+      <th data-tip="Work Orders affected by this shortage">Affects WOs</th>
+    </tr>
+  </thead>
+  <tbody>${rowsHtml}</tbody>
+</table>`;
+
+    // Show "Create Consolidated MR" button for items with net gap > 0
+    const hasNetGap = aggList.some(a => (a.total_shortage - a.po_qty - a.mr_qty) > 0);
+    if (mrBtn) {
+      mrBtn.style.display = hasNetGap ? "" : "none";
+      if (hasNetGap) {
+        mrBtn.onclick = () => this._createConsolidatedMR(
+          aggList.filter(a => (a.total_shortage - a.po_qty - a.mr_qty) > 0)
+        );
+      }
+    }
+  }
+
+  _createConsolidatedMR(items) {
+    const payload = items.map(a => ({
+      item_code   : a.item_code,
+      shortage_qty: Math.max(0, a.total_shortage - a.po_qty - a.mr_qty),
+      uom         : a.uom || "",
+      warehouse   : "",
+    }));
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.create_purchase_mr_for_wo_shortages",
+      args: { items_json: JSON.stringify(payload), company: this._company },
+      freeze: true,
+      freeze_message: "Creating Consolidated Material Request for " + items.length + " items\u2026",
+      callback: r => {
+        if (r.exc) return;
+        const mr = r.message && r.message.mr;
+        frappe.show_alert({
+          message: "Consolidated Purchase MR <b><a href=\"/app/material-request/" + mr
+                   + "\" target=\"_blank\">" + mr + "</a></b> created for "
+                   + items.length + " items.",
+          indicator: "green",
+        }, 10);
+      },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  EMERGENCY PRIORITIES TAB
+  //  Shows WOs with unshipped customer orders, sorted by urgency.
+  //  Overdue orders (prev_month_so > 0) appear first.
+  //  Computed from this.rows — no extra API call.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _renderEmergencyPanel(rows) {
+    const body = document.getElementById("wkp-emerg-body");
+    if (!body) return;
+
+    // Only WOs with pending customer orders
+    const urgent = rows
+      .filter(r => (r.total_pending_so || 0) > 0)
+      .sort((a, b) => {
+        // Overdue first, then by total SO desc
+        const aOver = (a.prev_month_so || 0) > 0 ? 1 : 0;
+        const bOver = (b.prev_month_so || 0) > 0 ? 1 : 0;
+        if (aOver !== bOver) return bOver - aOver;
+        return (b.total_pending_so || 0) - (a.total_pending_so || 0);
+      });
+
+    if (!urgent.length) {
+      body.innerHTML = `<div class="wkp-reco wkp-reco-ok" style="margin:16px">
+        <div class="wkp-reco-icon">\u2705</div>
+        <div class="wkp-reco-body">
+          <div class="wkp-reco-headline">No emergency priorities found.</div>
+          <div class="wkp-reco-detail">None of the open Work Orders have unshipped customer orders in the last or current month.</div>
+        </div>
+      </div>`;
+      return;
+    }
+
+    const cardsHtml = urgent.map((row, i) => {
+      const isOverdue = (row.prev_month_so || 0) > 0;
+      const badgeCls  = isOverdue ? "wkp-emerg-badge-red" : "wkp-emerg-badge-amber";
+      const badgeTxt  = isOverdue ? "\u26A0 OVERDUE" : "Due This Month";
+      const chipClass = {
+        ok: "wkp-short-ok", partial: "wkp-short-warn",
+        block: "wkp-short-block", kitted: "wkp-short-kitted",
+      }[row.kit_status] || "wkp-short-ok";
+      const chipText  = {
+        ok      : "\u2714 Ready to Produce",
+        partial : (row.shortage_count || 0) + " materials short",
+        block   : "\u26D4 Blocked",
+        kitted  : "\u2713 Kitted",
+      }[row.kit_status] || row.kit_status;
+
+      const overdueLine = (row.prev_month_so || 0) > 0
+        ? `<div class="wkp-emerg-detail wkp-emerg-overdue">
+             \u26A0 Overdue (last month): ${_fmt_num(row.prev_month_so, 0)} ${_esc(row.uom || "")}
+           </div>` : "";
+      const dueLine = (row.curr_month_so || 0) > 0
+        ? `<div class="wkp-emerg-detail">
+             Due this month: ${_fmt_num(row.curr_month_so, 0)} ${_esc(row.uom || "")}
+           </div>` : "";
+      const coverCheck = row.total_pending_so > row.remaining_qty
+        ? `<div class="wkp-emerg-alert">
+             Customer demand (${_fmt_num(row.total_pending_so, 0)}) exceeds remaining production
+             (${_fmt_num(row.remaining_qty, 0)}). Consider creating an additional Work Order.
+           </div>` : "";
+
+      return `
+<div class="wkp-emerg-card wkp-emerg-${isOverdue ? "high" : "med"}">
+  <div class="wkp-emerg-left">
+    <span class="wkp-emerg-rank">#${i + 1}</span>
+    <span class="wkp-emerg-badge ${badgeCls}">${badgeTxt}</span>
+  </div>
+  <div class="wkp-emerg-main">
+    <div class="wkp-emerg-wo">
+      <a href="/app/work-order/${_esc(row.wo)}" target="_blank" class="wkp-wo-link">${_esc(row.wo)}</a>
+    </div>
+    <div class="wkp-item-name">${_esc(row.item_name || row.item_code)}</div>
+    <div class="wkp-item-code">${_esc(row.item_code)}</div>
+    ${row.item_group ? `<div class="wkp-item-group-tag">${_esc(row.item_group)}</div>` : ""}
+    ${coverCheck}
+  </div>
+  <div class="wkp-emerg-orders">
+    <div class="wkp-emerg-so-label">Customer Orders</div>
+    ${overdueLine}
+    ${dueLine}
+    <div class="wkp-emerg-total">Total: ${_fmt_num(row.total_pending_so, 0)} ${_esc(row.uom || "")}</div>
+  </div>
+  <div class="wkp-emerg-prod">
+    <div class="wkp-emerg-so-label">Production Status</div>
+    <div style="margin-bottom:4px">
+      <span class="wkp-status-badge ${_status_badge_class(row.status)}"
+            title="${_esc(row.status || "")}">${_esc(row.status || "")}</span>
+    </div>
+    <div>Remaining: ${_fmt_num(row.remaining_qty, 0)} ${_esc(row.uom || "")}</div>
+    <div style="margin-top:4px">
+      <span class="wkp-short-chip ${chipClass}" style="font-size:11px">${chipText}</span>
+    </div>
+  </div>
+  <div class="wkp-emerg-actions">
+    <button class="wkp-btn wkp-btn-brand wkp-btn-sm" data-action="emerg-plan" data-wo="${_esc(row.wo)}"
+            title="Switch to WO Plan tab and see this Work Order">
+      View in Plan
+    </button>
+    ${(row.shortage_items || []).some(i => i.shortage > 0) ? `
+    <button class="wkp-btn wkp-btn-sm" data-action="emerg-shortage" data-wo="${_esc(row.wo)}"
+            title="See which materials are missing for this Work Order">
+      See Shortages
+    </button>` : ""}
+  </div>
+</div>`;
+    }).join("");
+
+    body.innerHTML = cardsHtml;
+
+    // Bind action buttons in emergency panel
+    body.querySelectorAll("[data-action='emerg-plan']").forEach(btn => {
+      btn.addEventListener("click", () => {
+        this._switchTab("wo-plan");
+        // Scroll to the WO row after a short delay for render
+        setTimeout(() => {
+          const tr = document.querySelector(`tr[data-wo="${btn.dataset.wo}"]`);
+          if (tr) tr.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+      });
+    });
+    body.querySelectorAll("[data-action='emerg-shortage']").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const row = this.rows.find(r => r.wo === btn.dataset.wo);
+        if (row) this._showShortageModal(row);
+      });
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -727,58 +1235,91 @@ class WOKittingPlanner {
       </p>`;
     } else {
       const rowsHtml = items.map(it => {
-        const isShort   = (it.shortage || 0) > 0;
-        const shortTxt  = isShort ? _fmt_num(it.shortage, 2) + " " + _esc(it.uom || "") : "\u2014";
-        const valTxt    = (it.shortage_value || 0) > 0
+        const isShort      = (it.shortage || 0) > 0;
+        const shortTxt     = isShort ? _fmt_num(it.shortage, 2) : "\u2014";
+        const valTxt       = (it.shortage_value || 0) > 0
           ? "\u20B9" + _fmt_num(it.shortage_value, 0) : "\u2014";
-        const stageCls  = "wkp-stage-" + (it.stage_color || "green");
-        const stageDesc = _stage_description(it.stage);
+        const stageCls     = "wkp-stage-" + (it.stage_color || "green");
+        const stageDesc    = _stage_description(it.stage);
+        const poTxt        = (it.po_qty  || 0) > 0 ? _fmt_num(it.po_qty,  2) : "\u2014";
+        const mrTxt        = (it.mr_qty  || 0) > 0 ? _fmt_num(it.mr_qty,  2) : "\u2014";
+        const consumedTxt  = (it.consumed_qty || 0) > 0 ? _fmt_num(it.consumed_qty, 2) : "\u2014";
+        const netGap       = Math.max(0, (it.shortage || 0) - (it.po_qty || 0) - (it.mr_qty || 0));
+        const netCls       = netGap > 0 ? "wkp-cell-red" : (isShort ? "wkp-cell-green" : "");
+        const netTxt       = isShort
+          ? (netGap > 0 ? _fmt_num(netGap, 2) : "\u2714 Covered")
+          : "\u2014";
+
         return `
 <tr class="${isShort ? "wkp-modal-row-short" : ""}">
   <td>
     <div class="wkp-item-name">${_esc(it.item_name || it.item_code)}</div>
     <div class="wkp-item-code">${_esc(it.item_code)}</div>
   </td>
-  <td class="ta-r">
+  <td class="ta-r" data-tip="Total qty of this material needed for the remaining production quantity of this Work Order.&#10;Formula: BOM per_unit_qty &times; remaining_qty">
     <strong>${_fmt_num(it.required, 2)}</strong>
     <div style="font-size:10px;color:var(--stone-400)">${_esc(it.uom || "")}</div>
   </td>
-  <td class="ta-r ${isShort ? "" : "wkp-cell-green"}">
+  <td class="ta-r ${isShort ? "" : "wkp-cell-green"}"
+      data-tip="Physical qty available in warehouse (Bin.actual_qty across all warehouses).${this.stockMode === "current_and_expected" ? " Mode Y also adds open PO/MR/WO expected qty to available qty." : ""}">
     ${_fmt_num(it.available, 2)}
   </td>
-  <td class="ta-r ${isShort ? "wkp-cell-red" : "wkp-cell-green"}">
+  <td class="ta-r ${isShort ? "wkp-cell-red" : "wkp-cell-green"}"
+      data-tip="Shortage = Required &minus; Available. Zero or blank = enough in stock.">
     ${shortTxt}
   </td>
-  <td class="ta-r">${valTxt}</td>
+  <td class="ta-r"
+      data-tip="Qty already consumed from warehouse for this Work Order (from submitted Manufacture Stock Entries).&#10;If this WO is In Process, some materials may already be partially consumed.">
+    ${consumedTxt}
+  </td>
+  <td class="ta-r"
+      data-tip="Qty on open Purchase Orders for this material.&#10;Source: Purchase Order Items where PO is submitted and not closed/cancelled.">
+    ${poTxt}
+  </td>
+  <td class="ta-r"
+      data-tip="Qty on open Material Requests (Purchase type, not yet converted to PO).&#10;Source: Material Request Items where status is not Ordered/Stopped.">
+    ${mrTxt}
+  </td>
+  <td class="ta-r ${netCls}"
+      data-tip="Net Gap = Shortage &minus; PO Qty &minus; MR Qty.&#10;If positive, this material has NO procurement action and needs immediate attention.&#10;If zero or negative, existing POs/MRs should cover the shortage.">
+    ${netTxt}
+  </td>
+  <td>${valTxt}</td>
   <td>
-    <span class="wkp-stage-badge ${stageCls}" title="${stageDesc}">${_esc(it.stage || "In Stock")}</span>
+    <span class="wkp-stage-badge ${stageCls}"
+          data-tip="${stageDesc}"
+          title="${stageDesc}">${_esc(it.stage || "In Stock")}</span>
   </td>
 </tr>`;
       }).join("");
 
       bodyHtml = `
 <div style="font-size:11px;color:var(--stone-400);padding:8px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">
-  Material-by-material breakdown
+  Material-by-material breakdown &mdash; hover any cell for data source
 </div>
-<table class="wkp-modal-table">
+<table class="wkp-modal-table wkp-modal-table-wide">
   <thead>
     <tr>
       <th>Material / Ingredient</th>
-      <th class="ta-r">Need</th>
-      <th class="ta-r">In Stock</th>
-      <th class="ta-r">Shortage</th>
+      <th class="ta-r" data-tip="Qty needed for the remaining production run">Need</th>
+      <th class="ta-r" data-tip="Physical warehouse stock">In Stock</th>
+      <th class="ta-r" data-tip="Qty still needed (Need &minus; In Stock)">Shortage</th>
+      <th class="ta-r" data-tip="Already consumed via Stock Entry for this WO">Consumed</th>
+      <th class="ta-r" data-tip="Open Purchase Order quantity (ordered, not received)">PO Raised</th>
+      <th class="ta-r" data-tip="Open Material Request quantity (not yet ordered)">MR Raised</th>
+      <th class="ta-r" data-tip="Net Gap = Shortage &minus; PO &minus; MR. Positive = needs urgent action.">Net Gap</th>
       <th class="ta-r">Value (\u20B9)</th>
-      <th>Procurement Stage</th>
+      <th data-tip="Where this material is in the supply chain">Stage</th>
     </tr>
   </thead>
   <tbody>${rowsHtml}</tbody>
 </table>
 <div style="font-size:11px;color:var(--stone-400);padding:8px 0 0;line-height:1.5">
-  <strong>Procurement Stage legend:</strong>
-  In Stock = available &nbsp;|&nbsp; In Production = being made &nbsp;|&nbsp;
+  <strong>Stage legend:</strong>
+  In Stock = available now &nbsp;|&nbsp; In Production = sub-assembly WO open &nbsp;|&nbsp;
   PO Raised = ordered from supplier &nbsp;|&nbsp;
   MR Raised = requested, not yet ordered &nbsp;|&nbsp;
-  Short = no action taken yet
+  Short = no action taken
 </div>`;
     }
 
@@ -1135,17 +1676,12 @@ ${decisionHtml}
     this._loading = show;
     const loader = document.getElementById("wkp-loader");
     if (loader) loader.style.display = show ? "flex" : "none";
-    if (show) { this._showEmpty(false); this._showTable(false); }
+    if (show) { this._showEmpty(false); this._showAllPanes(false); }
   }
 
   _showEmpty(show) {
     const el = document.getElementById("wkp-empty");
     if (el) el.style.display = show ? "flex" : "none";
-  }
-
-  _showTable(show) {
-    const el = document.getElementById("wkp-table-wrap");
-    if (el) el.style.display = show ? "block" : "none";
   }
 
   _closeModal(id) {
