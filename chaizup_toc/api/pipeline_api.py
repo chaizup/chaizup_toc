@@ -1272,17 +1272,24 @@ def _build_edges(items, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, qis, ses, outpu
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _build_summary(items, toc_map, mrs, wos, pos):
-    red = yellow = green = black = 0
+    red = yellow = green = black = total_bp = toc_count = 0
     for item in items:
-        z = toc_map.get(item["item_code"], {}).get("zone", "")
+        z_data = toc_map.get(item["item_code"], {})
+        z = z_data.get("zone", "")
+        if z:
+            total_bp += z_data.get("bp_pct", 0)
+            toc_count += 1
         if   z == "Red":    red    += 1
         elif z == "Black":  black  += 1
         elif z == "Yellow": yellow += 1
         elif z == "Green":  green  += 1
+    
+    avg_bp = round(total_bp / toc_count, 1) if toc_count > 0 else 0
     return {
         "red": red + black, "yellow": yellow, "green": green,
         "mrs": len(mrs), "wos": len(wos), "pos": len(pos),
         "black": black,
+        "avg_bp_pct": avg_bp,
     }
 
 

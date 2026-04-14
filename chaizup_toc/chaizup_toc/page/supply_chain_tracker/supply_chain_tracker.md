@@ -57,13 +57,19 @@ chaizup_toc/api/
 Each card shows:
 - **Doc number** (top-left) + **DocType abbreviation tag** (top-right)
 - **Description** — item name, supplier, operation, etc.
-- **Status badge** — draft/open/ordered/completed/etc.
+- **Status badge** — draft/open/ordered/completed/etc. (color-coded)
 - **Zone badge** — Red/Yellow/Green/Black (only when TOC data available)
 - **TOC Auto tag** — shown on MRs created by the 07:00 scheduler
+- **Contextual Data Rows**:
+  - **MR**: Type, Qty, Due Date
+  - **PO**: Qty, Total Amount, Expected Delivery
+  - **WO**: Produced/Planned Qty, End Date
+  - **JC**: Completed/For Qty, Operation Name
+  - **PR**: Received/Rejected Qty, Posting Date
 - **BP% progress bar** — for item/MR/WO/output nodes
 - **Production progress bar** — for Work Orders and Job Cards (produced/planned)
 - **On-Hand / Target chips** — for item and output nodes
-- **Date** — required date, start date, or transaction date
+- **Date** — required date, start date, or transaction date (formatted to user locale)
 
 ---
 
@@ -74,9 +80,7 @@ Highlights the card's full upstream (ancestors, green border) and downstream
 (descendants, amber border) chain. All unrelated cards are dimmed.
 A detail panel slides in from the right showing all document fields plus
 TOC buffer breakdown (F1, F2, F3, F4 formulas).
-
-### Click again / click background
-Clears the selection and closes the detail panel.
+**Improved visual feedback**: Selected cards have a subtle brand glow.
 
 ### Filter Bar
 - **Buffer Type** (All / FG / SFG / RM / PM): Re-fetches from API with
@@ -84,8 +88,7 @@ Clears the selection and closes the detail panel.
 - **Zone** (All / Red / Yellow / Green / Black): In-memory filter.
   Shows only item nodes matching the zone and all documents reachable from them.
   No API call — instant.
-
-### SVG Edges
+- **Summary Strip**: Shows counts for each zone, plus **Avg BP%** (average penetration across all TOC items). Clicking a zone card applies that filter.
 Cubic Bezier curves connect related documents (right-center of source card →
 left-center of target card). Edges:
 - **Grey (default)**: No selection active

@@ -708,10 +708,15 @@
   box-shadow: var(--sh-sm); flex-shrink: 0; position: relative; overflow: hidden;
   transition: transform var(--tb), box-shadow var(--tb), border-color var(--tf), opacity var(--tb);
 }
-.sct-card-v2:hover { transform: translateY(-2px); box-shadow: var(--sh-md); border-color: var(--stone-300); z-index: 10; }
+.sct-card-v2:hover { 
+  transform: translateY(-3px); 
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05); 
+  border-color: var(--brand-300); 
+  z-index: 10; 
+}
 .sct-card-v2.selected {
   border-color: var(--brand-500) !important;
-  box-shadow: 0 0 0 1px var(--brand-500), var(--sh-lg) !important;
+  box-shadow: 0 0 0 2px var(--brand-100), 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04) !important;
   z-index: 20; transform: translateY(-1px);
 }
 .sct-card-v2.ancestor   { border-color: #34d399 !important; box-shadow: 0 0 0 1px rgba(52,211,153,.5) !important; }
