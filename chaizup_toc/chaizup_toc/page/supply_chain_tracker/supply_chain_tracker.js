@@ -227,6 +227,10 @@
  * ── FILTER SYSTEM ────────────────────────────────────────────────────────────
  *   Server-side (triggers load() + API call):
  *     days_back   — look-back window (15/30/60/90 days)
+ *                   MEANING: Only documents (MR, RFQ, PO, WO, etc.) CREATED within
+ *                   the last N days are fetched. Older documents are excluded.
+ *                   Items themselves are always shown if TOC-enabled. Increase to 90
+ *                   to surface POs created more than a month ago.
  *     supplier    — supplier name filter (SQL LIKE)
  *
  *   Client-side (triggers render() only, no API call):
@@ -237,9 +241,16 @@
  *                   BFS MUST check both endpoints in nodeIdSet to prevent escape
  *     item_group  — exact item group name
  *     doctype     — "All"|"MR"|"PO"|"WO"|...
- *     overdue     — boolean: only items with is_overdue doc
+ *     overdue     — boolean: only items with overdue_count > 0
+ *     pending     — boolean: only items with pending_count > 0 (has open/in-progress docs)
  *     auto        — boolean: only TOC-generated MRs (recorded_by="By System")
  *     noaction    — boolean: items with NO open MR
+ *
+ *   Pipeline active-only (always-on behavior, no toggle):
+ *     In pipeline view, only item nodes with pending_count > 0 OR overdue_count > 0
+ *     are shown. Items where ALL documents are completed/closed are excluded.
+ *     BFS then expands from active item seeds to include their full document chains.
+ *     This is hardcoded behavior (not a user filter) to keep pipeline readable.
  *
  * ── KNOWN PAST BUGS (FIXED — do not reintroduce) ─────────────────────────────
  *   [HTML-BUG-1]  Unescaped single quotes in HTML broke entire page
@@ -250,6 +261,15 @@
  *   [JS-BUG-2]    _reachable() BFS adjacency used single-endpoint check
  *                 allowing BFS to traverse outside nodeIdSet → wrong zone filter
  *                 Fix: require BOTH endpoints in nodeIdSet
+ *   [JS-BUG-3]    Pipeline showed items with ALL docs completed — added noise
+ *                 Fix: active-only BFS seeds from items with pending_count > 0
+ *   [JS-BUG-4]    zone filter pills were toggle-exclusive; overdue/pending pills
+ *                 needed boolean toggle (activate/deactivate same pill)
+ *                 Fix: added .sct-tpill class; _bindFilterPanel handles separately
+ *   [CSS-BUG-1]   hide-stage (display:none) made empty pipeline columns vanish
+ *                 Fix: show as 52px rotated-label stub so pipeline structure is visible
+ *   [CSS-BUG-2]   height: calc(100vh - 115px) wrong on different Frappe layouts
+ *                 Fix: JS _setupFullHeight() measures getBCR().top at runtime
  *   [API-BUG-1]   get_filter_options() missing item_groups key → JS showed
  *                 warehouses in Item Group dropdown instead
  *                 Fix: added item_groups SQL query to pipeline_api.py
@@ -331,6 +351,7 @@ class SupplyChainTracker {
       supplier:   "",      // Supplier name (server-side filter -- triggers load())
       item_group: "",      // Item group (client-side filter)
       overdue:    false,   // Show only items/docs with at least one overdue document
+      pending:    false,   // Show only items with at least one open/in-progress document
       auto:       false,   // Show only TOC-auto-generated MRs (recorded_by = "By System")
       noaction:   false,   // Show only items with NO open Material Request
       days_back:  30,      // Look-back window in days (server-side)
@@ -369,12 +390,38 @@ class SupplyChainTracker {
   //  Wire up all static DOM events, load initial dropdown options, then fetch data.
   // ==============================================================================
   init() {
+    this._setupFullHeight();    // Make .sct-root fill the remaining viewport height
     this._bindCommandBar();     // Search, view-mode toggle, days select, scroll/resize
     this._bindFilterPanel();    // Filter pills, apply/reset buttons
     this._bindPanel();          // Detail panel close button
     this._bindSummaryClicks();  // Stat strip zone-filter shortcuts
     this._loadFilterOptions();  // Async: fetch supplier & warehouse lists for dropdowns
     this.load();                // Initial server fetch
+  }
+
+  // ==============================================================================
+  //  FULL-HEIGHT SETUP
+  //  Measures the actual top position of .sct-root relative to the viewport and
+  //  sets its height so it fills all remaining screen space below the Frappe navbar
+  //  and page title bar. Re-runs on window resize.
+  //
+  //  WHY JS INSTEAD OF CSS:
+  //    Frappe page body elements don't have explicit heights (they scroll freely).
+  //    CSS calc(100vh - Xpx) requires a hard-coded X that differs between Frappe
+  //    versions, screen sizes, and sidebar configurations.  Measuring getBCR().top
+  //    at runtime is accurate regardless of how many bars/breadcrumbs are rendered.
+  // ==============================================================================
+  _setupFullHeight() {
+    const update = () => {
+      const root = document.querySelector(".sct-root");
+      if (!root) return;
+      const top = Math.round(root.getBoundingClientRect().top);
+      const h   = window.innerHeight - top - 4;   // 4px = bottom breathing room
+      root.style.height = Math.max(300, h) + "px";
+    };
+    // Run after the first browser paint so getBCR().top is accurate
+    requestAnimationFrame(update);
+    window.addEventListener("resize", update);
   }
 
   // ==============================================================================
@@ -2516,6 +2563,7 @@ class SupplyChainTracker {
     const fZone      = this.f.zone;
     const fDoctype   = this.f.doctype;
     const fOverdue   = this.f.overdue;
+    const fPending   = this.f.pending;
     const fAuto      = this.f.auto;
     const fNoaction  = this.f.noaction;
     const fItemGroup = (this.f.item_group || "").toLowerCase().trim();
@@ -2532,7 +2580,9 @@ class SupplyChainTracker {
     // -- Filter tracks for the Tracker view ----------------------------------
     let visibleTracks = this.tracks.filter(track => {
       if (fZone !== "All" && track.zone !== fZone) return false;
-      if (fOverdue && track.overdue_count === 0) return false;
+      if (fOverdue && (track.overdue_count || 0) === 0) return false;
+      // pending: show only items that have at least one open/in-progress document
+      if (fPending && (track.pending_count || 0) === 0) return false;
       // item_group: client-side substring match against the track's item group
       if (fItemGroup && !(track.item_group || "").toLowerCase().includes(fItemGroup)) return false;
       // noaction: exclude items that have an open (non-closed) MR -- keep items with NO open MR
@@ -2572,6 +2622,39 @@ class SupplyChainTracker {
       }
       return true;
     });
+
+    // Pipeline active-only: In the pipeline view, only show item nodes that have at
+    // least one open or overdue document (pending_count > 0 or overdue_count > 0).
+    // Items where ALL documents are completed/closed/cancelled are hidden — they add
+    // visual noise without requiring any action.
+    // BFS then propagates from those active items to include all their connected docs.
+    //
+    // "Last N days" filter (days_back): Controls the creation-date window for ALL
+    // documents fetched from the server (MRs, POs, WOs, RFQs, etc.). Documents older
+    // than N days are NOT fetched — so if a PO was raised 45 days ago, it won't appear
+    // when days_back=30. Increase days_back to surface older open documents.
+    if (this.viewMode === "pipeline") {
+      // Use tracks data (from same API response) to identify items with pending actions
+      const activeCodes = new Set(
+        this.tracks
+          .filter(t => (t.pending_count || 0) > 0 || (t.overdue_count || 0) > 0)
+          .map(t => t.item_code)
+      );
+      // Seed from active item nodes only; BFS expands to their full document chains
+      const activeSeeds = new Set(
+        visibleNodes
+          .filter(n => n.stage === "items" && activeCodes.has(n.item_code || n.doc_name))
+          .map(n => n.id)
+      );
+      if (activeSeeds.size > 0) {
+        visibleNodes = [...this._reachable(activeSeeds, visibleNodes.map(n => n.id))]
+          .map(id => this.nodeMap[id]).filter(Boolean);
+      } else if (this.tracks.length > 0) {
+        // All items are completed — show nothing rather than showing all
+        visibleNodes = [];
+      }
+      // If tracks haven't loaded yet (empty), leave visibleNodes unchanged as fallback
+    }
 
     // Zone filter BFS propagation:
     // When zone is active, start with items matching the zone, then expand bidirectionally
@@ -2760,17 +2843,27 @@ class SupplyChainTracker {
    */
   _bindFilterPanel() {
     // Single delegated listener on the panel for all pill clicks.
-    // Pills apply immediately -- no Apply button needed.
+    // Two pill types:
+    //   • Zone pills (.sct-fpill, NOT .sct-tpill) — exclusive select (one zone at a time)
+    //   • Toggle pills (.sct-fpill.sct-tpill) — boolean on/off; click again to deactivate
     document.getElementById("sct-filter-panel")?.addEventListener("click", e => {
       const pill = e.target.closest(".sct-fpill");
       if (!pill) return;
-      const group = pill.dataset.filter;   // "zone" (only zone pills in new HTML)
-      const val   = pill.dataset.value;
-      // Deactivate all pills in this group, then activate the clicked one
-      document.querySelectorAll(`.sct-fpill[data-filter="${group}"]`).forEach(p => p.classList.remove("active"));
-      pill.classList.add("active");
-      if (group === "zone") this.f.zone = val;
-      // Apply immediately on click
+      const group = pill.dataset.filter;
+
+      if (pill.classList.contains("sct-tpill")) {
+        // Toggle pill: flip its own active state; no effect on siblings
+        const isNowActive = !pill.classList.contains("active");
+        pill.classList.toggle("active", isNowActive);
+        if (group === "overdue") this.f.overdue = isNowActive;
+        if (group === "pending") this.f.pending  = isNowActive;
+      } else {
+        // Zone pill: exclusive — deactivate all in group, activate clicked one
+        const val = pill.dataset.value;
+        document.querySelectorAll(`.sct-fpill[data-filter="${group}"]`).forEach(p => p.classList.remove("active"));
+        pill.classList.add("active");
+        if (group === "zone") this.f.zone = val;
+      }
       this.render();
     });
   }
@@ -3044,6 +3137,7 @@ class SupplyChainTracker {
     if (this.f.supplier)             count++;
     if (this.f.item_group)           count++;
     if (this.f.overdue)              count++;
+    if (this.f.pending)              count++;
     if (this.f.auto)                 count++;
     if (this.f.noaction)             count++;
     if (this.f.search)               count++;

@@ -204,7 +204,9 @@
   background: var(--bg-page);
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 115px);
+  /* Height filled dynamically by JS (_setupFullHeight). This is the CSS fallback. */
+  height: calc(100dvh - 110px);
+  min-height: 300px;
   overflow: hidden;
   position: relative;
   -webkit-font-smoothing: antialiased;
@@ -633,9 +635,32 @@
 .stage {
   width: 230px; display: flex; flex-direction: column;
   height: 100%; flex-shrink: 0; position: relative;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, width 0.2s;
 }
-.stage.hide-stage { display: none !important; }
+/* Empty stage: collapsed to a narrow stub — title rotated 90° so label is still readable.
+   display:none was removed because it made columns appear "missing" confusingly. */
+.stage.hide-stage {
+  width: 52px !important;
+  min-width: 52px !important;
+  opacity: 0.45;
+  pointer-events: none;
+  overflow: hidden;
+}
+.stage.hide-stage .st-body { display: none; }
+.stage.hide-stage .st-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-orientation: mixed;
+  border-bottom: none;
+  border-left: 2px solid;
+  padding: 10px 6px;
+  height: 100%;
+  justify-content: flex-end;
+  white-space: nowrap;
+  font-size: 10px;
+  overflow: hidden;
+}
+.stage.hide-stage .st-n { display: none; }
 
 .st-head { margin-bottom: 10px; flex-shrink: 0; }
 .st-label {

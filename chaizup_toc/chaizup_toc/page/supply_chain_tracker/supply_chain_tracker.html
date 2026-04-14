@@ -62,7 +62,8 @@
       <span class="sct-filter-badge" id="sct-filter-badge">0</span>
     </button>
 
-    <select class="sct-days-select" id="sct-days-back">
+    <select class="sct-days-select" id="sct-days-back"
+            title="Show documents (MRs, POs, WOs, RFQs, etc.) created within this many days. Older documents are hidden but items remain visible.">
       <option value="15">Last 15 Days</option>
       <option value="30" selected>Last 30 Days</option>
       <option value="60">Last 60 Days</option>
@@ -101,6 +102,20 @@
           <span class="sct-dd-arrow">▼</span>
         </div>
         <div class="sct-dd-list"></div>
+      </div>
+    </div>
+
+    <div class="sct-filter-group">
+      <div class="sct-filter-group-label">Action Filter</div>
+      <div class="sct-filter-pills">
+        <div class="sct-fpill sct-tpill" data-filter="overdue"
+             title="Show only items or documents that have missed their SLA deadline">
+          &#x26A0; Overdue
+        </div>
+        <div class="sct-fpill sct-tpill" data-filter="pending"
+             title="Show only items that have at least one open or in-progress document">
+          &#x23F3; Action Pending
+        </div>
       </div>
     </div>
   </div>
