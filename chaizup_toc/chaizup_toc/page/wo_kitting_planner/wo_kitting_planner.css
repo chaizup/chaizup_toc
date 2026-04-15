@@ -1699,6 +1699,18 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   border: 1px solid var(--stone-200);
 }
 
+/* Tool-call badge — shown below AI reply when functions were called ------- */
+/* Informs the user which live data the AI looked up to answer the question  */
+.wkp-ai-tools-badge {
+  margin-top: 8px;
+  padding: 4px 8px;
+  background: var(--stone-200, #e7e5e4);
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--stone-500, #78716c);
+  letter-spacing: 0.01em;
+}
+
 /* Typing indicator ------------------------------------------------------- */
 .wkp-ai-status {
   display: flex;

@@ -33,16 +33,33 @@
  * - Shortage modal with recommendation card + per-component table (dual UOM + received qty)
  * - WO detail modal with decision guidance based on customer order pressure
  * - Warehouse picker dialog before MR creation (frappe.prompt — fixes Required Field error)
- * - Dispatch Bottleneck tab: SO-independent — shows ALL items with pending customer orders
- * - Material Shortage tab: dual UOM display, per-WO breakdown, received_qty_po column
- * - AI Advisor: model selector with cost estimates; auto-insight uses HTML formatting
+ * - Dispatch Bottleneck tab: SO-independent — shows ALL items with pending customer orders;
+ *   customer column shows name + group + ERPNext ID; UOM shown on all qty columns
+ * - Material Shortage tab: dual UOM on all qty columns; per-WO breakdown; received_qty_po column;
+ *   per-row checkboxes + "Create MR for Selected" button with MOQ confirmation dialog
+ * - WO Kitting tab: "Already Produced" column (produced_qty) with dual UOM after "Qty to Produce"
+ * - AI Advisor: model selector with cost estimates; auto-insight uses HTML formatting;
+ *   context includes UOM fields (uom, secondary_uom, secondary_factor) for accurate quantity citation;
+ *   7 function-calling tools (server-side); AI cites which tools it used via wkp-ai-tools-badge
  *
  * UOM DISPLAY (all tabs)
  * ----------------------
- * Every quantity is shown in BOTH the stock UOM and the next higher UOM:
- *   "5000 g" + secondary line "5.00 kg"
- * Backend provides secondary_uom + secondary_factor via _get_secondary_uom().
- * Helper _dualQty() / _dualQtySR() renders the two lines.
+ * Every quantity is shown in BOTH the stock UOM and the next higher UOM.
+ * Three rendering patterns:
+ *   a) Stacked (table cells):
+ *      "5,000 g" on line 1, "5.00 kg" in a smaller sub-line below
+ *      Used by: _buildRow(), shortage report (_dualQtySR), shortage modal (_dualQty),
+ *               dispatch tab qty cells
+ *   b) Inline with parens (text/cards):
+ *      "5,000 g (5.00 kg)" all on one line
+ *      Used by: emergency cards (_dualInline), WO detail modal (_woDual),
+ *               decision card (_dcDual), shortage modal subtitle
+ *   c) Inline separator (compact headings):
+ *      "380 kg / 380,000 g" — short 2-unit label
+ *      Used by: shortage modal title suffix
+ *
+ * Backend provides secondary_uom + secondary_factor per item via _get_secondary_uom().
+ * secondary_qty (pre-computed for remaining_qty) is on WO rows from simulate_kitting().
  *
  * UI FLOW
  * -------
@@ -51,9 +68,14 @@
  *   simulate()  → API simulate_kitting → this.rows → _render()
  *   _render()   → _updateSummary() + _renderTable() + _renderShortageReport()
  *   Shortage chip → _showShortageModal(row) [reco card + component table]
- *   Order MR btn → frappe.prompt(warehouse) → _createMR(row) or _createConsolidatedMR()
+ *   Per-WO MR btn → frappe.prompt(warehouse) → _createMR(row)
+ *   Checkbox MR  → _bindShortageCheckboxes() → select items → _showMRConfirmModal()
+ *                  → get_items_min_order_qty → _openMRQtyDialog() (frappe.ui.Dialog)
+ *                  → user edits qtys + picks warehouse → create_purchase_mr_for_wo_shortages
+ *   Consolidated → frappe.prompt(warehouse) → _createConsolidatedMR(allNetGapItems)
  *   Dispatch tab → _fetchDispatchData() → get_dispatch_bottleneck() (no args) →
  *                  _renderDispatchBottleneck() [merges SO data + WO will_produce]
+ *                  SO detail shows: customer_name / customer_group / customer ID
  *   AI tab      → _initAIPanel() → get_available_ai_models() → populate #wkp-ai-model-select
  *              → simulate triggers compress_context_for_ai → get_ai_auto_insight(model)
  *              → user messages → chat_with_planner(model)
@@ -63,23 +85,48 @@
  *   chaizup_toc.api.wo_kitting_api.get_open_work_orders
  *   chaizup_toc.api.wo_kitting_api.simulate_kitting          → rows with secondary_uom fields
  *   chaizup_toc.api.wo_kitting_api.create_purchase_mr_for_wo_shortages  → requires warehouse
- *   chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck   → no args; all SO items
- *   chaizup_toc.api.wo_kitting_api.compress_context_for_ai   → enriched summary + supply chain
+ *   chaizup_toc.api.wo_kitting_api.get_items_min_order_qty   → MOQ per item for MR confirm dialog
+ *   chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck   → no args; all SO items;
+ *                                                               so_list includes customer_name/group
+ *   chaizup_toc.api.wo_kitting_api.compress_context_for_ai   → enriched summary + supply chain;
+ *                                                               critical_wos includes uom fields;
+ *                                                               dispatch_alerts includes uom+item_name
  *   chaizup_toc.api.wo_kitting_api.get_ai_auto_insight       → args: context_json, model
  *   chaizup_toc.api.wo_kitting_api.chat_with_planner         → args: message, session_id,
  *                                                               context_json, model
+ *                                                               → returns: {reply, session_id,
+ *                                                               is_html, tools_used}
  *   chaizup_toc.api.wo_kitting_api.get_available_ai_models   → model list with cost estimates
+ *
+ * AI FUNCTION TOOLS (server-side, in _AI_TOOLS in wo_kitting_api.py)
+ * -------------------------------------------------------------------
+ *   get_wo_shortage_detail(wo_name)   → shortage_items for a specific WO
+ *   get_dispatch_detail(item_code)    → SO breakdown for a specific FG item
+ *   get_top_shortage_items(rank_by)   → top materials by value or frequency
+ *   get_ready_to_produce()            → WOs with kit_status ok/kitted
+ *   get_blocked_work_orders()         → WOs with kit_status block/partial + top blocker
+ *   get_fulfillment_outlook()         → per-item demand vs production coverage
+ *   get_overdue_customer_orders()     → WOs with prev_month_so > 0
  *
  * KNOWN BUGS / GOTCHAS
  * --------------------
- * WKP-001: No single quotes in .html file (Frappe wraps HTML in JS single-quoted string)
+ * WKP-001: No single quotes in .html file (Frappe wraps HTML in JS single-quoted string).
+ *          Dynamically generated JS strings (frappe.ui.Dialog, innerHTML in methods) are fine.
  * WKP-002: After any file change: redis-cli -h redis-cache -p 6379 FLUSHALL
  * WKP-003: _applyHeight() uses getBoundingClientRect().top — run after DOM paint
  * WKP-004: simulate() must use this.woOrder to preserve Scenario B drag order
  * WKP-005: Tooltip div #wkp-tooltip is inside wkp-root, positioned via fixed CSS
  * WKP-006: AI context: NEVER send rows/dispatch to LLM — HTTP 400 (too many tokens)
  *          Use: context_for_ai = {k: v for k, v in context.items() if k not in ("rows","dispatch")}
- * WKP-010: Warehouse required on MR create — fixed via frappe.prompt in _createMR()
+ * WKP-007: _shortageAggList is set in _renderShortageReport() and consumed by checkbox handlers.
+ *          It is cleared to [] at the start of each render — stale references after re-render are safe.
+ * WKP-010: Warehouse required on MR create — fixed via frappe.prompt in _createMR();
+ *          _openMRQtyDialog uses frappe.ui.Dialog with a Link field (full autocomplete).
+ * WKP-011: _appendChatBubble now takes 4th arg toolsUsed[] — tools-badge shown below AI reply.
+ *          tools_used comes from chat_with_planner response (server tracks which fn names ran).
+ * WKP-012: WO Kitting tab column order must stay in sync between HTML <th> and JS _buildRow() <td>.
+ *          Current order: drag | seq | WO | item | qty_to_produce | produced_qty | status | cost |
+ *          prev_so | curr_so | total_so | erp_status | view
  */
 
 "use strict";
@@ -106,6 +153,13 @@ const WKP_POPOVERS = {
     body:  "How many units of this product still need to be manufactured to complete this Work Order.\n\nCalculated as: Planned Qty &minus; Already Produced Qty.\n\nData source: Work Order &rarr; Qty, Produced Qty fields.",
     example: "Work Order planned: 500 kg\nAlready produced: 120 kg\nStill to produce: 380 kg",
     action: "Focus on WOs with high remaining qty AND unshipped customer orders &mdash; those are your highest urgency.",
+  },
+
+  produced_qty: {
+    title: "Already Produced (Completed Qty)",
+    body:  "How many units of this product have already been manufactured and received into the Finished Goods warehouse for this Work Order.\n\nThis quantity is physically in stock and is available for dispatch to customers right now.\n\nData source: Work Order &rarr; Produced Qty field in ERPNext.\n\nNote: This is different from Qty to Produce (remaining). The two together add up to the total Work Order planned quantity.",
+    example: "Work Order planned: 500 kg\nAlready produced: 120 kg (in FG stock, ready to dispatch)\nStill to produce: 380 kg (production in progress or pending)",
+    action: "If a WO shows both a large Produced Qty AND a blocked material status, some stock is already available for partial dispatch &mdash; check with your dispatch team before waiting for the full order.",
   },
 
   shortage: {
@@ -711,10 +765,19 @@ class WOKittingPlanner {
     <div class="wkp-item-code">${_esc(row.item_code)}</div>
     ${row.item_group ? `<div class="wkp-item-group-tag">${_esc(row.item_group)}</div>` : ""}
   </td>
-  <td class="ta-r">
+  <td class="ta-r"
+      data-tip="Qty to Produce (Remaining)&#10;How many units still need to be manufactured.&#10;Formula: Work Order Planned Qty &minus; Already Produced Qty">
     <strong>${_fmt_num(row.remaining_qty, 0)}</strong>
     <div style="font-size:10px;color:var(--stone-400)">${_esc(row.uom || "")}</div>
     ${row.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(row.secondary_qty || (row.remaining_qty / (row.secondary_factor || 1)), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}
+  </td>
+  <td class="ta-r"
+      data-tip="Already Produced&#10;Qty already manufactured and received into Finished Goods warehouse.&#10;This stock is available for dispatch right now.&#10;Source: Work Order Produced Qty field in ERPNext.">
+    ${(row.produced_qty || 0) > 0
+      ? `<span style="color:var(--green-600,#16a34a);font-weight:600">${_fmt_num(row.produced_qty, 0)}</span>
+         <div style="font-size:10px;color:var(--stone-400)">${_esc(row.uom || "")}</div>
+         ${row.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num((row.produced_qty) / (row.secondary_factor || 1), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}`
+      : `<span style="color:var(--stone-400)">\u2014</span>`}
   </td>
   <td>
     <span class="wkp-short-chip ${chipClass}"
@@ -1014,6 +1077,9 @@ class WOKittingPlanner {
     const subEl   = document.getElementById("wkp-shortage-sub");
     if (!body) return;
 
+    // Store aggList on instance — needed by checkbox handlers and MR confirmation flow
+    this._shortageAggList = [];
+
     // Aggregate shortage items across all WOs
     const agg = {};  // item_code → aggregated data
     rows.forEach(row => {
@@ -1068,9 +1134,14 @@ class WOKittingPlanner {
         </div>
       </div>`;
       if (mrBtn) mrBtn.style.display = "none";
+      const selBtn = document.getElementById("wkp-shortage-mr-selected-btn");
+      if (selBtn) selBtn.style.display = "none";
       if (subEl) subEl.textContent = " \u2014 No shortages found";
       return;
     }
+
+    // Persist aggregated list — used by checkbox handlers when user clicks "Create MR for Selected"
+    this._shortageAggList = aggList;
 
     const totalItems = aggList.length;
     const totalVal   = aggList.reduce((s, a) => s + a.total_value, 0);
@@ -1091,57 +1162,68 @@ class WOKittingPlanner {
     const rowsHtml = aggList.map(a => {
       const netGap  = Math.max(0, a.total_shortage - a.po_qty - a.mr_qty);
       const netCls  = netGap > 0 ? "wkp-cell-red" : "wkp-cell-green";
-      const netTxt  = netGap > 0 ? _fmt_num(netGap, 2) : "\u2714 Covered";
-      const poTxt   = a.po_qty       > 0 ? _fmt_num(a.po_qty,       2) : "\u2014";
-      const rcvTxt  = a.received_qty > 0 ? _fmt_num(a.received_qty, 2) : "\u2014";
-      const mrTxt   = a.mr_qty       > 0 ? _fmt_num(a.mr_qty,       2) : "\u2014";
+      const netTxt  = netGap > 0 ? _dualQtySR(netGap, a.uom, a.secondary_factor, a.secondary_uom) : "\u2714 Covered";
+      // PO / Received / MR: show with secondary UOM when non-zero
+      const poTxt   = a.po_qty       > 0 ? _dualQtySR(a.po_qty,       a.uom, a.secondary_factor, a.secondary_uom) : "\u2014";
+      const rcvTxt  = a.received_qty > 0 ? _dualQtySR(a.received_qty, a.uom, a.secondary_factor, a.secondary_uom) : "\u2014";
+      const mrTxt   = a.mr_qty       > 0 ? _dualQtySR(a.mr_qty,       a.uom, a.secondary_factor, a.secondary_uom) : "\u2014";
       const wos     = a.wo_list.slice(0, 3).join(", ") + (a.wo_list.length > 3 ? " +" + (a.wo_list.length - 3) + " more" : "");
-      // Per-WO breakdown tooltip (why each WO has shortage)
+      // Per-WO breakdown tooltip (why each WO has shortage, with UOM)
       const woDetailTip = a.wo_detail.slice(0, 8)
-        .map(d => d.wo + ": " + _fmt_num(d.shortage, 1) + " " + (a.uom || ""))
+        .map(d => d.wo + ": " + _fmt_num(d.shortage, 1) + "\u00a0" + (a.uom || ""))
         .join("&#10;");
+      // Checkbox is pre-checked off; user ticks items they want in the MR
       return `
 <tr>
+  <td class="ta-c wkp-sr-chk-cell" data-tip="Tick to include this material in a selective Material Request. Use the checkbox column header to select all.">
+    <input type="checkbox" class="wkp-sr-chk" data-item="${_esc(a.item_code)}"
+           title="Select to include in Material Request">
+  </td>
   <td>
     <div class="wkp-item-name">${_esc(a.item_name)}</div>
     <div class="wkp-item-code">${_esc(a.item_code)}</div>
   </td>
-  <td class="ta-r" data-tip="Total qty needed across all WOs in this simulation">${_dualQtySR(a.total_required, a.uom, a.secondary_factor, a.secondary_uom)}</td>
-  <td class="ta-r" data-tip="Qty available in warehouse (physical stock)">${_dualQtySR(a.total_available, a.uom, a.secondary_factor, a.secondary_uom)}</td>
-  <td class="ta-r wkp-cell-red" data-tip="Total shortage across all WOs">${_dualQtySR(a.total_shortage, a.uom, a.secondary_factor, a.secondary_uom)}</td>
-  <td class="ta-r" data-tip="Qty on open Purchase Orders (ordered from supplier, not yet received)">${poTxt}</td>
-  <td class="ta-r" style="color:var(--ok-text)" data-tip="Qty already received from open POs (may be in receiving warehouse, not yet put-away)">${rcvTxt}</td>
-  <td class="ta-r" data-tip="Qty on open Material Requests (requested but not yet converted to PO)">${mrTxt}</td>
-  <td class="ta-r ${netCls}" data-tip="Net Gap = Shortage &minus; PO &minus; MR. If positive, NO procurement action taken &mdash; needs urgent attention.">${netTxt}</td>
-  <td class="ta-r" data-tip="Estimated purchase cost of total shortage quantity">\u20B9${_fmt_num(a.total_value, 0)}</td>
-  <td style="font-size:11px;color:var(--stone-400)" data-tip="Work Orders that need this material&#10;${woDetailTip}">${_esc(wos)}</td>
+  <td class="ta-r" data-tip="Total qty of this material needed across all Work Orders in this simulation. Hover the last column for per-WO breakdown.">${_dualQtySR(a.total_required, a.uom, a.secondary_factor, a.secondary_uom)}</td>
+  <td class="ta-r" data-tip="Physical stock in warehouse right now (Bin.actual_qty). This is what is available without placing any orders.">${_dualQtySR(a.total_available, a.uom, a.secondary_factor, a.secondary_uom)}</td>
+  <td class="ta-r wkp-cell-red" data-tip="Total Shortage = Required &minus; In Stock. This is how much more you need to source.">${_dualQtySR(a.total_shortage, a.uom, a.secondary_factor, a.secondary_uom)}</td>
+  <td class="ta-r" data-tip="Qty already on open Purchase Orders (ordered from supplier, not yet received). Reduces the effective gap.">${poTxt}</td>
+  <td class="ta-r" style="color:var(--ok-text)" data-tip="Qty already received from open Purchase Orders (may be in receiving bay, not yet put into warehouse stock).">${rcvTxt}</td>
+  <td class="ta-r" data-tip="Qty on open Material Requests (requested but not yet converted to a Purchase Order). Reduces the effective gap.">${mrTxt}</td>
+  <td class="ta-r ${netCls}" data-tip="Net Gap = Shortage &minus; PO Qty &minus; MR Qty.&#10;If POSITIVE (red): no procurement action taken yet &mdash; needs urgent attention.&#10;If Covered (green): existing POs/MRs already address the shortage.">${netTxt}</td>
+  <td class="ta-r" data-tip="Estimated purchase cost = Shortage Qty &times; Item valuation rate. Use this to prioritise by financial impact.">\u20B9${_fmt_num(a.total_value, 0)}</td>
+  <td style="font-size:11px;color:var(--stone-400)" data-tip="Work Orders (production orders) that need this material.&#10;Per-WO shortage:&#10;${woDetailTip}">${_esc(wos)}</td>
 </tr>`;
     }).join("");
 
     body.innerHTML = `
-<div class="wkp-shortage-hint" data-tip="Items with positive Net Gap have no purchase order or request raised yet. These are the most urgent.">
-  Items sorted by Net Gap (unmet shortage) &mdash; highest first.
-  <strong>Net Gap &gt; 0</strong> = no procurement action taken yet, needs immediate attention.
+<div class="wkp-shortage-hint" data-tip="Items with positive Net Gap have no Purchase Order or Material Request raised yet. These need immediate procurement action.">
+  <strong>How to use:</strong>
+  Items sorted by Net Gap (highest unmet shortage first).
+  Tick checkboxes to select specific items, then click <strong>Create MR for Selected</strong> to raise a targeted Material Request.
+  For bulk action, use <strong>Create Consolidated MR (All Items)</strong> to order everything with a positive Net Gap at once.
 </div>
 <table class="wkp-modal-table wkp-shortage-table">
   <thead>
     <tr>
-      <th>Material</th>
-      <th class="ta-r" data-tip="Total quantity needed across all open WOs. Hover the WO column for per-WO breakdown.">Total Required</th>
-      <th class="ta-r" data-tip="Physical warehouse stock (Bin)">In Stock</th>
-      <th class="ta-r" data-tip="Total shortage (Required &minus; In Stock)">Shortage</th>
-      <th class="ta-r" data-tip="Open PO quantity (ordered from supplier, not yet received)">PO Raised</th>
-      <th class="ta-r" data-tip="Qty already received from open POs (may still be in receiving bay)">Received</th>
-      <th class="ta-r" data-tip="Open MR quantity (not yet converted to Purchase Order)">MR Raised</th>
-      <th class="ta-r" data-tip="Net Gap = Shortage &minus; PO &minus; MR. Positive = needs action NOW.">Net Gap</th>
+      <th class="ta-c wkp-sr-chk-cell" data-tip="Select / deselect all materials. Use this to quickly select everything, then deselect items you do not want to order yet.">
+        <input type="checkbox" id="wkp-sr-select-all" title="Select all materials">
+      </th>
+      <th>Material (Raw Material / Component)</th>
+      <th class="ta-r" data-tip="Total quantity of this material needed across all open Work Orders. Primary unit + higher unit shown.">Total Required</th>
+      <th class="ta-r" data-tip="Physical warehouse stock available right now (Bin). This is the actual count in the store.">In Stock (Warehouse)</th>
+      <th class="ta-r" data-tip="Total Shortage = Required &minus; In Stock. This is how much you are short across all Work Orders.">Shortage</th>
+      <th class="ta-r" data-tip="Open Purchase Order qty (ordered from supplier, delivery pending). This will reduce the shortage when received.">PO Raised</th>
+      <th class="ta-r" data-tip="Qty already received from those open POs (may be in receiving bay, not yet put-away into warehouse stock).">Received</th>
+      <th class="ta-r" data-tip="Open Material Request qty (requested from procurement, not yet converted to a Purchase Order).">MR Raised</th>
+      <th class="ta-r" data-tip="Net Gap = Shortage &minus; PO Raised &minus; MR Raised.&#10;Positive (red) = NO purchase action taken yet &mdash; order immediately.&#10;Covered (green) = existing PO or MR will address the shortage.">Net Gap</th>
       <th class="ta-r">Est. Value (\u20B9)</th>
-      <th data-tip="Work Orders affected by this shortage. Hover for per-WO qty.">Affects WOs</th>
+      <th data-tip="Work Orders (production orders) that need this material. Hover for per-WO qty breakdown.">Affects WOs</th>
     </tr>
   </thead>
   <tbody>${rowsHtml}</tbody>
 </table>`;
 
-    // Show "Create Consolidated MR" button for items with net gap > 0
+    // Show "Create Consolidated MR (All Items)" button for items with net gap > 0
     const hasNetGap = aggList.some(a => (a.total_shortage - a.po_qty - a.mr_qty) > 0);
     if (mrBtn) {
       mrBtn.style.display = hasNetGap ? "" : "none";
@@ -1151,6 +1233,263 @@ class WOKittingPlanner {
         );
       }
     }
+
+    // Activate checkbox selection system and "Create MR for Selected" button
+    this._bindShortageCheckboxes();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  SHORTAGE REPORT — CHECKBOX SELECTION SYSTEM
+  //
+  //  Lets users hand-pick materials from the shortage table, then create
+  //  a targeted Material Request with custom quantities and MOQ validation.
+  //
+  //  Flow:
+  //    1. User ticks rows in the shortage table (or ticks Select All)
+  //    2. "Create MR for Selected" button count updates in real-time
+  //    3. User clicks button → _showMRConfirmModal() is called
+  //    4. API get_items_min_order_qty returns MOQ per item
+  //    5. frappe.ui.Dialog shows: material table (editable qty), warehouse picker
+  //    6. User reviews/adjusts quantities, selects warehouse, confirms
+  //    7. create_purchase_mr_for_wo_shortages creates the MR
+  //
+  //  UX design notes:
+  //    - Net Shortage is used as default qty (not total_shortage, so already-PO'd
+  //      and MR'd quantities are not double-ordered)
+  //    - If MOQ > net shortage, suggested qty = MOQ (avoids rejection by supplier)
+  //    - Qty inputs are editable — user can override before confirming
+  //    - The dialog uses frappe.ui.Dialog so the Warehouse Link field has full
+  //      ERPNext autocomplete (same as native ERP forms)
+  // ─────────────────────────────────────────────────────────────────────
+
+  _bindShortageCheckboxes() {
+    // Show "Create MR for Selected" button now that we have rows
+    const selBtn = document.getElementById("wkp-shortage-mr-selected-btn");
+    if (selBtn) {
+      selBtn.style.display = "";
+      selBtn.disabled      = true;   // starts disabled until at least one row is checked
+      // Re-bind click handler (clean slate on each render)
+      selBtn.onclick = () => {
+        const selected = this._getSelectedShortageItems();
+        if (!selected.length) {
+          frappe.show_alert({
+            message: "No materials selected. Tick the checkboxes in the table to select items.",
+            indicator: "orange",
+          });
+          return;
+        }
+        this._showMRConfirmModal(selected);
+      };
+    }
+
+    // Select-All checkbox in the header row
+    const selectAll = document.getElementById("wkp-sr-select-all");
+    if (selectAll) {
+      selectAll.addEventListener("change", () => {
+        const isChecked = selectAll.checked;
+        document.querySelectorAll(".wkp-sr-chk").forEach(cb => { cb.checked = isChecked; });
+        this._updateSelectedMRBtn();
+      });
+    }
+
+    // Individual row checkboxes
+    document.querySelectorAll(".wkp-sr-chk").forEach(cb => {
+      cb.addEventListener("change", () => {
+        // Sync select-all state: checked if ALL rows checked
+        if (selectAll) {
+          const total   = document.querySelectorAll(".wkp-sr-chk").length;
+          const checked = document.querySelectorAll(".wkp-sr-chk:checked").length;
+          selectAll.indeterminate = checked > 0 && checked < total;
+          selectAll.checked       = checked === total;
+        }
+        this._updateSelectedMRBtn();
+      });
+    });
+  }
+
+  _updateSelectedMRBtn() {
+    const btn   = document.getElementById("wkp-shortage-mr-selected-btn");
+    const count = document.querySelectorAll(".wkp-sr-chk:checked").length;
+    if (!btn) return;
+    btn.disabled     = count === 0;
+    btn.textContent  = count > 0
+      ? "\u2713 Create MR for " + count + " Selected Item" + (count !== 1 ? "s" : "")
+      : "\u2713 Create MR for Selected";
+  }
+
+  _getSelectedShortageItems() {
+    const selectedCodes = new Set();
+    document.querySelectorAll(".wkp-sr-chk:checked").forEach(cb => selectedCodes.add(cb.dataset.item));
+    return (this._shortageAggList || []).filter(a => selectedCodes.has(a.item_code));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  MR CONFIRMATION MODAL (for selected shortage items)
+  //
+  //  Step 1: fetch MOQ from server (get_items_min_order_qty)
+  //  Step 2: open frappe.ui.Dialog with:
+  //    - HTML table: Material | Net Shortage | MOQ | Your Qty (editable)
+  //    - Warehouse Link field (full ERPNext autocomplete)
+  //    - "Create Material Request" primary button
+  //
+  //  Suggested qty logic:
+  //    net_shortage = total_shortage - po_qty - mr_qty  (unmet portion only)
+  //    suggested    = max(net_shortage, MOQ)
+  //    If MOQ not set or 0 → suggested = net_shortage
+  //
+  //  The user can edit any qty before confirming.
+  //  Items with qty = 0 are silently skipped.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _showMRConfirmModal(selectedItems) {
+    const itemCodes = selectedItems.map(a => a.item_code);
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_items_min_order_qty",
+      args: { item_codes_json: JSON.stringify(itemCodes) },
+      callback: r => {
+        const moqMap = (r && r.message) || {};
+        this._openMRQtyDialog(selectedItems, moqMap);
+      },
+      error: () => {
+        // If MOQ fetch fails, open dialog anyway with 0 MOQ (still useful)
+        this._openMRQtyDialog(selectedItems, {});
+      },
+    });
+  }
+
+  _openMRQtyDialog(items, moqMap) {
+    // ── Build the items table HTML for the dialog ──────────────────────────
+    // WKP-001 note: this is dynamically generated JS string, NOT the HTML
+    // template file. Single quotes are safe here.
+    const tableRows = items.map(a => {
+      const moq        = flt(moqMap[a.item_code] || 0);
+      const netShort   = Math.max(0, a.total_shortage - a.po_qty - a.mr_qty);
+      const suggestedQty = moq > 0 && moq > netShort ? moq : netShort;
+      const moqNote    = moq > 0
+        ? `<span style="font-size:10px;color:var(--stone-500)"
+                 title="Minimum Order Qty set on Item master. Order at least this much per purchase."
+           >${_fmt_num(moq, 2)}\u00a0${_esc(a.uom || "")}</span>`
+        : `<span style="font-size:10px;color:var(--stone-400)">Not set</span>`;
+      const secNote = (a.secondary_uom && a.secondary_factor > 1)
+        ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(netShort / a.secondary_factor, 2)}\u00a0${_esc(a.secondary_uom)}</div>`
+        : "";
+      return `
+<tr style="border-bottom:1px solid var(--border-light)">
+  <td style="padding:8px 6px">
+    <div style="font-weight:600">${_esc(a.item_name)}</div>
+    <div style="font-size:10px;color:var(--stone-400)">${_esc(a.item_code)}</div>
+  </td>
+  <td style="padding:8px 6px;text-align:right;vertical-align:top">
+    <div>${_fmt_num(netShort, 2)}\u00a0${_esc(a.uom || "")}</div>${secNote}
+  </td>
+  <td style="padding:8px 6px;text-align:right;vertical-align:top">${moqNote}</td>
+  <td style="padding:8px 6px;text-align:right;vertical-align:top">
+    <input type="number" class="wkp-mr-qty-input"
+           data-item="${_esc(a.item_code)}"
+           data-uom="${_esc(a.uom || "")}"
+           value="${suggestedQty}"
+           min="0" step="0.001"
+           style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;text-align:right;font-size:13px"
+           title="Edit order quantity. Suggested = max(Net Shortage, Min Order Qty).">
+  </td>
+  <td style="padding:8px 6px;color:var(--stone-500);font-size:12px">${_esc(a.uom || "")}</td>
+</tr>`;
+    }).join("");
+
+    const tableHtml = `
+<div style="margin-bottom:10px;font-size:12px;color:var(--stone-600);line-height:1.6">
+  Review the order quantities below. Each quantity is pre-filled with
+  <strong>Net Shortage</strong> (what is still unordered) or the supplier
+  <strong>Minimum Order Qty (MOQ)</strong>, whichever is larger.
+  <br>You can edit any quantity. Items with 0 qty will be skipped.
+</div>
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+  <thead>
+    <tr style="background:var(--bg-light,#f8f8f8);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.4px">
+      <th style="padding:6px;text-align:left">Material</th>
+      <th style="padding:6px;text-align:right"
+          title="Net Shortage = Total Shortage minus any PO or MR already raised. This is the unmet portion.">Net Shortage</th>
+      <th style="padding:6px;text-align:right"
+          title="Minimum Order Qty from Item master. Supplier may refuse orders below this qty.">Min Order Qty</th>
+      <th style="padding:6px;text-align:right"
+          title="Your actual order qty. Edit as needed.">Your Order Qty</th>
+      <th style="padding:6px">Unit</th>
+    </tr>
+  </thead>
+  <tbody>${tableRows}</tbody>
+</table>
+<div style="margin-top:8px;font-size:11px;color:var(--stone-400)">
+  <strong>ERPNext terms:</strong>
+  Net Shortage = Shortage &minus; PO Raised &minus; MR Raised &nbsp;&bull;&nbsp;
+  MOQ = Minimum Order Quantity (Item master field) &nbsp;&bull;&nbsp;
+  MR = Material Request (sent to procurement to raise a Purchase Order)
+</div>`;
+
+    // ── Build frappe.ui.Dialog ─────────────────────────────────────────────
+    // Uses Frappe's native Dialog so Warehouse has full Link-field autocomplete.
+    // The HTML field renders the items table; Warehouse is a standard Link field.
+    const self = this;
+    const d    = new frappe.ui.Dialog({
+      title           : "Confirm Material Request — " + items.length + " Item" + (items.length !== 1 ? "s" : ""),
+      fields          : [
+        {
+          fieldtype   : "HTML",
+          fieldname   : "items_table",
+          options     : tableHtml,
+        },
+        {
+          fieldtype   : "Link",
+          fieldname   : "warehouse",
+          label       : "Target Warehouse (where materials will be received)",
+          options     : "Warehouse",
+          reqd        : 1,
+          description : "Select the warehouse where purchased materials should be delivered. "
+                      + "This becomes the warehouse on every Material Request line.",
+        },
+      ],
+      primary_action_label: "Create Material Request",
+      primary_action  : function(values) {
+        if (!values.warehouse) {
+          frappe.show_alert({ message: "Please select a Target Warehouse before creating the MR.", indicator: "red" });
+          return;
+        }
+        // Collect edited quantities from the HTML table inputs
+        const payload = [];
+        document.querySelectorAll(".wkp-mr-qty-input").forEach(inp => {
+          const qty = parseFloat(inp.value) || 0;
+          if (qty > 0) {
+            payload.push({
+              item_code   : inp.dataset.item,
+              shortage_qty: qty,
+              uom         : inp.dataset.uom || "",
+              warehouse   : values.warehouse,
+            });
+          }
+        });
+        if (!payload.length) {
+          frappe.show_alert({ message: "All quantities are 0. Enter a quantity for at least one item.", indicator: "orange" });
+          return;
+        }
+        d.hide();
+        frappe.call({
+          method: "chaizup_toc.api.wo_kitting_api.create_purchase_mr_for_wo_shortages",
+          args: { items_json: JSON.stringify(payload), company: self._company },
+          freeze: true,
+          freeze_message: "Creating Material Request for " + payload.length + " item" + (payload.length !== 1 ? "s" : "") + "\u2026",
+          callback: r => {
+            if (r.exc) return;
+            const mr = r.message && r.message.mr;
+            frappe.show_alert({
+              message: "Purchase MR <b><a href=\"/app/material-request/" + mr
+                       + "\" target=\"_blank\">" + mr + "</a></b> created for "
+                       + payload.length + " item" + (payload.length !== 1 ? "s" : "") + ".",
+              indicator: "green",
+            }, 12);
+          },
+        });
+      },
+    });
+    d.show();
   }
 
   _createConsolidatedMR(items) {
@@ -1226,6 +1565,17 @@ class WOKittingPlanner {
       return;
     }
 
+    // ── Inline dual-UOM helper (used in emergency cards, WO modal) ────────
+    // Shows "5000 g (5.00 kg)" when secondary UOM exists.
+    // For emergency panel we keep numbers compact: show secondary in parens.
+    const _dualInline = (qty, uom, secFactor, secUom) => {
+      const base = _fmt_num(qty, 0) + "\u00a0" + _esc(uom || "");
+      if (secUom && secFactor > 1 && qty > 0) {
+        return base + ` <span style="color:var(--stone-500);font-size:10px">(${_fmt_num(qty / secFactor, 2)}\u00a0${_esc(secUom)})</span>`;
+      }
+      return base;
+    };
+
     const cardsHtml = urgent.map((row, i) => {
       const isOverdue = (row.prev_month_so || 0) > 0;
       const badgeCls  = isOverdue ? "wkp-emerg-badge-red" : "wkp-emerg-badge-amber";
@@ -1241,18 +1591,23 @@ class WOKittingPlanner {
         kitted  : "\u2713 Kitted",
       }[row.kit_status] || row.kit_status;
 
+      // secondary UOM shorthand for this row
+      const sf  = row.secondary_factor || 1;
+      const sUom = row.secondary_uom || "";
+
       const overdueLine = (row.prev_month_so || 0) > 0
         ? `<div class="wkp-emerg-detail wkp-emerg-overdue">
-             \u26A0 Overdue (last month): ${_fmt_num(row.prev_month_so, 0)} ${_esc(row.uom || "")}
+             \u26A0 Overdue (last month): ${_dualInline(row.prev_month_so, row.uom || "", sf, sUom)}
            </div>` : "";
       const dueLine = (row.curr_month_so || 0) > 0
         ? `<div class="wkp-emerg-detail">
-             Due this month: ${_fmt_num(row.curr_month_so, 0)} ${_esc(row.uom || "")}
+             Due this month: ${_dualInline(row.curr_month_so, row.uom || "", sf, sUom)}
            </div>` : "";
       const coverCheck = row.total_pending_so > row.remaining_qty
         ? `<div class="wkp-emerg-alert">
-             Customer demand (${_fmt_num(row.total_pending_so, 0)}) exceeds remaining production
-             (${_fmt_num(row.remaining_qty, 0)}). Consider creating an additional Work Order.
+             Customer demand (${_dualInline(row.total_pending_so, row.uom || "", sf, sUom)}) exceeds
+             remaining production (${_dualInline(row.remaining_qty, row.uom || "", sf, sUom)}).
+             Consider creating an additional Work Order.
            </div>` : "";
 
       return `
@@ -1271,10 +1626,10 @@ class WOKittingPlanner {
     ${coverCheck}
   </div>
   <div class="wkp-emerg-orders">
-    <div class="wkp-emerg-so-label">Customer Orders</div>
+    <div class="wkp-emerg-so-label">Customer Orders (Unshipped Sales Orders)</div>
     ${overdueLine}
     ${dueLine}
-    <div class="wkp-emerg-total">Total: ${_fmt_num(row.total_pending_so, 0)} ${_esc(row.uom || "")}</div>
+    <div class="wkp-emerg-total">Total: ${_dualInline(row.total_pending_so, row.uom || "", sf, sUom)}</div>
   </div>
   <div class="wkp-emerg-prod">
     <div class="wkp-emerg-so-label">Production Status</div>
@@ -1282,7 +1637,7 @@ class WOKittingPlanner {
       <span class="wkp-status-badge ${_status_badge_class(row.status)}"
             title="${_esc(row.status || "")}">${_esc(row.status || "")}</span>
     </div>
-    <div>Remaining: ${_fmt_num(row.remaining_qty, 0)} ${_esc(row.uom || "")}</div>
+    <div>Remaining to produce: ${_dualInline(row.remaining_qty, row.uom || "", sf, sUom)}</div>
     <div style="margin-top:4px">
       <span class="wkp-short-chip ${chipClass}" style="font-size:11px">${chipText}</span>
     </div>
@@ -1334,9 +1689,13 @@ class WOKittingPlanner {
   _showShortageModal(row) {
     document.getElementById("wkp-modal-title").textContent =
       "Material Shortage Detail";
+    // Show WO, item name, remaining qty with both UOMs — e.g. "380 kg (380,000 g)"
+    const _modalSecTxt = (row.secondary_uom && row.secondary_factor > 1)
+      ? " / " + _fmt_num(row.remaining_qty / row.secondary_factor, 2) + "\u00a0" + row.secondary_uom
+      : "";
     document.getElementById("wkp-modal-sub").textContent =
       row.wo + " \u2014 " + (row.item_name || row.item_code) +
-      " (" + _fmt_num(row.remaining_qty, 0) + " " + (row.uom || "") + " remaining)";
+      " (" + _fmt_num(row.remaining_qty, 0) + "\u00a0" + (row.uom || "") + _modalSecTxt + " remaining to produce)";
 
     // ── Recommendation card ─────────────────────────────────────────
     document.getElementById("wkp-modal-reco").innerHTML = this._buildRecoCard(row);
@@ -1539,15 +1898,27 @@ class WOKittingPlanner {
     const isOverdue   = (row.prev_month_so || 0) > 0;
     const estCost     = row.est_cost ? "\u20B9" + _fmt_num(row.est_cost, 0) : "\u2014";
 
+    // ── Inline dual-UOM helper for WO modal info rows ───────────────────────
+    // Shows "380 kg (380,000 g)" when secondary UOM is set; plain "380 kg" otherwise.
+    const sf   = row.secondary_factor || 1;
+    const sUom = row.secondary_uom || "";
+    const _woDual = (qty, decimals) => {
+      const base = _fmt_num(qty, decimals) + "\u00a0" + _esc(row.uom || "");
+      if (sUom && sf > 1 && qty > 0) {
+        return base + ` <span style="color:var(--stone-500);font-size:10px">(${_fmt_num(qty / sf, 2)}\u00a0${_esc(sUom)})</span>`;
+      }
+      return base;
+    };
+
     // ── Decision card (top of modal) ────────────────────────────────
     const decisionHtml = this._buildDecisionCard(row);
 
     // ── WO info grid ────────────────────────────────────────────────
     const pressureHtml = totalSO > 0
       ? `<span class="wkp-pressure ${isOverdue ? "wkp-pressure-high" : "wkp-pressure-med"}">
-           ${isOverdue ? "\u26A0 Overdue: " : "Due: "}${_fmt_num(totalSO, 0)} ${_esc(row.uom || "")}
+           ${isOverdue ? "\u26A0 Overdue: " : "Due: "}${_woDual(totalSO, 0)}
          </span>`
-      : `<span class="wkp-pressure wkp-pressure-none">No pending orders</span>`;
+      : `<span class="wkp-pressure wkp-pressure-none">No pending customer orders</span>`;
 
     const html = `
 ${decisionHtml}
@@ -1557,23 +1928,27 @@ ${decisionHtml}
   <div class="wkp-wo-section">
     <div class="wkp-wo-section-title">Work Order Info</div>
     <div class="wkp-wo-info-row">
-      <span>Order No.</span>
+      <span>Work Order No.</span>
       <span><a href="/app/work-order/${_esc(row.wo)}" target="_blank">${_esc(row.wo)}</a></span>
     </div>
     <div class="wkp-wo-info-row">
-      <span>Product</span>
+      <span>Product (Item)</span>
       <span>${_esc(row.item_name || row.item_code)}</span>
     </div>
     <div class="wkp-wo-info-row">
-      <span>Bill of Materials</span>
+      <span>Item Code</span>
+      <span class="mono">${_esc(row.item_code || "")}</span>
+    </div>
+    <div class="wkp-wo-info-row">
+      <span>Bill of Materials (BOM)</span>
       <span class="mono">${_esc(row.bom_no || "\u2014")}</span>
     </div>
     <div class="wkp-wo-info-row">
-      <span>Stage</span>
+      <span>ERP Stage</span>
       <span>${_esc(row.status || "\u2014")}</span>
     </div>
     <div class="wkp-wo-info-row">
-      <span>Planned Start</span>
+      <span>Planned Start Date</span>
       <span>${_esc(row.planned_start_date || "\u2014")}</span>
     </div>
   </div>
@@ -1581,16 +1956,20 @@ ${decisionHtml}
   <div class="wkp-wo-section">
     <div class="wkp-wo-section-title">Production Quantities</div>
     <div class="wkp-wo-info-row">
-      <span>Planned</span>
-      <span>${_fmt_num(row.planned_qty, 0)} ${_esc(row.uom || "")}</span>
+      <span>Planned Qty</span>
+      <span>${_woDual(row.planned_qty, 0)}</span>
     </div>
     <div class="wkp-wo-info-row">
       <span>Already Produced</span>
-      <span>${_fmt_num(row.produced_qty || 0, 0)}</span>
+      <span>${_woDual(row.produced_qty || 0, 0)}</span>
     </div>
     <div class="wkp-wo-info-row">
       <span><strong>Still to Produce</strong></span>
-      <span><strong>${_fmt_num(row.remaining_qty, 0)} ${_esc(row.uom || "")}</strong></span>
+      <span><strong>${_woDual(row.remaining_qty, 0)}</strong></span>
+    </div>
+    <div class="wkp-wo-info-row">
+      <span>Stock Unit (UOM)</span>
+      <span>${_esc(row.uom || "")}${sUom ? " \u2192 also shown in " + _esc(sUom) : ""}</span>
     </div>
     <div class="wkp-wo-info-row">
       <span>Est. Production Cost</span>
@@ -1604,25 +1983,25 @@ ${decisionHtml}
   </div>
 
   <div class="wkp-wo-section">
-    <div class="wkp-wo-section-title">Customer Order Pressure</div>
+    <div class="wkp-wo-section-title">Customer Order Pressure (Sales Orders)</div>
     <div style="margin-bottom:10px">${pressureHtml}</div>
     <div class="wkp-wo-info-row">
-      <span>Last Month (Overdue)</span>
+      <span>Last Month Unshipped (Overdue)</span>
       <span ${(row.prev_month_so || 0) > 0 ? 'style="color:var(--err-text);font-weight:700"' : ""}>
-        ${(row.prev_month_so || 0) > 0 ? _fmt_num(row.prev_month_so, 0) + " " + _esc(row.uom || "") : "\u2014 No overdue orders"}
+        ${(row.prev_month_so || 0) > 0 ? _woDual(row.prev_month_so, 0) : "\u2014 No overdue orders"}
       </span>
     </div>
     <div class="wkp-wo-info-row">
-      <span>This Month</span>
-      <span>${(row.curr_month_so || 0) > 0 ? _fmt_num(row.curr_month_so, 0) + " " + _esc(row.uom || "") : "\u2014"}</span>
+      <span>This Month Orders</span>
+      <span>${(row.curr_month_so || 0) > 0 ? _woDual(row.curr_month_so, 0) : "\u2014"}</span>
     </div>
     <div class="wkp-wo-info-row">
-      <span><strong>Total Unshipped</strong></span>
-      <span><strong>${totalSO > 0 ? _fmt_num(totalSO, 0) + " " + _esc(row.uom || "") : "\u2014"}</strong></span>
+      <span><strong>Total Unshipped Orders</strong></span>
+      <span><strong>${totalSO > 0 ? _woDual(totalSO, 0) : "\u2014"}</strong></span>
     </div>
     ${totalSO > row.remaining_qty ? `
     <div style="margin-top:8px;font-size:11px;color:var(--err-text);font-weight:600">
-      \u26A0 Customer demand (${_fmt_num(totalSO, 0)}) exceeds remaining production (${_fmt_num(row.remaining_qty, 0)}). Additional Work Orders may be needed.
+      \u26A0 Customer demand (${_woDual(totalSO, 0)}) exceeds remaining production (${_woDual(row.remaining_qty, 0)}). Additional Work Orders may be needed.
     </div>` : ""}
   </div>
 
@@ -1668,9 +2047,19 @@ ${decisionHtml}
     const totalSO = row.total_pending_so || 0;
     const pressure = totalSO > 0 ? (row.prev_month_so > 0 ? "high" : "medium") : "none";
 
+    // Inline dual-UOM helper for decision card (same pattern as WO modal)
+    const sf   = row.secondary_factor || 1;
+    const sUom = row.secondary_uom || "";
+    const _dcDual = (qty) => {
+      const base = _fmt_num(qty, 0) + "\u00a0" + _esc(row.uom || "");
+      if (sUom && sf > 1 && qty > 0)
+        return base + ` (${_fmt_num(qty / sf, 2)}\u00a0${_esc(sUom)})`;
+      return base;
+    };
+
     const pressureLine = {
-      high  : `\u26A0 <strong>URGENT</strong> \u2014 There are overdue customer orders (${_fmt_num(row.prev_month_so || 0, 0)} ${_esc(row.uom || "")} past due). Expedite this production.`,
-      medium: `Customer orders of ${_fmt_num(totalSO, 0)} ${_esc(row.uom || "")} are due this month.`,
+      high  : `\u26A0 <strong>URGENT</strong> \u2014 There are overdue customer orders (${_dcDual(row.prev_month_so || 0)} past due). Expedite this production.`,
+      medium: `Customer orders of ${_dcDual(totalSO)} are due this month.`,
       none  : "No pending customer orders for this product this month.",
     }[pressure];
 
@@ -1907,15 +2296,25 @@ ${decisionHtml}
     });
 
     // ── Quick-question chips ───────────────────────────────────────────────
+    // Each question is phrased to trigger a specific AI function call:
+    //   "ready to start"   → get_ready_to_produce
+    //   "blocked"          → get_blocked_work_orders
+    //   "overdue"          → get_overdue_customer_orders
+    //   "fulfil all"       → get_fulfillment_outlook
+    //   "buy"/"shortage"   → get_top_shortage_items
+    //   specific WO name   → get_wo_shortage_detail
+    //   item/dispatch      → get_dispatch_detail
     const quickBtns = document.getElementById("wkp-ai-quick-btns");
     if (quickBtns) {
       const questions = [
-        "Which Work Orders should I release today?",
-        "What materials do I need to buy urgently?",
+        "Which Work Orders are ready to start production right now?",
+        "List all blocked Work Orders and what is stopping them",
+        "Which customers have overdue orders that are already late?",
         "Can we fulfil all customer orders this month?",
-        "Which items will miss dispatch deadlines?",
-        "Summarise the top 3 production risks",
-        "Which customers have overdue orders?",
+        "What are the top 5 materials I need to buy most urgently?",
+        "What is the most expensive material shortage I should fix first?",
+        "Which items will miss their dispatch deadlines?",
+        "Summarise the top 3 production risks and recommended actions",
       ];
       quickBtns.innerHTML = questions.map(q =>
         `<button class="wkp-ai-quick-btn" data-q="${_esc(q)}">${_esc(q)}</button>`
@@ -2051,21 +2450,22 @@ ${decisionHtml}
       },
       callback: r => {
         this._setAITyping(false);
-        const data = r.message || {};
-        const reply = data.reply || "<span class=\"wkp-ai-warn\">No response from AI.</span>";
-        this._appendChatBubble("ai", reply, !!(data.is_html));
+        const data      = r.message || {};
+        const reply     = data.reply || "<span class=\"wkp-ai-warn\">No response from AI.</span>";
+        const toolsUsed = data.tools_used || [];
+        this._appendChatBubble("ai", reply, !!(data.is_html), toolsUsed);
       },
       error: () => {
         this._setAITyping(false);
         this._appendChatBubble("ai",
           "<span class=\"wkp-ai-err\">Request failed. Check server logs or API key.</span>",
-          true
+          true, []
         );
       },
     });
   }
 
-  _appendChatBubble(role, content, isHtml) {
+  _appendChatBubble(role, content, isHtml, toolsUsed) {
     const msgs = document.getElementById("wkp-ai-messages");
     if (!msgs) return;
 
@@ -2073,11 +2473,27 @@ ${decisionHtml}
     div.className = role === "user" ? "wkp-msg-user" : "wkp-msg-ai";
 
     if (role === "ai") {
-      // AI avatar + bubble
+      // Build tool-call badge — shows which data the AI looked up
+      const TOOL_LABELS = {
+        "get_wo_shortage_detail"      : "\uD83D\uDD0D WO shortage",
+        "get_dispatch_detail"         : "\uD83D\uDE9A Dispatch",
+        "get_top_shortage_items"      : "\uD83D\uDCCB Top shortages",
+        "get_ready_to_produce"        : "\u2705 Ready WOs",
+        "get_blocked_work_orders"     : "\u26D4 Blocked WOs",
+        "get_fulfillment_outlook"     : "\uD83D\uDCC5 Fulfilment",
+        "get_overdue_customer_orders" : "\u26A0 Overdue orders",
+      };
+      let toolsBadge = "";
+      if (toolsUsed && toolsUsed.length) {
+        const labels = toolsUsed.map(t => TOOL_LABELS[t] || t).join(" \u00b7 ");
+        toolsBadge = `<div class="wkp-ai-tools-badge">\uD83D\uDD27 Checked live data: ${_esc(labels)}</div>`;
+      }
+
       div.innerHTML = `
         <div class="wkp-msg-avatar">&#x1F916;</div>
         <div class="wkp-msg-bubble wkp-msg-bubble-ai">
           ${isHtml ? _sanitizeAIHtml(content) : _escHtml(content)}
+          ${toolsBadge}
         </div>`;
     } else {
       div.innerHTML = `
@@ -2320,13 +2736,25 @@ ${decisionHtml}
           ? `<span class="wkp-dsp-overdue-badge" data-tip="Delivery date was ${_esc(dateStr)} &mdash; this order is overdue">\u26A0 OVERDUE</span>`
           : "";
 
-        return `
+        // Customer display: name (primary), group (secondary), ID (muted)
+      // customer_name = human-readable display (e.g. "Sharma Exports Pvt Ltd")
+      // customer_group = segment from Customer master (e.g. "Wholesale", "Retail")
+      // customer = ERPNext document ID (e.g. "CUST-00001") — link to open in ERP
+      const custName  = so.customer_name || so.customer || "";
+      const custGroup = so.customer_group || "";
+      const custId    = so.customer || "";
+
+      return `
 <tr class="wkp-dsp-so-row ${isOverdue ? "wkp-dsp-so-overdue" : ""}">
   <td>
     <a href="/app/sales-order/${_esc(so.so_name)}" target="_blank" class="wkp-wo-link">${_esc(so.so_name)}</a>
     ${overdueLbl}
   </td>
-  <td>${_esc(so.customer)}</td>
+  <td>
+    <div style="font-weight:600">${_esc(custName)}</div>
+    ${custGroup ? `<div style="font-size:10px;color:var(--stone-500)">${_esc(custGroup)}</div>` : ""}
+    ${custId !== custName ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(custId)}</div>` : ""}
+  </td>
   <td class="ta-r">${_fmt_num(so.qty, 0)}</td>
   <td class="ta-r" style="color:var(--ok-text)">${_fmt_num(so.delivered_qty, 0)}</td>
   <td class="ta-r ${dueCls}" data-tip="Qty still to be shipped for this Sales Order">
@@ -2405,7 +2833,7 @@ ${decisionHtml}
       <thead>
         <tr>
           <th data-tip="Sales Order number (click to open in ERPNext)">Sales Order</th>
-          <th>Customer</th>
+          <th data-tip="Customer name, group, and ERPNext customer ID">Customer</th>
           <th class="ta-r" data-tip="Total qty in the Sales Order">Ordered</th>
           <th class="ta-r" data-tip="Qty already delivered via Delivery Notes">Delivered</th>
           <th class="ta-r" data-tip="Qty still pending dispatch (Ordered &minus; Delivered)">Pending</th>
@@ -2517,6 +2945,15 @@ ${decisionHtml}
 // ═══════════════════════════════════════════════════════════════════════
 //  UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Float parse with safe fallback (mirrors Python's flt()).
+ * Used in _openMRQtyDialog for MOQ comparisons.
+ */
+function flt(val, precision) {
+  const n = parseFloat(val) || 0;
+  return precision != null ? parseFloat(n.toFixed(precision)) : n;
+}
 
 function _fmt_num(val, decimals) {
   const n = parseFloat(val) || 0;

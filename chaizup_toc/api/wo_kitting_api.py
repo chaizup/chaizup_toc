@@ -18,8 +18,12 @@ PUBLIC API (all @frappe.whitelist())
   create_purchase_mr_for_wo_shortages(items_json, company)
       One-click: creates a Purchase MR for all shortage BOM components.
 
-  get_dispatch_bottleneck(item_codes_json)
+  get_dispatch_bottleneck()
       FG stock vs customer order comparison per production item.
+      SO detail includes customer_name, customer_group, and customer ID.
+
+  get_items_min_order_qty(item_codes_json)
+      Minimum Order Qty (MOQ) per item — used in MR confirmation dialog.
 
   chat_with_planner(message, session_id, context_json)
       AI chat: DeepSeek-powered advisor with session memory and function calling.
@@ -399,6 +403,41 @@ def create_purchase_mr_for_wo_shortages(items_json, company):
     mr.insert()
     frappe.db.commit()
     return {"status": "success", "mr": mr.name, "items_count": len(items)}
+
+
+@frappe.whitelist()
+def get_items_min_order_qty(item_codes_json):
+    """
+    Return the Minimum Order Qty (MOQ) for each supplied item code.
+
+    MOQ (min_order_qty on the Item master) is the smallest quantity a supplier
+    will accept per order. Used in the Material Shortage Report MR confirmation
+    dialog to suggest order quantities that satisfy supplier minimums.
+
+    If an item has no MOQ configured (0 or blank), it is returned as 0,
+    and the UI will suggest using the net shortage qty instead.
+
+    Args:
+        item_codes_json (str): JSON array of item codes
+
+    Returns:
+        dict: {item_code: min_order_qty}  — 0 if not set or item not found
+    """
+    item_codes = (
+        frappe.parse_json(item_codes_json)
+        if isinstance(item_codes_json, str)
+        else (item_codes_json or [])
+    )
+    if not item_codes:
+        return {}
+
+    rows = frappe.get_all(
+        "Item",
+        filters={"name": ["in", item_codes]},
+        fields=["name", "min_order_qty"],
+        ignore_permissions=True,
+    )
+    return {r.name: flt(r.min_order_qty or 0) for r in rows}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1290,7 +1329,12 @@ def get_dispatch_bottleneck():
         ic = r["item_code"]
         so_by_item.setdefault(ic, []).append({
             "so_name"        : r["so_name"],
+            # customer     = ERPNext customer ID (Link field value)
+            # customer_name = human-readable display name (e.g. "Sharma Exports Pvt Ltd")
+            # customer_group = segment from Customer master (e.g. "Wholesale")
             "customer"       : r["customer"] or "",
+            "customer_name"  : r.get("customer_name") or r["customer"] or "",
+            "customer_group" : r.get("customer_group") or "",
             "qty"            : flt(r["qty"]),
             "delivered_qty"  : flt(r["delivered_qty"]),
             "pending_qty"    : flt(r["pending_qty"]),
@@ -1357,8 +1401,13 @@ def _get_open_so_detail(item_codes=None):
     Results are ordered by delivery_date ASC (soonest overdue first).
 
     Returns:
-        list of dicts: [{item_code, so_name, customer, qty,
-                          delivered_qty, pending_qty, delivery_date}]
+        list of dicts: [{item_code, so_name, customer, customer_name,
+                          customer_group, qty, delivered_qty, pending_qty,
+                          delivery_date}]
+
+    customer        = ERPNext Customer document name (ID like "CUST-00001")
+    customer_name   = Human-readable customer display name (e.g. "Sharma Exports Pvt Ltd")
+    customer_group  = Customer segment from tabCustomer (e.g. "Wholesale", "Retail")
     """
     if item_codes is not None and not item_codes:
         return []
@@ -1368,12 +1417,15 @@ def _get_open_so_detail(item_codes=None):
             SELECT soi.item_code,
                    so.name                                         AS so_name,
                    so.customer,
+                   COALESCE(so.customer_name, so.customer)         AS customer_name,
+                   COALESCE(cust.customer_group, '')               AS customer_group,
                    soi.qty,
                    COALESCE(soi.delivered_qty, 0)                  AS delivered_qty,
                    (soi.qty - COALESCE(soi.delivered_qty, 0))      AS pending_qty,
                    so.delivery_date
             FROM   `tabSales Order Item` soi
             JOIN   `tabSales Order` so ON so.name = soi.parent
+            LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
             WHERE  soi.item_code IN %(items)s
               AND  so.docstatus  = 1
               AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
@@ -1386,12 +1438,15 @@ def _get_open_so_detail(item_codes=None):
             SELECT soi.item_code,
                    so.name                                         AS so_name,
                    so.customer,
+                   COALESCE(so.customer_name, so.customer)         AS customer_name,
+                   COALESCE(cust.customer_group, '')               AS customer_group,
                    soi.qty,
                    COALESCE(soi.delivered_qty, 0)                  AS delivered_qty,
                    (soi.qty - COALESCE(soi.delivered_qty, 0))      AS pending_qty,
                    so.delivery_date
             FROM   `tabSales Order Item` soi
             JOIN   `tabSales Order` so ON so.name = soi.parent
+            LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
             WHERE  so.docstatus  = 1
               AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
@@ -1762,6 +1817,58 @@ _AI_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ready_to_produce",
+            "description": (
+                "Get all Work Orders that are ready to start production right now — "
+                "all required materials are in stock (kit_status=ok or kitted). "
+                "Call this when the user asks which orders can be released, started, "
+                "run today, or which WOs have no shortage."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_blocked_work_orders",
+            "description": (
+                "Get all Work Orders that are blocked or partially blocked by material shortages "
+                "(kit_status=block or partial). Returns each WO with its top blocking material. "
+                "Call this when the user asks what is blocked, what cannot start, "
+                "what has shortages, or what needs materials."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fulfillment_outlook",
+            "description": (
+                "Check whether open Work Orders can cover all pending customer orders. "
+                "Returns a per-item comparison of remaining production qty vs total customer demand. "
+                "Call this when the user asks about customer fulfilment, delivery commitments, "
+                "monthly targets, or whether we can meet all orders."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_overdue_customer_orders",
+            "description": (
+                "Get all Work Orders where customers have OVERDUE orders — "
+                "delivery was due in the previous calendar month and shipment is still pending. "
+                "Call this when the user asks about overdue orders, delayed deliveries, "
+                "customers who are waiting, or past-due shipments."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 ]
 
 
@@ -1847,8 +1954,9 @@ def chat_with_planner(message, session_id, context_json, model=None):
     effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
 
     # Run with function-calling loop
-    reply_text, updated_messages = _execute_chat_with_tools(messages, context, api_key,
-                                                             model=effective_model)
+    reply_text, updated_messages, tools_used = _execute_chat_with_tools(
+        messages, context, api_key, model=effective_model
+    )
 
     # Prune to last N messages (exclude system) and save back
     new_history = [m for m in updated_messages if m.get("role") != "system"]
@@ -1857,9 +1965,10 @@ def chat_with_planner(message, session_id, context_json, model=None):
     frappe.cache().set_value(cache_key, new_history, expires_in_sec=_AI_SESSION_TTL)
 
     return {
-        "reply"     : reply_text,
-        "session_id": session_id,
-        "is_html"   : "<" in reply_text,  # True if reply contains HTML tags
+        "reply"      : reply_text,
+        "session_id" : session_id,
+        "is_html"    : "<" in reply_text,  # True if reply contains HTML tags
+        "tools_used" : tools_used,         # list of function names called by AI
     }
 
 
@@ -2111,6 +2220,7 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
         tuple: (reply_text: str, updated_messages: list)
     """
     tool_calls_made = 0
+    tools_used      = []   # track which function names were called
 
     try:
         while tool_calls_made <= _AI_MAX_TOOL_CALLS:
@@ -2127,22 +2237,24 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
                     fn_name = tc["function"]["name"]
                     fn_args = json.loads(tc["function"]["arguments"] or "{}")
                     fn_result = _execute_ai_tool(fn_name, fn_args, context)
+                    if fn_name not in tools_used:
+                        tools_used.append(fn_name)
                     messages.append({
                         "role"        : "tool",
                         "tool_call_id": tc["id"],
                         "content"     : json.dumps(fn_result, default=str),
                     })
             else:
-                # Final response — return
-                return msg.get("content") or "", messages
+                # Final response — return reply, full messages, and tools called
+                return msg.get("content") or "", messages, tools_used
 
-        return "Function call limit reached. Please rephrase your question.", messages
+        return "Function call limit reached. Please rephrase your question.", messages, tools_used
 
     except _requests.exceptions.Timeout:
         return (
             "<span class=\"wkp-ai-warn\">AI response timed out (40s). "
             "DeepSeek may be under load — please try again in a moment.</span>",
-            messages,
+            messages, tools_used,
         )
     except _requests.exceptions.ConnectionError as exc:
         frappe.log_error(f"WKP AI connection error: {exc}", "WKP AI")
@@ -2150,7 +2262,7 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
             "<span class=\"wkp-ai-err\">Cannot reach DeepSeek API.</span> "
             "Check that your server can access <code>api.deepseek.com</code> "
             "(outbound HTTPS port 443). See Error Log for details.",
-            messages,
+            messages, tools_used,
         )
     except _requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
@@ -2159,25 +2271,25 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
                 "<span class=\"wkp-ai-err\">Invalid or expired DeepSeek API key.</span> "
                 "Update it in <b>TOC Settings → AI Advisor → DeepSeek API Key</b> "
                 "or in site_config.json (<code>deepseek_api_key</code>).",
-                messages,
+                messages, tools_used,
             )
         if status == 402:
             return (
                 "<span class=\"wkp-ai-err\">DeepSeek account has insufficient balance.</span> "
                 "Top up at <b>platform.deepseek.com</b>.",
-                messages,
+                messages, tools_used,
             )
         if status == 429:
             return (
                 "<span class=\"wkp-ai-warn\">DeepSeek rate limit reached.</span> "
                 "Wait a moment and try again.",
-                messages,
+                messages, tools_used,
             )
         frappe.log_error(f"WKP AI HTTP error {status}: {exc}", "WKP AI DeepSeek Error")
         return (
             f"<span class=\"wkp-ai-warn\">DeepSeek API error (HTTP {status}).</span> "
             "See <b>Error Log → WKP AI DeepSeek Error</b> for details.",
-            messages,
+            messages, tools_used,
         )
     except Exception as exc:
         import traceback
@@ -2187,7 +2299,7 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
         )
         return (
             "<span class=\"wkp-ai-warn\">AI error. Check <b>Error Log → WKP AI</b> for details.</span>",
-            messages,
+            messages, tools_used,
         )
 
 
@@ -2303,6 +2415,150 @@ def _execute_ai_tool(fn_name, fn_args, context):
             ranked   = sorted(agg.values(), key=lambda x: x[sort_key], reverse=True)[:10]
             return {"ranked_by": rank_by, "top_materials": ranked}
 
+        elif fn_name == "get_ready_to_produce":
+            # Return all WOs with kit_status ok or kitted — ready to release
+            rows = context.get("rows") or []
+            ready = [
+                {
+                    "wo"          : r.get("wo", ""),
+                    "item_name"   : (r.get("item_name") or r.get("item_code", ""))[:40],
+                    "remaining_qty": round(flt(r.get("remaining_qty", 0)), 1),
+                    "uom"         : r.get("uom", ""),
+                    "status"      : r.get("status", ""),
+                    "customer_demand": round(flt(r.get("total_pending_so", 0)), 1),
+                    "overdue"     : flt(r.get("prev_month_so", 0)) > 0,
+                }
+                for r in rows
+                if r.get("kit_status") in ("ok", "kitted")
+            ]
+            # Sort by overdue first, then customer demand
+            ready.sort(key=lambda x: (-int(x["overdue"]), -x["customer_demand"]))
+            return {
+                "count"  : len(ready),
+                "message": f"{len(ready)} Work Order(s) are ready to start production.",
+                "work_orders": ready[:20],
+            }
+
+        elif fn_name == "get_blocked_work_orders":
+            # Return blocked/partial WOs with their primary blocking material
+            rows    = context.get("rows") or []
+            blocked = []
+            for r in rows:
+                if r.get("kit_status") not in ("block", "partial"):
+                    continue
+                shortage_items = r.get("shortage_items") or []
+                top_blocker    = shortage_items[0] if shortage_items else {}
+                blocked.append({
+                    "wo"           : r.get("wo", ""),
+                    "item_name"    : (r.get("item_name") or r.get("item_code", ""))[:40],
+                    "kit_status"   : r.get("kit_status", ""),
+                    "remaining_qty": round(flt(r.get("remaining_qty", 0)), 1),
+                    "uom"          : r.get("uom", ""),
+                    "shortage_count": r.get("shortage_count", len(shortage_items)),
+                    "shortage_value": round(flt(r.get("shortage_value", 0)), 0),
+                    "customer_demand": round(flt(r.get("total_pending_so", 0)), 1),
+                    "overdue"      : flt(r.get("prev_month_so", 0)) > 0,
+                    "top_blocker"  : {
+                        "material" : top_blocker.get("item_name", top_blocker.get("item_code", "")),
+                        "short_qty": round(flt(top_blocker.get("shortage", 0)), 1),
+                        "uom"      : top_blocker.get("uom", ""),
+                        "value_inr": round(flt(top_blocker.get("shortage_value", 0)), 0),
+                        "po_qty"   : round(flt(top_blocker.get("po_qty", 0)), 1),
+                        "mr_qty"   : round(flt(top_blocker.get("mr_qty", 0)), 1),
+                    } if top_blocker else None,
+                })
+            blocked.sort(key=lambda x: (-int(x["overdue"]), -x["shortage_value"]))
+            return {
+                "count"      : len(blocked),
+                "message"    : f"{len(blocked)} Work Order(s) blocked or partially short.",
+                "work_orders": blocked[:20],
+            }
+
+        elif fn_name == "get_fulfillment_outlook":
+            # Compare remaining production vs customer demand per item
+            rows = context.get("rows") or []
+            # Aggregate by item_code
+            by_item = {}
+            for r in rows:
+                ic = r.get("item_code", "")
+                if ic not in by_item:
+                    by_item[ic] = {
+                        "item_name"     : (r.get("item_name") or ic)[:40],
+                        "uom"           : r.get("uom", ""),
+                        "total_remaining": 0.0,
+                        "total_demand"   : 0.0,
+                        "overdue_demand" : 0.0,
+                        "any_blocked"    : False,
+                    }
+                by_item[ic]["total_remaining"] += flt(r.get("remaining_qty", 0))
+                by_item[ic]["total_demand"]    += flt(r.get("total_pending_so", 0))
+                by_item[ic]["overdue_demand"]  += flt(r.get("prev_month_so", 0))
+                if r.get("kit_status") in ("block", "partial"):
+                    by_item[ic]["any_blocked"] = True
+
+            items = []
+            for ic, d in by_item.items():
+                if d["total_demand"] <= 0:
+                    continue
+                gap = d["total_demand"] - d["total_remaining"]
+                items.append({
+                    "item_code"    : ic,
+                    "item_name"    : d["item_name"],
+                    "uom"          : d["uom"],
+                    "total_demand" : round(d["total_demand"], 1),
+                    "will_produce" : round(d["total_remaining"], 1),
+                    "gap"          : round(gap, 1),
+                    "can_fulfill"  : gap <= 0 and not d["any_blocked"],
+                    "at_risk"      : gap <= 0 and d["any_blocked"],
+                    "short"        : gap > 0,
+                    "overdue_demand": round(d["overdue_demand"], 1),
+                })
+            # Sort: short first (gap > 0), then at_risk, then ok
+            items.sort(key=lambda x: (-int(x["short"]), -int(x["at_risk"]), -x["gap"]))
+
+            short_count  = sum(1 for i in items if i["short"])
+            risk_count   = sum(1 for i in items if i["at_risk"])
+            ok_count     = sum(1 for i in items if i["can_fulfill"])
+            return {
+                "summary": {
+                    "items_with_orders": len(items),
+                    "can_fulfill"      : ok_count,
+                    "at_risk"          : risk_count,
+                    "short"            : short_count,
+                },
+                "items": items[:15],
+            }
+
+        elif fn_name == "get_overdue_customer_orders":
+            # Return WOs with prev_month_so > 0 (overdue from last month)
+            rows    = context.get("rows") or []
+            overdue = [
+                {
+                    "wo"           : r.get("wo", ""),
+                    "item_name"    : (r.get("item_name") or r.get("item_code", ""))[:40],
+                    "kit_status"   : r.get("kit_status", ""),
+                    "remaining_qty": round(flt(r.get("remaining_qty", 0)), 1),
+                    "uom"          : r.get("uom", ""),
+                    "overdue_qty"  : round(flt(r.get("prev_month_so", 0)), 1),
+                    "this_month_qty": round(flt(r.get("curr_month_so", 0)), 1),
+                    "total_demand" : round(flt(r.get("total_pending_so", 0)), 1),
+                    "blocked"      : r.get("kit_status") in ("block", "partial"),
+                    "shortage_value": round(flt(r.get("shortage_value", 0)), 0),
+                }
+                for r in rows
+                if flt(r.get("prev_month_so", 0)) > 0
+            ]
+            # Most overdue first; among equal, most blocked first
+            overdue.sort(key=lambda x: (-x["overdue_qty"], -int(x["blocked"])))
+            return {
+                "count"  : len(overdue),
+                "message": (
+                    f"{len(overdue)} Work Order(s) have overdue customer orders (from last month)."
+                    if overdue else "No overdue customer orders found."
+                ),
+                "work_orders": overdue[:20],
+            }
+
         else:
             return {"error": f"Unknown function: {fn_name}"}
 
@@ -2369,13 +2625,18 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
     )[:5]
     critical_wos = [
         {
-            "wo"            : r.get("wo", ""),
-            "item"          : (r.get("item_name") or r.get("item_code", ""))[:35],
-            "status"        : r.get("kit_status", ""),
-            "remaining_qty" : round(flt(r.get("remaining_qty", 0)), 0),
-            "shortage_val"  : round(flt(r.get("shortage_value", 0)), 0),
-            "customer_demand": round(flt(r.get("total_pending_so", 0)), 0),
-            "top_shortage"  : (
+            "wo"             : r.get("wo", ""),
+            "item"           : (r.get("item_name") or r.get("item_code", ""))[:35],
+            "status"         : r.get("kit_status", ""),
+            "remaining_qty"  : round(flt(r.get("remaining_qty", 0)), 1),
+            # uom + secondary_uom let the AI cite quantities with correct units
+            # e.g. "380 kg" or "5000 g (5 kg)" depending on item setup
+            "uom"            : r.get("uom", ""),
+            "secondary_uom"  : r.get("secondary_uom", ""),
+            "secondary_factor": flt(r.get("secondary_factor", 1)),
+            "shortage_val"   : round(flt(r.get("shortage_value", 0)), 0),
+            "customer_demand": round(flt(r.get("total_pending_so", 0)), 1),
+            "top_shortage"   : (
                 r["shortage_items"][0]["item_name"][:25]
                 if r.get("shortage_items") else None
             ),
@@ -2383,13 +2644,15 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
         for r in urgent
     ]
 
-    # Dispatch alerts (items where gap > 0)
+    # Dispatch alerts (items where gap > 0) — include item name and UOM for AI
     dispatch_alerts = [
         {
-            "item"      : k,
-            "fg_stock"  : round(flt(v.get("fg_stock", 0)), 0),
-            "orders"    : round(flt(v.get("total_pending", 0)), 0),
-            "gap"       : round(flt(v.get("total_pending", 0)) - flt(v.get("fg_stock", 0)), 0),
+            "item_code" : k,
+            "item_name" : (v.get("item_name") or k)[:35],
+            "uom"       : v.get("uom", ""),
+            "fg_stock"  : round(flt(v.get("fg_stock", 0)), 1),
+            "orders"    : round(flt(v.get("total_pending", 0)), 1),
+            "gap"       : round(flt(v.get("total_pending", 0)) - flt(v.get("fg_stock", 0)), 1),
         }
         for k, v in dispatch.items()
         if flt(v.get("total_pending", 0)) > flt(v.get("fg_stock", 0)) + 0.01

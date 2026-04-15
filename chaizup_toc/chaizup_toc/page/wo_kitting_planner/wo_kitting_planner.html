@@ -2,7 +2,7 @@
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  wo_kitting_planner.html  --  WO Kitting Planner UI Template            ║
   ║  Part of chaizup_toc app  |  Page: wo-kitting-planner                   ║
-  ║  Last updated: 2026-04-14                                                ║
+  ║  Last updated: 2026-04-15 (session 4)                                    ║
   ╚══════════════════════════════════════════════════════════════════════════╝
 
   PURPOSE
@@ -61,6 +61,11 @@
                         #wkp-pane-dispatch  #wkp-pane-ai-chat
                         #wkp-table-wrap  #wkp-table  #wkp-tbody
                         #wkp-shortage-body  #wkp-emerg-body  #wkp-dispatch-body
+                        #wkp-shortage-btns
+                        #wkp-shortage-mr-btn         (bulk MR for all net-gap items)
+                        #wkp-shortage-mr-selected-btn (MR for checked rows only)
+                        #wkp-sr-select-all           (select-all checkbox in table header)
+                        .wkp-sr-chk                  (per-row checkboxes in shortage table)
 
      AI advisor panel:  #wkp-ai-insight-body   (auto-insight card content)
                         #wkp-ai-messages        (chat message list)
@@ -90,7 +95,7 @@
 
   4. data-popover ATTRIBUTES on .wkp-th-help — must match WKP_POPOVERS keys in JS
      ────────────────────────────────────────────────────────────────────────────────
-     "remaining_qty" | "shortage" | "est_cost" | "prev_so" | "curr_so" | "total_so"
+     "remaining_qty" | "produced_qty" | "shortage" | "est_cost" | "prev_so" | "curr_so" | "total_so"
      If you add a new column with a ? button, add the matching key to WKP_POPOVERS
      in wo_kitting_planner.js.
 
@@ -389,6 +394,10 @@
                 Qty to Produce
                 <span class="wkp-th-help" data-popover="remaining_qty" title="What does this column mean?">?</span>
               </th>
+              <th class="ta-r">
+                Already Produced
+                <span class="wkp-th-help" data-popover="produced_qty" title="What does this column mean?">?</span>
+              </th>
               <th>
                 Material Status
                 <span class="wkp-th-help" data-popover="shortage" title="What does this column mean?">?</span>
@@ -431,9 +440,20 @@
             &mdash; across all open Work Orders
           </span>
         </div>
-        <button class="wkp-btn wkp-btn-brand" id="wkp-shortage-mr-btn" style="display:none">
-          &#x1F6D2; Create Consolidated Purchase MR
-        </button>
+        <!-- Two action buttons:
+             wkp-shortage-mr-selected-btn: create MR for user-ticked rows only (shown once checkboxes exist)
+             wkp-shortage-mr-btn: create MR for ALL items with net gap > 0 (one-click bulk action)
+             Both are hidden until shortage data is loaded. -->
+        <div class="wkp-shortage-btns" id="wkp-shortage-btns">
+          <button class="wkp-btn" id="wkp-shortage-mr-selected-btn" style="display:none" disabled
+                  data-tip="Select materials using the checkboxes in the table below, then click here to create a Material Request for only those items. You can also adjust quantities and check the minimum order requirement before confirming.">
+            &#x2713; Create MR for Selected
+          </button>
+          <button class="wkp-btn wkp-btn-brand" id="wkp-shortage-mr-btn" style="display:none"
+                  data-tip="Create a single Purchase Material Request covering ALL materials that have a positive Net Gap (shortage not yet covered by any existing Purchase Order or Material Request). This is a one-click bulk action &mdash; use the checkbox button above for selective ordering.">
+            &#x1F6D2; Create Consolidated MR (All Items)
+          </button>
+        </div>
       </div>
       <div id="wkp-shortage-body"></div>
     </div>
