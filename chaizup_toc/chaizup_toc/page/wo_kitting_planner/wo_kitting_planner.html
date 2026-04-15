@@ -512,6 +512,17 @@
             <span>AI is thinking&hellip;</span>
           </div>
 
+          <!-- Model selector — populated by JS _initAIPanel() via get_available_ai_models() -->
+          <!-- WKP-001: no single quotes in HTML — use double quotes only -->
+          <div class="wkp-ai-model-row">
+            <label class="wkp-ai-model-label" for="wkp-ai-model-select">AI Model:</label>
+            <select class="wkp-select wkp-ai-model-select" id="wkp-ai-model-select"
+                    data-tip="Select DeepSeek model. Estimated cost shown per chat message. V3 Standard is fast and accurate for daily use. R1 Reasoning is slower but does deeper analysis for complex prioritization.">
+              <option value="deepseek-chat">V3 Standard (Fast, Cheap) (~$0.001/chat)</option>
+            </select>
+            <span class="wkp-ai-cost-hint" id="wkp-ai-cost-hint"></span>
+          </div>
+
           <!-- Input area -->
           <div class="wkp-ai-input-row">
             <textarea class="wkp-ai-input" id="wkp-ai-input" rows="2"

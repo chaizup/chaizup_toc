@@ -121,7 +121,41 @@ from frappe.utils import add_days, cint, flt, today
 
 DEEPSEEK_API_KEY  = "YOUR_DEEPSEEK_API_KEY_HERE"  # <-- SET THIS (or use site_config / TOC Settings)
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"    # DeepSeek canonical URL; /v1 prefix also works
-DEEPSEEK_MODEL    = "deepseek-chat"               # DeepSeek-V3-0324: best cost/quality for production
+DEEPSEEK_MODEL    = "deepseek-chat"               # default model (fallback if caller doesn't specify)
+
+# ── Available DeepSeek models with cost/capability profile ──────────────
+# JS passes model_id via chat_with_planner(model=...) / get_ai_auto_insight(model=...).
+# The "name" and "est_cost_per_call" fields are returned to JS for the model selector.
+# Costs are USD per call estimate (system + context + history + response).
+#
+# deepseek-chat     → DeepSeek-V3-0324. Fast, cheap, great for standard decisions.
+#                     $0.27/1M input · $1.10/1M output. ~1700 tokens/call ≈ $0.001
+# deepseek-reasoner → DeepSeek-R1. Slower, deep chain-of-thought reasoning.
+#                     $0.55/1M input · $2.19/1M output. ~3000 tokens/call ≈ $0.003
+#                     Use for: "explain WHY shortage is happening" or complex prioritization.
+#
+DEEPSEEK_MODELS = {
+    "deepseek-chat": {
+        "name"              : "V3 Standard (Fast, Cheap)",
+        "description"       : "Best for daily decisions — fast, accurate, low cost.",
+        "max_tokens"        : 700,
+        "temperature"       : 0.25,
+        "input_cost_per_1m" : 0.27,    # USD
+        "output_cost_per_1m": 1.10,
+        "est_tokens_per_call": 1700,
+        "est_cost_per_call" : 0.001,   # USD
+    },
+    "deepseek-reasoner": {
+        "name"              : "R1 Reasoning (Deep Analysis)",
+        "description"       : "Chain-of-thought reasoning for complex prioritization.",
+        "max_tokens"        : 2000,
+        "temperature"       : 0.6,
+        "input_cost_per_1m" : 0.55,
+        "output_cost_per_1m": 2.19,
+        "est_tokens_per_call": 3000,
+        "est_cost_per_call" : 0.003,
+    },
+}
 
 # Chat session TTL in Redis cache (seconds). 2 hours.
 _AI_SESSION_TTL = 7200
@@ -280,7 +314,36 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
             sd  = supply_detail.get(ic, {})
             comp["po_qty"]       = flt(sd.get("po_qty", 0))
             comp["mr_qty"]       = flt(sd.get("mr_qty", 0))
+            comp["received_qty_po"] = flt(sd.get("received_qty", 0))   # total PO received to date
             comp["consumed_qty"] = round(flt(wo_consumed.get(ic, 0)), 4)
+
+    # ── Step 7: Add secondary UOM to WO rows and shortage components ───
+    # Collect all unique item codes (WO production items + BOM components)
+    all_item_codes = set(row["item_code"] for row in results)
+    for row in results:
+        for comp in row.get("shortage_items", []):
+            all_item_codes.add(comp["item_code"])
+
+    sec_uom_map = _get_secondary_uom(all_item_codes)
+
+    for row in results:
+        sec = sec_uom_map.get(row["item_code"], {})
+        row["secondary_uom"]    = sec.get("uom", "")
+        row["secondary_factor"] = sec.get("factor", 1.0)
+        row["secondary_qty"]    = round(row["remaining_qty"] / sec["factor"], 3) if sec else 0.0
+
+        for comp in row.get("shortage_items", []):
+            cs = sec_uom_map.get(comp["item_code"], {})
+            comp["secondary_uom"]    = cs.get("uom", "")
+            comp["secondary_factor"] = cs.get("factor", 1.0)
+            # Pre-compute secondary quantities for display (all quantities, not just shortage)
+            if cs:
+                f = cs["factor"]
+                comp["required_secondary"]  = round(comp["required"]  / f, 3)
+                comp["available_secondary"] = round(comp["available"] / f, 3)
+                comp["shortage_secondary"]  = round(comp["shortage"]  / f, 3)
+            else:
+                comp["required_secondary"] = comp["available_secondary"] = comp["shortage_secondary"] = 0.0
 
     return results
 
@@ -948,23 +1011,26 @@ def _build_supply_detail(item_codes):
     if not item_codes:
         return {}
 
-    detail = {ic: {"po_qty": 0.0, "mr_qty": 0.0} for ic in item_codes}
+    detail = {ic: {"po_qty": 0.0, "mr_qty": 0.0, "received_qty": 0.0} for ic in item_codes}
 
-    # Open PO remaining qty per item
+    # Open PO remaining qty + already-received qty per item
+    # po_qty      = ordered but not yet received (still in transit / pending)
+    # received_qty = total received from POs (helps answer "why is shortage reducing?")
     po_rows = frappe.db.sql("""
         SELECT poi.item_code,
-               SUM(poi.qty - COALESCE(poi.received_qty, 0)) AS qty
+               SUM(poi.qty - COALESCE(poi.received_qty, 0)) AS po_qty,
+               SUM(COALESCE(poi.received_qty, 0))           AS received_qty
         FROM   `tabPurchase Order Item` poi
         JOIN   `tabPurchase Order` po ON po.name = poi.parent
         WHERE  poi.item_code IN %(items)s
           AND  po.docstatus = 1
           AND  po.status NOT IN ('Closed', 'Cancelled')
-          AND  (poi.qty - COALESCE(poi.received_qty, 0)) > 0
         GROUP BY poi.item_code
     """, {"items": item_codes}, as_dict=True)
 
     for r in po_rows:
-        detail[r.item_code]["po_qty"] = flt(r.qty)
+        detail[r.item_code]["po_qty"]       = flt(r.po_qty)
+        detail[r.item_code]["received_qty"] = flt(r.received_qty)
 
     # Open Purchase MR remaining qty (not yet converted to PO)
     mr_rows = frappe.db.sql("""
@@ -1023,6 +1089,49 @@ def _get_consumed_by_wo(wo_names):
         if wo not in result:
             result[wo] = {}
         result[wo][r.item_code] = flt(r.consumed_qty)
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  UOM CONVERSION — secondary display unit
+# ═══════════════════════════════════════════════════════════════════════
+
+def _get_secondary_uom(item_codes):
+    """
+    For each item, find the "next higher" UOM to show alongside the stock_uom.
+
+    ERPNext tabUOM Conversion Detail schema:
+        parent            = item_code
+        uom               = UOM name
+        conversion_factor = qty of stock_uom per 1 of this UOM
+            Example: stock_uom=Gram, UOM=Kilogram → factor=1000 (1 kg = 1000 g)
+
+    Selection rule: UOM with the SMALLEST conversion_factor > 1 (closest higher unit).
+    This gives "kg" for gram items, "litre" for ml items, "dozen" for pcs items, etc.
+
+    To convert: secondary_qty = primary_qty / factor
+    Example: 5000 g → 5000 / 1000 = 5 kg
+
+    Returns:
+        dict: {item_code: {"uom": str, "factor": float}}
+        Items with no conversion > 1 are NOT included (only show primary).
+    """
+    if not item_codes:
+        return {}
+    rows = frappe.db.sql("""
+        SELECT parent AS item_code, uom, conversion_factor
+        FROM   `tabUOM Conversion Detail`
+        WHERE  parent          IN %(items)s
+          AND  conversion_factor > 1
+        ORDER BY parent, conversion_factor ASC
+    """, {"items": list(item_codes)}, as_dict=True)
+
+    result = {}
+    for r in rows:
+        ic = r.item_code
+        if ic not in result:   # keep only the first = smallest factor = closest unit
+            result[ic] = {"uom": r.uom, "factor": flt(r.conversion_factor)}
 
     return result
 
@@ -1111,94 +1220,105 @@ def _get_dispatch_info(item_codes):
 # ═══════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def get_dispatch_bottleneck(item_codes_json):
+def get_dispatch_bottleneck():
     """
-    Dispatch bottleneck analysis for finished-good items.
+    Dispatch bottleneck analysis — independent of WO simulation.
 
-    For each production item with open WOs, returns:
-      - Physical FG stock in warehouse
-      - All open Sales Orders with pending qty, delivery dates, urgency
-      - Pick List status (has a pick list been created for each SO?)
-      - Stock Reservation qty (how much is earmarked via reservation?)
-      - Delivery Note qty (partial deliveries already made)
+    IMPORTANT DESIGN CHANGE (2026-04-15):
+    This function no longer accepts item_codes. It independently discovers ALL
+    finished-good items that have pending Sales Orders. This means the Dispatch
+    Bottleneck tab shows every item customers are waiting for, whether or not
+    there is an active Work Order in the current simulation.
 
-    Management use: Compare "Will Produce + In Stock" vs "Customer Orders"
-    to identify items where production cannot cover demand even if all WOs complete.
+    The will_produce figure (how much WOs will make) is computed by the JS client
+    from this.rows, which it already has from simulate_kitting(). The server just
+    provides the SO-side view.
 
-    Args:
-        item_codes_json (str): JSON list of production item codes
+    Returns per item:
+        fg_stock         float  Physical FG stock (all warehouses, Bin.actual_qty)
+        total_pending    float  Sum of pending SO qty (all open SOs, no date filter)
+        total_reserved   float  Stock Reservation qty earmarked for these SOs
+        has_pick_list    bool   Whether any SO has a Pick List created
+        so_list          list   Per-SO detail (see field list below)
+        item_name        str    Item description (from tabItem)
+        item_group       str    Item group (from tabItem)
+        uom              str    Stock UOM
+        secondary_uom    str    Next higher UOM (e.g. "kg" when uom="gram")
+        secondary_factor float  Conversion: 1 secondary_uom = factor × uom
+
+    so_list row fields:
+        so_name, customer, qty, delivered_qty, pending_qty, delivery_date,
+        is_overdue, pick_list_count, reserved_qty, dn_qty
 
     Returns:
-        dict: {item_code: {fg_stock, total_pending, total_reserved,
-                           has_pick_list, so_list: [...]}}
+        dict: {item_code: {fg_stock, total_pending, ..., so_list, item_name, uom, ...}}
     """
-    item_codes = (
-        frappe.parse_json(item_codes_json)
-        if isinstance(item_codes_json, str)
-        else item_codes_json
-    ) or []
-
-    if not item_codes:
-        return {}
-
-    # ── Step 1: FG physical stock ────────────────────────────────────
-    fg_stock = _get_fg_stock(item_codes)
-
-    # ── Step 2: Open Sales Orders (all open, not just 2-month window) ─
-    so_rows = _get_open_so_detail(item_codes)
+    # ── Step 1: Discover all items with pending SOs (no filter) ─────
+    so_rows = _get_open_so_detail()   # no filter → all pending SOs
 
     if not so_rows:
-        return {
-            ic: {"fg_stock": flt(fg_stock.get(ic, 0)),
-                 "total_pending": 0.0, "total_reserved": 0.0,
-                 "has_pick_list": False, "so_list": []}
-            for ic in item_codes
-        }
+        return {}
 
-    so_names = list({r["so_name"] for r in so_rows})
+    item_codes = list({r["item_code"] for r in so_rows})
 
-    # ── Step 3: Pick List status ────────────────────────────────────
-    pick_map = _get_pick_list_status(so_names)
+    # ── Step 2: FG physical stock ────────────────────────────────────
+    fg_stock = _get_fg_stock(item_codes)
 
-    # ── Step 4: Stock Reservation (ERPNext v15+ — fails gracefully) ──
+    # ── Step 3: Pick List + Reservation + DN ─────────────────────────
+    so_names     = list({r["so_name"] for r in so_rows})
+    pick_map     = _get_pick_list_status(so_names)
     reserved_map = _get_reserved_stock(so_names)
+    dn_map       = _get_dn_detail(item_codes, so_names)
 
-    # ── Step 5: Delivery Note partial deliveries ────────────────────
-    dn_map = _get_dn_detail(item_codes, so_names)
+    # ── Step 4: Item metadata (name, group, UOM) ──────────────────────
+    meta_rows = frappe.get_all(
+        "Item",
+        filters={"name": ["in", item_codes]},
+        fields=["name", "item_name", "item_group", "stock_uom"],
+        ignore_permissions=True,
+    )
+    item_meta = {r.name: r for r in meta_rows}
 
-    # ── Assemble result ──────────────────────────────────────────────
+    # ── Step 5: Secondary UOM (higher unit for display) ───────────────
+    sec_uom = _get_secondary_uom(item_codes)
+
+    # ── Assemble SO lists per item ────────────────────────────────────
     so_by_item = {}
     today_str  = str(date.today())
 
     for r in so_rows:
         ic = r["item_code"]
         so_by_item.setdefault(ic, []).append({
-            "so_name"         : r["so_name"],
-            "customer"        : r["customer"] or "",
-            "qty"             : flt(r["qty"]),
-            "delivered_qty"   : flt(r["delivered_qty"]),
-            "pending_qty"     : flt(r["pending_qty"]),
-            "delivery_date"   : str(r["delivery_date"] or ""),
-            "is_overdue"      : str(r["delivery_date"] or "") < today_str
-                                and flt(r["pending_qty"]) > 0,
-            "pick_list_count" : int(pick_map.get(r["so_name"], 0)),
-            "reserved_qty"    : flt(reserved_map.get(r["so_name"], 0)),
-            "dn_qty"          : flt(dn_map.get((ic, r["so_name"]), 0)),
+            "so_name"        : r["so_name"],
+            "customer"       : r["customer"] or "",
+            "qty"            : flt(r["qty"]),
+            "delivered_qty"  : flt(r["delivered_qty"]),
+            "pending_qty"    : flt(r["pending_qty"]),
+            "delivery_date"  : str(r["delivery_date"] or ""),
+            "is_overdue"     : str(r["delivery_date"] or "") < today_str
+                               and flt(r["pending_qty"]) > 0,
+            "pick_list_count": int(pick_map.get(r["so_name"], 0)),
+            "reserved_qty"   : flt(reserved_map.get(r["so_name"], 0)),
+            "dn_qty"         : flt(dn_map.get((ic, r["so_name"]), 0)),
         })
 
     result = {}
     for ic in item_codes:
-        so_list        = so_by_item.get(ic, [])
-        total_pending  = sum(s["pending_qty"] for s in so_list)
-        total_reserved = sum(s["reserved_qty"] for s in so_list)
-        has_pick_list  = any(s["pick_list_count"] > 0 for s in so_list)
+        so_list  = so_by_item.get(ic, [])
+        meta     = item_meta.get(ic) or {}
+        sec      = sec_uom.get(ic, {})
 
         result[ic] = {
-            "fg_stock"      : flt(fg_stock.get(ic, 0)),
-            "total_pending" : total_pending,
-            "total_reserved": total_reserved,
-            "has_pick_list" : has_pick_list,
-            "so_list"       : so_list,
+            "fg_stock"        : flt(fg_stock.get(ic, 0)),
+            "total_pending"   : sum(s["pending_qty"]  for s in so_list),
+            "total_reserved"  : sum(s["reserved_qty"] for s in so_list),
+            "has_pick_list"   : any(s["pick_list_count"] > 0 for s in so_list),
+            "so_list"         : so_list,
+            "item_name"       : meta.get("item_name", ic),
+            "item_group"      : meta.get("item_group", ""),
+            "uom"             : meta.get("stock_uom", ""),
+            "secondary_uom"   : sec.get("uom", ""),
+            "secondary_factor": sec.get("factor", 1.0),
         }
 
     return result
@@ -1222,36 +1342,62 @@ def _get_fg_stock(item_codes):
     return {r.item_code: flt(r.qty) for r in rows}
 
 
-def _get_open_so_detail(item_codes):
+def _get_open_so_detail(item_codes=None):
     """
-    Fetch all open (undelivered) Sales Order lines for these items.
+    Fetch all open (undelivered) Sales Order lines.
+
+    When item_codes is None (default): returns ALL items with pending SOs.
+        Used by get_dispatch_bottleneck() to discover every item customers
+        are waiting for, independent of the current WO simulation.
+    When item_codes is provided: restricts to those items.
+        Used by the old dispatch flow if needed.
 
     Returns ALL SOs regardless of delivery date — not restricted to
     the 2-month window used by _get_dispatch_info().
-    Results are ordered by delivery_date ASC (soonest first).
+    Results are ordered by delivery_date ASC (soonest overdue first).
 
     Returns:
         list of dicts: [{item_code, so_name, customer, qty,
                           delivered_qty, pending_qty, delivery_date}]
     """
-    if not item_codes:
+    if item_codes is not None and not item_codes:
         return []
-    rows = frappe.db.sql("""
-        SELECT soi.item_code,
-               so.name                                         AS so_name,
-               so.customer,
-               soi.qty,
-               COALESCE(soi.delivered_qty, 0)                  AS delivered_qty,
-               (soi.qty - COALESCE(soi.delivered_qty, 0))      AS pending_qty,
-               so.delivery_date
-        FROM   `tabSales Order Item` soi
-        JOIN   `tabSales Order` so ON so.name = soi.parent
-        WHERE  soi.item_code IN %(items)s
-          AND  so.docstatus  = 1
-          AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
-          AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
-        ORDER BY so.delivery_date ASC, so.creation ASC
-    """, {"items": item_codes}, as_dict=True)
+
+    if item_codes:
+        rows = frappe.db.sql("""
+            SELECT soi.item_code,
+                   so.name                                         AS so_name,
+                   so.customer,
+                   soi.qty,
+                   COALESCE(soi.delivered_qty, 0)                  AS delivered_qty,
+                   (soi.qty - COALESCE(soi.delivered_qty, 0))      AS pending_qty,
+                   so.delivery_date
+            FROM   `tabSales Order Item` soi
+            JOIN   `tabSales Order` so ON so.name = soi.parent
+            WHERE  soi.item_code IN %(items)s
+              AND  so.docstatus  = 1
+              AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
+              AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
+            ORDER BY so.delivery_date ASC, so.creation ASC
+        """, {"items": item_codes}, as_dict=True)
+    else:
+        # No filter — fetch ALL items with pending SOs
+        rows = frappe.db.sql("""
+            SELECT soi.item_code,
+                   so.name                                         AS so_name,
+                   so.customer,
+                   soi.qty,
+                   COALESCE(soi.delivered_qty, 0)                  AS delivered_qty,
+                   (soi.qty - COALESCE(soi.delivered_qty, 0))      AS pending_qty,
+                   so.delivery_date
+            FROM   `tabSales Order Item` soi
+            JOIN   `tabSales Order` so ON so.name = soi.parent
+            WHERE  so.docstatus  = 1
+              AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
+              AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
+            ORDER BY so.delivery_date ASC, so.creation ASC
+        """, as_dict=True)
+
     return [dict(r) for r in rows]
 
 
@@ -1350,96 +1496,208 @@ def _get_dn_detail(item_codes, so_names):
 #
 #  PURPOSE
 #  ───────
-#  Gives managers a plain-language AI advisor that understands the
-#  current WO kitting simulation and dispatch bottleneck data.
+#  Gives production managers a plain-language AI advisor that understands
+#  the current WO kitting simulation and dispatch bottleneck data.
 #  Answers questions like:
 #    "Which WOs should I release first?"
 #    "What materials do I need to buy urgently?"
 #    "Can we ship the Haldiram order on time?"
 #
-#  ARCHITECTURE
-#  ─────────────
-#  API: DeepSeek-V3 (model: deepseek-chat) via OpenAI-compatible REST.
-#    Base URL: https://api.deepseek.com
-#    Endpoint: POST /chat/completions
-#    Auth: Bearer <api_key> in Authorization header
-#    DeepSeek docs: https://api-docs.deepseek.com/
+#  TWO MODES
+#  ─────────
+#  1. Auto-Insight (get_ai_auto_insight): stateless, runs once after every
+#     simulation. No session. Returns a structured briefing: overall status,
+#     top-issues table, 3 action steps. Faster (no function-calling loop).
 #
-#  API Key resolution (first non-empty wins):
-#    1. DEEPSEEK_API_KEY constant (this file — dev only, never commit real key)
-#    2. frappe.conf.deepseek_api_key (site_config.json — RECOMMENDED for production)
-#       Frappe Cloud: add via Site Config → Custom Key, Type=String
-#    3. TOC Settings → DeepSeek API Key (Password fieldtype, stored encrypted)
-#       Read via frappe.utils.password.get_decrypted_password()
+#  2. Chat (chat_with_planner): session-persistent Q&A. The user can ask
+#     follow-up questions; the AI uses function tools to fetch detail on demand.
 #
-#  Session persistence: Redis cache (frappe.cache()) keyed per user+session_id.
-#    - Only user+assistant messages are stored (system prompt regenerated each call).
-#    - TTL: 2 hours (_AI_SESSION_TTL). Older messages pruned to _AI_MAX_HISTORY.
+#  DEEPSEEK API
+#  ────────────
+#  Model:    deepseek-chat  (DeepSeek-V3-0324)
+#  Base URL: https://api.deepseek.com  (canonical; /v1 prefix also works)
+#  Endpoint: POST /chat/completions    (OpenAI-compatible)
+#  Auth:     Authorization: Bearer <api_key>
+#  Params:   temperature=0.25 (focused/factual), max_tokens=700, stream=False
+#  Docs:     https://api-docs.deepseek.com/
 #
-#  Context compression: Full simulation data (~50+ rows) is compressed to a
-#    ~400-token JSON summary before sending to the AI. This keeps cost minimal.
-#    Called from JS via compress_context_for_ai() before every AI call.
+#  API KEY RESOLUTION (first non-empty wins)
+#  ─────────────────────────────────────────
+#  1. DEEPSEEK_API_KEY constant in this file  — dev/test only, never commit a real key
+#  2. frappe.conf.deepseek_api_key            — site_config.json (RECOMMENDED for production)
+#       Frappe Cloud: Site Config → Add Custom Key → Key=deepseek_api_key, Type=String
+#  3. TOC Settings → AI Advisor → DeepSeek API Key  — Password fieldtype, stored encrypted
+#       MUST read via frappe.utils.password.get_decrypted_password()
+#       DO NOT use frappe.db.get_single_value() — returns encrypted/masked value
 #
-#  Function calling: DeepSeek is given 3 tools to fetch detail on demand:
-#    - get_wo_shortage_detail(wo_name)   — BOM component breakdown for a WO
-#    - get_dispatch_detail(item_code)    — SO list, pick list, reservation status
-#    - get_top_shortage_items(rank_by)   — materials ranked by value/frequency
-#    Tool calls are executed server-side in _execute_ai_tool() with NO external
-#    HTTP calls — data comes from context dict (simulation snapshot).
+#  CONTEXT SPLIT: what goes to LLM vs what stays for tool lookup
+#  ──────────────────────────────────────────────────────────────
+#  compress_context_for_ai() returns a dict with TWO logical sections:
 #
-#  Token budget per call (DeepSeek-V3 pricing ~$0.27/1M input tokens):
-#    System prompt    ~220 tokens
-#    Context          ~400 tokens
-#    Chat history     ~300 tokens (14 messages max)
-#    User message     ~50-100 tokens
-#    Response         ~700 tokens max
-#    Total            ~1700 tokens → ~$0.001 per call
+#    ┌─ SUMMARY (goes to LLM system message) ──────────────────────────┐
+#    │  company, date, stock_mode, calc_mode, summary counts,           │
+#    │  critical_wos (top 5), dispatch_alerts (top 5),                  │
+#    │  top_shortages (top 5 materials by value)                        │
+#    │  → ~400 tokens total, fits comfortably in DeepSeek context       │
+#    └──────────────────────────────────────────────────────────────────┘
+#    ┌─ TOOL DATA (NOT sent to LLM — kept in context dict only) ───────┐
+#    │  "rows"     — full simulation rows for all WOs (can be 300+ rows │
+#    │               each with shortage_items arrays — 100k+ tokens)    │
+#    │  "dispatch" — per-item dispatch data dict                        │
+#    │  → used exclusively by _execute_ai_tool() for function-call      │
+#    │    lookups when DeepSeek calls get_wo_shortage_detail() etc.     │
+#    └──────────────────────────────────────────────────────────────────┘
 #
-#  Error handling in _execute_chat_with_tools():
-#    Timeout         → user-friendly "timed out" message
-#    ConnectionError → "cannot reach DeepSeek" message (network/firewall)
-#    HTTP 401        → "invalid API key" → check TOC Settings / site_config
-#    HTTP 402        → "insufficient balance" → top up at platform.deepseek.com
-#    HTTP 4xx/5xx    → logged to Frappe Error Log as "WKP AI DeepSeek Error"
-#    Other errors    → logged with full traceback as "WKP AI"
+#  CRITICAL: chat_with_planner() and get_ai_auto_insight() MUST strip
+#  "rows" and "dispatch" before building the system message:
+#    context_for_ai = {k: v for k, v in context.items()
+#                      if k not in ("rows", "dispatch")}
+#  Sending "rows" to the LLM causes HTTP 400 from DeepSeek because the
+#  payload exceeds the context window (306 WOs × ~10 shortage items each).
+#  The full context (with rows/dispatch) is still passed to
+#  _execute_chat_with_tools() so _execute_ai_tool() can look up detail.
 #
-#  Diagnostic: test_deepseek_connection() — call this whitelist method to verify
-#    the API key and network connectivity without running a full simulation.
+#  SESSION PERSISTENCE
+#  ───────────────────
+#  Redis key: "wkp:chat:{user}:{session_id}"
+#  - Only user+assistant messages are stored; system prompt is regenerated
+#    fresh on each call from the current simulation snapshot.
+#  - TTL: 2 hours (_AI_SESSION_TTL).
+#  - History capped at _AI_MAX_HISTORY (14 messages) to bound token cost.
+#  - Session UUID is generated in JS and stored in sessionStorage
+#    ("wkp_ai_session") — survives tab navigation, resets on page refresh.
+#
+#  FUNCTION CALLING (3 tools — defined in _AI_TOOLS below)
+#  ────────────────────────────────────────────────────────
+#  Tool                      When called
+#  ─────────────────────────────────────────────────────────────────
+#  get_wo_shortage_detail    User asks about a specific WO name
+#  get_dispatch_detail       User asks about dispatch / a specific product
+#  get_top_shortage_items    User asks what to buy / procurement planning
+#
+#  - Max _AI_MAX_TOOL_CALLS (3) tool calls per exchange to prevent loops.
+#  - Tool execution is 100% server-side in _execute_ai_tool() — no external
+#    HTTP calls; data comes directly from the context dict (rows/dispatch).
+#  - Tool results are JSON-serialised and appended as "tool" role messages.
+#
+#  TOKEN BUDGET PER CALL (DeepSeek-V3 ~$0.27/1M input tokens)
+#  ────────────────────────────────────────────────────────────
+#  System prompt (static)    ~220 tokens
+#  Context summary           ~400 tokens
+#  Chat history (14 msgs)    ~300 tokens
+#  User message              ~50–100 tokens
+#  AI response (max_tokens)  ~700 tokens
+#  ─────────────────────────────────────────────────────────────────
+#  Total per call            ~1700 tokens → ~$0.001 per exchange
+#
+#  ERROR HANDLING IN _execute_chat_with_tools()
+#  ─────────────────────────────────────────────
+#  Timeout (40s)    → user-friendly retry message
+#  ConnectionError  → "cannot reach api.deepseek.com" + logged as "WKP AI"
+#  HTTP 401         → "invalid API key" — check TOC Settings / site_config.json
+#  HTTP 402         → "insufficient balance" — top up at platform.deepseek.com
+#  HTTP 429         → "rate limit reached" — wait and retry
+#  HTTP 400         → bad request — usually oversized payload (check context split)
+#  Other HTTP 4xx/5xx → logged to Error Log as "WKP AI DeepSeek Error"
+#  Other exceptions → logged with full traceback as "WKP AI"
+#  All user-facing messages name the Error Log title for fast triage.
+#
+#  DIAGNOSTIC
+#  ──────────
+#  test_deepseek_connection() — whitelisted endpoint (System Manager / TOC Manager).
+#  Verifies key resolution + network + DeepSeek response without a full simulation.
+#  Call from browser console:
+#    frappe.call({method: 'chaizup_toc.api.wo_kitting_api.test_deepseek_connection',
+#                 callback: r => console.log(r.message)})
+#  Returns: {ok, message, model, base_url, key_source}
+#
+#  ERROR LOG TITLES
+#  ─────────────────
+#  "WKP AI DeepSeek Error"  — HTTP errors from DeepSeek (4xx/5xx), includes status + body
+#  "WKP AI"                 — Connection errors + unexpected exceptions, includes traceback
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  🔒 RESTRICTED — do not change without updating wo_kitting_planner.js:
-#    chat_with_planner()  return schema: {reply, session_id, is_html}
-#    get_ai_auto_insight() return schema: {insight, is_html}
+#  SCHEMA CONTRACT — do not change without updating wo_kitting_planner.js:
+#    chat_with_planner()   return: {reply: str, session_id: str, is_html: bool}
+#    get_ai_auto_insight() return: {insight: str, is_html: bool}
+#    compress_context_for_ai() return: summary keys + "rows" + "dispatch"
 #  ══════════════════════════════════════════════════════════════════════
 
 # ── System prompt (sent with EVERY call — keep short to minimise cost) ──
+#
+#  DESIGN RATIONALE:
+#  - Audience clause: factory managers know the shop floor but may use colloquial terms
+#    ("recipe" instead of BOM). The glossary in rule 7 prevents AI from responding in
+#    raw ERP jargon that confuses non-technical users.
+#  - HTML output rules (2-5): the JS client renders AI replies via innerHTML after
+#    _sanitizeAIHtml() strips script/iframe/on* tags. The CSS classes wkp-ai-table,
+#    wkp-ai-ok, wkp-ai-warn, wkp-ai-err, wkp-ai-actions are defined in
+#    wo_kitting_planner.css. Do NOT use inline styles — they get stripped.
+#  - Tool-call rule (6): without this constraint the AI calls tools eagerly on
+#    every question, including ones already answerable from the ~400-token summary.
+#    That adds a round-trip (extra API call + latency + cost) for no benefit.
+#    The rule makes tools a last resort: only for per-WO or per-item detail that
+#    is not in the summary (it IS in context["rows"] / context["dispatch"]).
+#  - Temperature 0.25: keeps answers factual and reproducible. Higher temperatures
+#    cause the AI to "hallucinate" quantities and WO names. Do not raise above 0.4.
+#  - max_tokens 700: keeps per-call cost at ~$0.001. Increase only if users
+#    regularly report truncated answers.
+#
 _AI_SYSTEM_PROMPT = (
     "You are a production planning advisor for a food/FMCG manufacturing factory using ERPNext.\n"
     "You analyse Work Order kitting and dispatch data to help production managers make fast decisions.\n\n"
     "AUDIENCE: Factory manager — knows the business but may not know ERP terminology.\n\n"
-    "RESPONSE RULES:\n"
-    "1. Be concise. Lead with the answer. Max 3 short paragraphs unless a table is needed.\n"
-    "2. Use HTML tables ONLY for comparisons with 3+ rows of structured data. Format:\n"
+    "OUTPUT FORMAT — ALWAYS HTML (never plain text):\n"
+    "1. Lead with the answer. Use <p> or inline HTML for 1-3 sentence summaries.\n"
+    "   <span class=\"wkp-ai-ok\">text</span> = good news / on track\n"
+    "   <span class=\"wkp-ai-warn\">text</span> = warning / needs attention\n"
+    "   <span class=\"wkp-ai-err\">text</span> = critical / immediate action needed\n"
+    "   <strong>text</strong> = urgent items, deadlines, critical quantities\n"
+    "2. For comparisons or lists of 3+ items, use an HTML table:\n"
     "   <table class=\"wkp-ai-table\"><thead><tr><th>Col</th></tr></thead>"
     "<tbody><tr><td>Val</td></tr></tbody></table>\n"
-    "3. Use <strong>text</strong> for urgent items, deadlines, or critical quantities.\n"
-    "4. Mark good things:   <span class=\"wkp-ai-ok\">text</span>\n"
-    "   Mark warnings:      <span class=\"wkp-ai-warn\">text</span>\n"
-    "   Mark critical items: <span class=\"wkp-ai-err\">text</span>\n"
-    "5. ALWAYS end with numbered action steps:\n"
+    "   ALWAYS include the item name (what is being produced / what material is short).\n"
+    "   Include WO number as secondary info, not the primary identifier.\n"
+    "3. ALWAYS end with numbered action steps:\n"
     "   <ol class=\"wkp-ai-actions\"><li>Action 1</li><li>Action 2</li></ol>\n"
-    "6. Call a function tool ONLY when the user asks about a SPECIFIC Work Order name\n"
+    "4. Call a function tool ONLY when the user asks about a SPECIFIC Work Order name\n"
     "   (use get_wo_shortage_detail), a SPECIFIC finished item (use get_dispatch_detail),\n"
     "   or procurement planning for ALL materials (use get_top_shortage_items).\n"
     "   Do NOT call tools for general questions answerable from simulation summary.\n"
-    "7. ERPNext terms: WO=Work Order, BOM=Bill of Materials (recipe),\n"
-    "   MR=Material Request (replenishment order), PO=Purchase Order (external order).\n"
+    "5. When citing quantities, show BOTH the primary UOM and higher UOM if present.\n"
+    "   Example: '5000 g (5 kg)' or '500 units (42 dozen)'.\n"
+    "   The data already includes secondary_uom and secondary_factor fields.\n"
+    "6. ERPNext terms: WO=Work Order, BOM=Bill of Materials (recipe),\n"
+    "   MR=Material Request (replenishment order), PO=Purchase Order (supplier order).\n"
     "   Kit status: ok=fully ready to start, partial=some materials missing,\n"
-    "   block=cannot start (critical shortage), kitted=already issued to floor.\n"
-    "8. Currency is INR. Quantities are in the item's stock UOM.\n"
+    "   block=cannot start (critical shortage), kitted=already transferred to floor.\n"
+    "7. Currency is INR. procurement_stage: Short=no action taken, MR Raised=requested,\n"
+    "   PO Raised=ordered from supplier, In Production=being manufactured.\n"
+    "8. received_qty_po = quantity already received from open POs (supply arriving).\n"
+    "   This reduces the effective shortage — mention it when relevant.\n"
 )
 
 # ── Tool definitions for DeepSeek function calling ──
+#
+#  These JSON schemas are sent to DeepSeek in every chat_with_planner() call.
+#  DeepSeek decides autonomously whether to call a tool based on the user's message
+#  and the tool description. When it calls a tool:
+#    1. DeepSeek returns finish_reason="tool_calls" with a tool_calls list.
+#    2. _execute_chat_with_tools() detects this, calls _execute_ai_tool() server-side.
+#    3. The result is appended as a {"role": "tool", ...} message.
+#    4. DeepSeek is called again with the tool result; it produces the final reply.
+#
+#  HOW TO WRITE GOOD TOOL DESCRIPTIONS:
+#  - "description" is the only signal DeepSeek uses to decide WHEN to call the tool.
+#    Be explicit about trigger phrases ("when the user asks about a specific WO name").
+#  - Parameter "description" fields guide argument extraction from natural language.
+#    Include a concrete example (e.g. "WO-00123").
+#
+#  _execute_ai_tool() serves all three tools from the in-memory context dict (rows +
+#  dispatch) passed through _execute_chat_with_tools() — no additional DB calls.
+#  context["rows"]     → source for get_wo_shortage_detail and get_top_shortage_items
+#  context["dispatch"] → source for get_dispatch_detail
+#
 _AI_TOOLS = [
     {
         "type": "function",
@@ -1512,21 +1770,45 @@ _AI_TOOLS = [
 # ─────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def chat_with_planner(message, session_id, context_json):
+def get_available_ai_models():
+    """
+    Return the list of available DeepSeek models with cost estimates.
+    Called by JS on AI panel init to populate the model selector.
+
+    Returns:
+        list: [{"id": model_id, "name": str, "description": str,
+                "est_cost_per_call": float, "est_tokens_per_call": int}]
+    """
+    return [
+        {
+            "id"                : model_id,
+            "name"              : cfg["name"],
+            "description"       : cfg["description"],
+            "est_cost_per_call" : cfg["est_cost_per_call"],
+            "est_tokens_per_call": cfg["est_tokens_per_call"],
+        }
+        for model_id, cfg in DEEPSEEK_MODELS.items()
+    ]
+
+
+@frappe.whitelist()
+def chat_with_planner(message, session_id, context_json, model=None):
     """
     AI chat endpoint with session memory and DeepSeek function calling.
 
     The client sends:
       message     str   User's plain-language question
       session_id  str   UUID generated by the browser (persisted in sessionStorage)
-      context_json str  JSON with compressed simulation snapshot (from _compress_context)
+      context_json str  JSON with compressed simulation snapshot (from compress_context_for_ai)
+      model       str   Optional DeepSeek model ID (default: DEEPSEEK_MODEL constant)
+                        See DEEPSEEK_MODELS for valid IDs.
 
     Session is stored in Redis cache keyed per user+session_id. Older messages
     are pruned to _AI_MAX_HISTORY to keep token counts bounded.
 
     Returns:
         dict: {
-            reply:      str   AI response (may contain HTML)
+            reply:      str   AI response (HTML-formatted)
             session_id: str   Echo back the session_id
             is_html:    bool  True if reply contains HTML tags
         }
@@ -1561,8 +1843,12 @@ def chat_with_planner(message, session_id, context_json):
     }
     messages = [system_msg] + history + [{"role": "user", "content": str(message)}]
 
+    # Resolve model (caller-specified → constant default)
+    effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
+
     # Run with function-calling loop
-    reply_text, updated_messages = _execute_chat_with_tools(messages, context, api_key)
+    reply_text, updated_messages = _execute_chat_with_tools(messages, context, api_key,
+                                                             model=effective_model)
 
     # Prune to last N messages (exclude system) and save back
     new_history = [m for m in updated_messages if m.get("role") != "system"]
@@ -1578,18 +1864,23 @@ def chat_with_planner(message, session_id, context_json):
 
 
 @frappe.whitelist()
-def get_ai_auto_insight(context_json):
+def get_ai_auto_insight(context_json, model=None):
     """
     Stateless AI briefing called once after each simulation completes.
 
     No session — each call is independent. The AI analyses the compressed
-    simulation snapshot and returns a structured briefing:
+    simulation snapshot and returns a structured HTML briefing:
       - Overall situation (1-2 sentences)
-      - Top 3 issues requiring immediate action
-      - Recommended next steps
+      - Top 3-5 issues table with Item Name, WO, Impact, Action columns
+      - 3 numbered action steps as <ol class="wkp-ai-actions">
+
+    Args:
+        context_json (str): Compressed simulation context from compress_context_for_ai()
+        model (str): Optional DeepSeek model ID. Defaults to DEEPSEEK_MODEL.
+                     Use "deepseek-reasoner" for deeper analysis.
 
     Returns:
-        dict: {insight: str (may contain HTML), is_html: bool}
+        dict: {insight: str (HTML-formatted), is_html: bool}
     """
     api_key = _get_api_key()
     if not api_key or api_key.startswith("YOUR_"):
@@ -1604,11 +1895,22 @@ def get_ai_auto_insight(context_json):
 
     context = frappe.parse_json(context_json) if isinstance(context_json, str) else (context_json or {})
 
+    # Resolve model
+    effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
+
+    # Auto-insight prompt — always HTML output, reference item names not just WO numbers
     prompt = (
         "Give me a production briefing based on this simulation data. "
-        "Format: 1 sentence overall status, then a short HTML table of top 3-5 issues "
-        "(columns: Issue | Impact | Action), then 3 numbered action steps. "
-        "Be direct — no preamble."
+        "REQUIRED FORMAT (always HTML — never plain text):\n"
+        "1. One sentence overall status (use <span class=\"wkp-ai-ok/warn/err\"> for tone).\n"
+        "2. HTML table of top 3-5 issues: "
+        "<table class=\"wkp-ai-table\"><thead><tr>"
+        "<th>Item Name</th><th>Work Order</th><th>Impact</th><th>Action</th>"
+        "</tr></thead><tbody>...</tbody></table>\n"
+        "   Always show the ITEM NAME (what is being produced), not just the WO number.\n"
+        "   Impact = quantity/value at risk. Action = concrete step.\n"
+        "3. <ol class=\"wkp-ai-actions\"><li>Action 1</li><li>Action 2</li><li>Action 3</li></ol>\n"
+        "Be direct — no preamble, no sign-off."
     )
 
     # rows/dispatch are for _execute_ai_tool() lookups only — do NOT send to LLM
@@ -1624,7 +1926,7 @@ def get_ai_auto_insight(context_json):
 
     # Auto-insight: no function calling (pure analysis, faster)
     try:
-        result = _call_deepseek(messages, tools=None, api_key=api_key)
+        result = _call_deepseek(messages, tools=None, api_key=api_key, model=effective_model)
         reply  = result["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         frappe.log_error(f"WKP AI auto-insight error: {exc}", "WKP AI")
@@ -1739,7 +2041,7 @@ def _get_api_key():
     return None
 
 
-def _call_deepseek(messages, tools=None, api_key=None):
+def _call_deepseek(messages, tools=None, api_key=None, model=None):
     """
     Low-level DeepSeek chat completion call via requests.
 
@@ -1747,19 +2049,27 @@ def _call_deepseek(messages, tools=None, api_key=None):
         messages  list  Full message list (system + history + user)
         tools     list  Optional tool definitions for function calling
         api_key   str   DeepSeek API key
+        model     str   Model ID (see DEEPSEEK_MODELS). Defaults to DEEPSEEK_MODEL.
+
+    The model controls max_tokens and temperature via DEEPSEEK_MODELS config:
+        deepseek-chat     → max_tokens=700,  temperature=0.25  (fast, factual)
+        deepseek-reasoner → max_tokens=2000, temperature=0.6   (deep reasoning)
 
     Returns:
         dict: Raw DeepSeek API response JSON
     """
+    effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
+    model_cfg       = DEEPSEEK_MODELS.get(effective_model, DEEPSEEK_MODELS[DEEPSEEK_MODEL])
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model"       : DEEPSEEK_MODEL,
+        "model"       : effective_model,
         "messages"    : messages,
-        "max_tokens"  : 700,
-        "temperature" : 0.25,   # low temperature = focused, factual answers
+        "max_tokens"  : model_cfg["max_tokens"],
+        "temperature" : model_cfg["temperature"],
         "stream"      : False,
     }
     if tools:
@@ -1786,7 +2096,7 @@ def _call_deepseek(messages, tools=None, api_key=None):
     return resp.json()
 
 
-def _execute_chat_with_tools(messages, context, api_key):
+def _execute_chat_with_tools(messages, context, api_key, model=None):
     """
     Run the function-calling loop: send messages, execute any tool calls,
     and return the final text reply + updated message list.
@@ -1795,6 +2105,7 @@ def _execute_chat_with_tools(messages, context, api_key):
         messages list   Full message list to send
         context  dict   Compressed simulation context (for tool data lookup)
         api_key  str    DeepSeek API key
+        model    str    Optional model override (see DEEPSEEK_MODELS)
 
     Returns:
         tuple: (reply_text: str, updated_messages: list)
@@ -1803,7 +2114,7 @@ def _execute_chat_with_tools(messages, context, api_key):
 
     try:
         while tool_calls_made <= _AI_MAX_TOOL_CALLS:
-            result   = _call_deepseek(messages, _AI_TOOLS, api_key)
+            result   = _call_deepseek(messages, _AI_TOOLS, api_key, model=model)
             choice   = result["choices"][0]
             msg      = choice["message"]
             finish   = choice.get("finish_reason", "stop")
@@ -1882,15 +2193,33 @@ def _execute_chat_with_tools(messages, context, api_key):
 
 def _execute_ai_tool(fn_name, fn_args, context):
     """
-    Execute a function-call tool and return structured data for the AI.
+    Execute a DeepSeek function-call tool and return data for the AI's next message.
 
-    Tools have access to:
-      - context["rows"]       — full simulation rows (if present)
-      - context["dispatch"]   — dispatch data per item
-      - Live DB for shortage detail
+    Called by _execute_chat_with_tools() whenever DeepSeek returns
+    finish_reason="tool_calls". The result is JSON-serialised and appended
+    as a {"role": "tool", "tool_call_id": ..., "content": ...} message so
+    DeepSeek can incorporate the detail into its final reply.
+
+    This function receives the FULL context dict (including "rows" and "dispatch")
+    because it needs them for data lookup. This is intentional — these keys are
+    intentionally excluded from the LLM system message (to avoid HTTP 400) but
+    are always available here for tool execution.
+
+    Data sources:
+      context["rows"]     — full simulation rows (each with shortage_items[])
+                            → used by get_wo_shortage_detail, get_top_shortage_items
+      context["dispatch"] — per-item dispatch dict
+                            → used by get_dispatch_detail
+      (No live DB calls — all data comes from the simulation snapshot.)
+
+    Args:
+        fn_name  str   One of: get_wo_shortage_detail, get_dispatch_detail,
+                               get_top_shortage_items
+        fn_args  dict  Arguments extracted by DeepSeek from the user's message
+        context  dict  Full compress_context_for_ai() result (rows + dispatch included)
 
     Returns:
-        dict: Result data (serialised to JSON before sending to DeepSeek)
+        dict: Structured result (serialised to JSON string before sending to DeepSeek)
     """
     try:
         if fn_name == "get_wo_shortage_detail":
@@ -1983,8 +2312,8 @@ def _execute_ai_tool(fn_name, fn_args, context):
 
 # ─────────────────────────────────────────────────────────────────────
 #  PUBLIC: Compress simulation data for AI context
-#  Called from wo_kitting_planner.js before every AI call.
-#  Returns a compact JSON that fits in ~400 tokens.
+#  Called from wo_kitting_planner.js after every simulate() completes.
+#  Returns a compact JSON used on every subsequent AI call.
 # ─────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
@@ -1992,12 +2321,34 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
     """
     Convert full simulation data into a compact AI context object.
 
-    This is called client-side after simulation completes. The client sends
-    the full rows + dispatch data; the server compresses it to a small summary
-    that is cheap to send to the AI on every chat message.
+    Called once after each simulate() from the JS client. The client sends the
+    full rows + dispatch data; the server distils it to a ~400-token summary and
+    also attaches the raw rows/dispatch for tool-call lookups.
+
+    RETURN STRUCTURE — two logical sections in one dict:
+
+    Summary (sent to LLM system message — ~400 tokens):
+        company, date, stock_mode, calc_mode
+        summary:          {total, ready, partial, blocked, kitted,
+                           total_shortage_val, total_pending_so}
+        critical_wos:     top-5 WOs by urgency (block/partial with highest SO demand)
+        dispatch_alerts:  top-5 items where pending orders > FG stock
+        top_shortages:    top-5 materials by INR shortage value
+
+    Tool data (NOT sent to LLM — for _execute_ai_tool() lookups only):
+        rows:     full simulation row list, each with shortage_items[]
+        dispatch: per-item dispatch dict {item_code: {fg_stock, total_pending, so_list, ...}}
+
+    WHY THE SPLIT?
+    Sending "rows" (300+ WOs × ~10 shortage items) in the system message
+    causes HTTP 400 from DeepSeek — the payload exceeds the context window.
+    chat_with_planner() and get_ai_auto_insight() must ALWAYS strip rows/dispatch
+    from context before building the system message:
+        context_for_ai = {k: v for k, v in context.items()
+                          if k not in ("rows", "dispatch")}
 
     Returns:
-        dict: Compact context (also includes 'rows' and 'dispatch' for tool use)
+        dict: summary keys + "rows" + "dispatch"
     """
     rows     = frappe.parse_json(simulation_rows_json) if isinstance(simulation_rows_json, str) else (simulation_rows_json or [])
     dispatch = frappe.parse_json(dispatch_json) if isinstance(dispatch_json, str) else (dispatch_json or {})
@@ -2044,7 +2395,8 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
         if flt(v.get("total_pending", 0)) > flt(v.get("fg_stock", 0)) + 0.01
     ][:5]
 
-    # Top shortage materials by value (for context)
+    # Top shortage materials by value — include supply chain status for AI decisions
+    # AI needs to know: how much is short, how much is on order, how much is already received
     agg_shortages = {}
     for r in rows:
         for si in (r.get("shortage_items") or []):
@@ -2053,16 +2405,36 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
             ic = si.get("item_code", "")
             if ic not in agg_shortages:
                 agg_shortages[ic] = {
-                    "name" : si.get("item_name", ic)[:30],
-                    "value": 0.0,
-                    "wos"  : 0,
+                    "name"        : si.get("item_name", ic)[:30],
+                    "uom"         : si.get("uom", ""),
+                    "value"       : 0.0,
+                    "wos"         : 0,
+                    "po_qty"      : flt(si.get("po_qty", 0)),
+                    "mr_qty"      : flt(si.get("mr_qty", 0)),
+                    "received_qty": flt(si.get("received_qty_po", 0)),
+                    "shortage_qty": 0.0,
                 }
-            agg_shortages[ic]["value"] += flt(si.get("shortage_value", 0))
-            agg_shortages[ic]["wos"]   += 1
+            agg_shortages[ic]["value"]        += flt(si.get("shortage_value", 0))
+            agg_shortages[ic]["shortage_qty"] += flt(si.get("shortage", 0))
+            agg_shortages[ic]["wos"]          += 1
+            # Take max for PO/MR/received (same item, same supply state across WOs)
+            agg_shortages[ic]["po_qty"]       = max(agg_shortages[ic]["po_qty"], flt(si.get("po_qty", 0)))
+            agg_shortages[ic]["mr_qty"]       = max(agg_shortages[ic]["mr_qty"], flt(si.get("mr_qty", 0)))
+            agg_shortages[ic]["received_qty"] = max(agg_shortages[ic]["received_qty"], flt(si.get("received_qty_po", 0)))
 
-    top_shortages = sorted(agg_shortages.values(), key=lambda x: -x["value"])[:5]
+    top_shortages = sorted(agg_shortages.values(), key=lambda x: -x["value"])[:8]
     top_shortages = [
-        {"material": s["name"], "value_inr": round(s["value"], 0), "affecting_wos": s["wos"]}
+        {
+            "material"     : s["name"],
+            "uom"          : s["uom"],
+            "shortage_qty" : round(s["shortage_qty"], 1),
+            "value_inr"    : round(s["value"], 0),
+            "affecting_wos": s["wos"],
+            "po_qty"       : round(s["po_qty"], 1),
+            "mr_qty"       : round(s["mr_qty"], 1),
+            "received_qty" : round(s["received_qty"], 1),
+            "net_gap"      : round(max(0, s["shortage_qty"] - s["po_qty"] - s["mr_qty"]), 1),
+        }
         for s in top_shortages
     ]
 
