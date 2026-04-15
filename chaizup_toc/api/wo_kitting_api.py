@@ -1552,9 +1552,12 @@ def chat_with_planner(message, session_id, context_json):
     history    = frappe.cache().get_value(cache_key) or []
 
     # Build full message list: system + history + new user message
+    # rows/dispatch are for _execute_ai_tool() lookups only — do NOT send to LLM
+    # (sending all WOs with shortage_items would exceed the context window → HTTP 400)
+    context_for_ai = {k: v for k, v in context.items() if k not in ("rows", "dispatch")}
     system_msg = {
         "role": "system",
-        "content": _AI_SYSTEM_PROMPT + "\n\nCURRENT SIMULATION DATA:\n" + json.dumps(context, default=str),
+        "content": _AI_SYSTEM_PROMPT + "\n\nCURRENT SIMULATION DATA:\n" + json.dumps(context_for_ai, default=str),
     }
     messages = [system_msg] + history + [{"role": "user", "content": str(message)}]
 
@@ -1608,10 +1611,13 @@ def get_ai_auto_insight(context_json):
         "Be direct — no preamble."
     )
 
+    # rows/dispatch are for _execute_ai_tool() lookups only — do NOT send to LLM
+    # (sending all WOs with shortage_items would exceed the context window → HTTP 400)
+    context_for_ai = {k: v for k, v in context.items() if k not in ("rows", "dispatch")}
     messages = [
         {
             "role": "system",
-            "content": _AI_SYSTEM_PROMPT + "\n\nCURRENT SIMULATION DATA:\n" + json.dumps(context, default=str),
+            "content": _AI_SYSTEM_PROMPT + "\n\nCURRENT SIMULATION DATA:\n" + json.dumps(context_for_ai, default=str),
         },
         {"role": "user", "content": prompt},
     ]
