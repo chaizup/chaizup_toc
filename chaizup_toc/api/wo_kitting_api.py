@@ -1601,7 +1601,7 @@ def _get_api_key():
     Resolve DeepSeek API key via fallback hierarchy:
       1. DEEPSEEK_API_KEY constant (this file)
       2. frappe.conf.deepseek_api_key (site_config.json)
-      3. TOC Settings custom_deepseek_api_key field
+      3. TOC Settings custom_deepseek_api_key field (Password fieldtype — use get_decrypted_password)
     """
     if DEEPSEEK_API_KEY and not DEEPSEEK_API_KEY.startswith("YOUR_"):
         return DEEPSEEK_API_KEY
@@ -1609,7 +1609,10 @@ def _get_api_key():
     if key:
         return key
     try:
-        key = frappe.db.get_single_value("TOC Settings", "custom_deepseek_api_key")
+        from frappe.utils.password import get_decrypted_password
+        key = get_decrypted_password(
+            "TOC Settings", "TOC Settings", "custom_deepseek_api_key", raise_exception=False
+        )
         if key:
             return key
     except Exception:
@@ -1650,6 +1653,16 @@ def _call_deepseek(messages, tools=None, api_key=None):
         json=payload,
         timeout=40,
     )
+    if not resp.ok:
+        try:
+            err_body = resp.json().get("error", {})
+            err_msg = err_body.get("message", resp.text[:400])
+        except Exception:
+            err_msg = resp.text[:400]
+        frappe.log_error(
+            f"DeepSeek API {resp.status_code}: {err_msg}",
+            "WKP AI DeepSeek Error",
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -1698,11 +1711,17 @@ def _execute_chat_with_tools(messages, context, api_key):
     except _requests.exceptions.Timeout:
         return "<span class=\"wkp-ai-warn\">AI response timed out. Please try again.</span>", messages
     except _requests.exceptions.HTTPError as exc:
-        status = exc.response.status_code if exc.response else "?"
+        status = exc.response.status_code if exc.response is not None else "?"
         if status == 401:
             return (
                 "<span class=\"wkp-ai-err\">Invalid DeepSeek API key. "
-                "Update DEEPSEEK_API_KEY in wo_kitting_api.py.</span>",
+                "Update it in <b>TOC Settings → DeepSeek API Key</b>.</span>",
+                messages,
+            )
+        if status == 402:
+            return (
+                "<span class=\"wkp-ai-err\">DeepSeek account has insufficient balance. "
+                "Top up at platform.deepseek.com.</span>",
                 messages,
             )
         frappe.log_error(f"WKP AI HTTP error {status}: {exc}", "WKP AI")
