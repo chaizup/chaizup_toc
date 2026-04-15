@@ -1898,7 +1898,7 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
         for s in top_shortages
     ]
 
-    company = frappe.defaults.get_default("company") or ""
+    company = frappe.db.get_default("company") or ""
 
     # Compact summary (sent to AI in system prompt — ~400 tokens)
     summary = {
