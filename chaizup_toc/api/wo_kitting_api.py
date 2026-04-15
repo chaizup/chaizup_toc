@@ -119,9 +119,9 @@ from frappe.utils import add_days, cint, flt, today
 #    3. TOC Settings → custom_deepseek_api_key field
 # ═══════════════════════════════════════════════════════════════════════
 
-DEEPSEEK_API_KEY  = "YOUR_DEEPSEEK_API_KEY_HERE"  # <-- SET THIS
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL    = "deepseek-chat"  # DeepSeek-V3: best cost/quality
+DEEPSEEK_API_KEY  = "YOUR_DEEPSEEK_API_KEY_HERE"  # <-- SET THIS (or use site_config / TOC Settings)
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"    # DeepSeek canonical URL; /v1 prefix also works
+DEEPSEEK_MODEL    = "deepseek-chat"               # DeepSeek-V3-0324: best cost/quality for production
 
 # Chat session TTL in Redis cache (seconds). 2 hours.
 _AI_SESSION_TTL = 7200
@@ -1359,25 +1359,52 @@ def _get_dn_detail(item_codes, so_names):
 #
 #  ARCHITECTURE
 #  ─────────────
+#  API: DeepSeek-V3 (model: deepseek-chat) via OpenAI-compatible REST.
+#    Base URL: https://api.deepseek.com
+#    Endpoint: POST /chat/completions
+#    Auth: Bearer <api_key> in Authorization header
+#    DeepSeek docs: https://api-docs.deepseek.com/
+#
+#  API Key resolution (first non-empty wins):
+#    1. DEEPSEEK_API_KEY constant (this file — dev only, never commit real key)
+#    2. frappe.conf.deepseek_api_key (site_config.json — RECOMMENDED for production)
+#       Frappe Cloud: add via Site Config → Custom Key, Type=String
+#    3. TOC Settings → DeepSeek API Key (Password fieldtype, stored encrypted)
+#       Read via frappe.utils.password.get_decrypted_password()
+#
 #  Session persistence: Redis cache (frappe.cache()) keyed per user+session_id.
 #    - Only user+assistant messages are stored (system prompt regenerated each call).
-#    - TTL: 2 hours. Older messages pruned to _AI_MAX_HISTORY to control cost.
+#    - TTL: 2 hours (_AI_SESSION_TTL). Older messages pruned to _AI_MAX_HISTORY.
 #
 #  Context compression: Full simulation data (~50+ rows) is compressed to a
 #    ~400-token JSON summary before sending to the AI. This keeps cost minimal.
+#    Called from JS via compress_context_for_ai() before every AI call.
 #
 #  Function calling: DeepSeek is given 3 tools to fetch detail on demand:
 #    - get_wo_shortage_detail(wo_name)   — BOM component breakdown for a WO
 #    - get_dispatch_detail(item_code)    — SO list, pick list, reservation status
 #    - get_top_shortage_items(rank_by)   — materials ranked by value/frequency
+#    Tool calls are executed server-side in _execute_ai_tool() with NO external
+#    HTTP calls — data comes from context dict (simulation snapshot).
 #
-#  Token budget per call:
-#    System prompt    ~180 tokens
+#  Token budget per call (DeepSeek-V3 pricing ~$0.27/1M input tokens):
+#    System prompt    ~220 tokens
 #    Context          ~400 tokens
 #    Chat history     ~300 tokens (14 messages max)
 #    User message     ~50-100 tokens
-#    Response         ~600 tokens max
-#    Total            ~1500 tokens → < $0.001 per call (DeepSeek pricing)
+#    Response         ~700 tokens max
+#    Total            ~1700 tokens → ~$0.001 per call
+#
+#  Error handling in _execute_chat_with_tools():
+#    Timeout         → user-friendly "timed out" message
+#    ConnectionError → "cannot reach DeepSeek" message (network/firewall)
+#    HTTP 401        → "invalid API key" → check TOC Settings / site_config
+#    HTTP 402        → "insufficient balance" → top up at platform.deepseek.com
+#    HTTP 4xx/5xx    → logged to Frappe Error Log as "WKP AI DeepSeek Error"
+#    Other errors    → logged with full traceback as "WKP AI"
+#
+#  Diagnostic: test_deepseek_connection() — call this whitelist method to verify
+#    the API key and network connectivity without running a full simulation.
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  🔒 RESTRICTED — do not change without updating wo_kitting_planner.js:
@@ -1391,20 +1418,25 @@ _AI_SYSTEM_PROMPT = (
     "You analyse Work Order kitting and dispatch data to help production managers make fast decisions.\n\n"
     "AUDIENCE: Factory manager — knows the business but may not know ERP terminology.\n\n"
     "RESPONSE RULES:\n"
-    "1. Be concise. Max 3 paragraphs unless a table is needed.\n"
-    "2. Use HTML tables ONLY for comparisons (3+ rows of data). Format:\n"
+    "1. Be concise. Lead with the answer. Max 3 short paragraphs unless a table is needed.\n"
+    "2. Use HTML tables ONLY for comparisons with 3+ rows of structured data. Format:\n"
     "   <table class=\"wkp-ai-table\"><thead><tr><th>Col</th></tr></thead>"
     "<tbody><tr><td>Val</td></tr></tbody></table>\n"
-    "3. Use <strong>text</strong> for urgent items.\n"
-    "4. Mark good things: <span class=\"wkp-ai-ok\">text</span>\n"
-    "   Mark warnings:    <span class=\"wkp-ai-warn\">text</span>\n"
-    "   Mark critical:    <span class=\"wkp-ai-err\">text</span>\n"
+    "3. Use <strong>text</strong> for urgent items, deadlines, or critical quantities.\n"
+    "4. Mark good things:   <span class=\"wkp-ai-ok\">text</span>\n"
+    "   Mark warnings:      <span class=\"wkp-ai-warn\">text</span>\n"
+    "   Mark critical items: <span class=\"wkp-ai-err\">text</span>\n"
     "5. ALWAYS end with numbered action steps:\n"
     "   <ol class=\"wkp-ai-actions\"><li>Action 1</li><li>Action 2</li></ol>\n"
-    "6. Call functions when the user asks about a SPECIFIC Work Order or item.\n"
-    "7. ERPNext terms to know: WO=Work Order, BOM=Bill of Materials (recipe),\n"
-    "   MR=Material Request (internal purchase order), PO=Purchase Order.\n"
-    "   Kit status: ok=ready, partial=some missing, block=cannot start, kitted=done.\n"
+    "6. Call a function tool ONLY when the user asks about a SPECIFIC Work Order name\n"
+    "   (use get_wo_shortage_detail), a SPECIFIC finished item (use get_dispatch_detail),\n"
+    "   or procurement planning for ALL materials (use get_top_shortage_items).\n"
+    "   Do NOT call tools for general questions answerable from simulation summary.\n"
+    "7. ERPNext terms: WO=Work Order, BOM=Bill of Materials (recipe),\n"
+    "   MR=Material Request (replenishment order), PO=Purchase Order (external order).\n"
+    "   Kit status: ok=fully ready to start, partial=some materials missing,\n"
+    "   block=cannot start (critical shortage), kitted=already issued to floor.\n"
+    "8. Currency is INR. Quantities are in the item's stock UOM.\n"
 )
 
 # ── Tool definitions for DeepSeek function calling ──
@@ -1504,8 +1536,10 @@ def chat_with_planner(message, session_id, context_json):
         return {
             "reply": (
                 "<span class=\"wkp-ai-warn\">AI Advisor is not configured.</span> "
-                "Set the DeepSeek API key in <code>wo_kitting_api.py</code> "
-                "(DEEPSEEK_API_KEY constant) or in TOC Settings."
+                "Add your DeepSeek API key via: "
+                "<b>TOC Settings → AI Advisor → DeepSeek API Key</b>, "
+                "or in Frappe site_config.json as <code>deepseek_api_key</code>. "
+                "Get a key at <b>platform.deepseek.com/api_keys</b>."
             ),
             "session_id": session_id,
             "is_html": True,
@@ -1559,7 +1593,8 @@ def get_ai_auto_insight(context_json):
         return {
             "insight": (
                 "<span class=\"wkp-ai-warn\">AI Advisor not configured.</span> "
-                "Set DEEPSEEK_API_KEY in wo_kitting_api.py to enable AI insights."
+                "Add your DeepSeek API key in TOC Settings → AI Advisor, "
+                "or as <code>deepseek_api_key</code> in site_config.json."
             ),
             "is_html": True,
         }
@@ -1590,6 +1625,84 @@ def get_ai_auto_insight(context_json):
         reply  = "<span class=\"wkp-ai-warn\">AI briefing unavailable. Check server logs.</span>"
 
     return {"insight": reply, "is_html": "<" in reply}
+
+
+@frappe.whitelist()
+def test_deepseek_connection():
+    """
+    Diagnostic endpoint: verify API key resolution and DeepSeek connectivity.
+
+    Call from browser console:
+        frappe.call({method: 'chaizup_toc.api.wo_kitting_api.test_deepseek_connection',
+                     callback: r => console.log(r.message)})
+
+    Returns:
+        dict: {ok: bool, message: str, model: str, key_source: str}
+    """
+    frappe.only_for(["System Manager", "TOC Manager"])
+
+    # 1. Resolve key and identify source
+    key_source = "none"
+    api_key = None
+
+    if DEEPSEEK_API_KEY and not DEEPSEEK_API_KEY.startswith("YOUR_"):
+        api_key = DEEPSEEK_API_KEY
+        key_source = "DEEPSEEK_API_KEY constant (file)"
+    elif getattr(frappe.conf, "deepseek_api_key", None):
+        api_key = frappe.conf.deepseek_api_key
+        key_source = "site_config.json (frappe.conf.deepseek_api_key)"
+    else:
+        try:
+            from frappe.utils.password import get_decrypted_password
+            k = get_decrypted_password(
+                "TOC Settings", "TOC Settings", "custom_deepseek_api_key", raise_exception=False
+            )
+            if k:
+                api_key = k
+                key_source = "TOC Settings → DeepSeek API Key"
+        except Exception:
+            pass
+
+    if not api_key or api_key.startswith("YOUR_"):
+        return {"ok": False, "message": "No API key configured.", "key_source": key_source}
+
+    # 2. Send a minimal test call to DeepSeek
+    try:
+        result = _requests.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": DEEPSEEK_MODEL,
+                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                "max_tokens": 5,
+                "temperature": 0,
+            },
+            timeout=15,
+        )
+        if not result.ok:
+            try:
+                err = result.json().get("error", {}).get("message", result.text[:200])
+            except Exception:
+                err = result.text[:200]
+            return {
+                "ok": False,
+                "message": f"DeepSeek returned HTTP {result.status_code}: {err}",
+                "key_source": key_source,
+            }
+        content = result.json()["choices"][0]["message"]["content"]
+        return {
+            "ok": True,
+            "message": f"Connection OK. DeepSeek replied: {content!r}",
+            "model": DEEPSEEK_MODEL,
+            "base_url": DEEPSEEK_BASE_URL,
+            "key_source": key_source,
+        }
+    except _requests.exceptions.ConnectionError as exc:
+        return {"ok": False, "message": f"Connection failed: {exc}", "key_source": key_source}
+    except _requests.exceptions.Timeout:
+        return {"ok": False, "message": "Connection timed out (15s).", "key_source": key_source}
+    except Exception as exc:
+        return {"ok": False, "message": f"Unexpected error: {exc}", "key_source": key_source}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1709,26 +1822,56 @@ def _execute_chat_with_tools(messages, context, api_key):
         return "Function call limit reached. Please rephrase your question.", messages
 
     except _requests.exceptions.Timeout:
-        return "<span class=\"wkp-ai-warn\">AI response timed out. Please try again.</span>", messages
+        return (
+            "<span class=\"wkp-ai-warn\">AI response timed out (40s). "
+            "DeepSeek may be under load — please try again in a moment.</span>",
+            messages,
+        )
+    except _requests.exceptions.ConnectionError as exc:
+        frappe.log_error(f"WKP AI connection error: {exc}", "WKP AI")
+        return (
+            "<span class=\"wkp-ai-err\">Cannot reach DeepSeek API.</span> "
+            "Check that your server can access <code>api.deepseek.com</code> "
+            "(outbound HTTPS port 443). See Error Log for details.",
+            messages,
+        )
     except _requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
         if status == 401:
             return (
-                "<span class=\"wkp-ai-err\">Invalid DeepSeek API key. "
-                "Update it in <b>TOC Settings → DeepSeek API Key</b>.</span>",
+                "<span class=\"wkp-ai-err\">Invalid or expired DeepSeek API key.</span> "
+                "Update it in <b>TOC Settings → AI Advisor → DeepSeek API Key</b> "
+                "or in site_config.json (<code>deepseek_api_key</code>).",
                 messages,
             )
         if status == 402:
             return (
-                "<span class=\"wkp-ai-err\">DeepSeek account has insufficient balance. "
-                "Top up at platform.deepseek.com.</span>",
+                "<span class=\"wkp-ai-err\">DeepSeek account has insufficient balance.</span> "
+                "Top up at <b>platform.deepseek.com</b>.",
                 messages,
             )
-        frappe.log_error(f"WKP AI HTTP error {status}: {exc}", "WKP AI")
-        return f"<span class=\"wkp-ai-warn\">AI service error (HTTP {status}). Try again later.</span>", messages
+        if status == 429:
+            return (
+                "<span class=\"wkp-ai-warn\">DeepSeek rate limit reached.</span> "
+                "Wait a moment and try again.",
+                messages,
+            )
+        frappe.log_error(f"WKP AI HTTP error {status}: {exc}", "WKP AI DeepSeek Error")
+        return (
+            f"<span class=\"wkp-ai-warn\">DeepSeek API error (HTTP {status}).</span> "
+            "See <b>Error Log → WKP AI DeepSeek Error</b> for details.",
+            messages,
+        )
     except Exception as exc:
-        frappe.log_error(f"WKP AI error: {exc}", "WKP AI")
-        return "<span class=\"wkp-ai-warn\">AI error. Check server logs.</span>", messages
+        import traceback
+        frappe.log_error(
+            f"WKP AI unexpected error: {exc}\n\n{traceback.format_exc()}",
+            "WKP AI",
+        )
+        return (
+            "<span class=\"wkp-ai-warn\">AI error. Check <b>Error Log → WKP AI</b> for details.</span>",
+            messages,
+        )
 
 
 def _execute_ai_tool(fn_name, fn_args, context):
