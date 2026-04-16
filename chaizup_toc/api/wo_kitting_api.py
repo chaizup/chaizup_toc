@@ -409,13 +409,8 @@ def create_purchase_mr_for_wo_shortages(items_json, company):
 def get_items_min_order_qty(item_codes_json):
     """
     Return the Minimum Order Qty (MOQ) for each supplied item code.
-
-    MOQ (min_order_qty on the Item master) is the smallest quantity a supplier
-    will accept per order. Used in the Material Shortage Report MR confirmation
-    dialog to suggest order quantities that satisfy supplier minimums.
-
-    If an item has no MOQ configured (0 or blank), it is returned as 0,
-    and the UI will suggest using the net shortage qty instead.
+    Kept for backward-compatibility — prefer get_items_procurement_info()
+    which also returns lead_time_days in one call.
 
     Args:
         item_codes_json (str): JSON array of item codes
@@ -438,6 +433,50 @@ def get_items_min_order_qty(item_codes_json):
         ignore_permissions=True,
     )
     return {r.name: flt(r.min_order_qty or 0) for r in rows}
+
+
+@frappe.whitelist()
+def get_items_procurement_info(item_codes_json):
+    """
+    Return MOQ and supplier lead time for each item code.
+
+    Called by the Material Shortage Report on every render to show procurement
+    guidance columns (MOQ, Lead Time) directly in the shortage table — so users
+    can make informed decisions about order quantities before opening the MR dialog.
+
+    Fields sourced from ERPNext Item master:
+      min_order_qty   → Minimum Order Quantity: smallest qty a supplier will accept
+      lead_time_days  → Supplier Lead Time: typical days from PO to delivery
+
+    Args:
+        item_codes_json (str): JSON array of item codes
+
+    Returns:
+        dict: {item_code: {"moq": float, "lead_time_days": int}}
+              — moq 0 means no minimum configured
+              — lead_time_days 0 means lead time not set on Item master
+    """
+    item_codes = (
+        frappe.parse_json(item_codes_json)
+        if isinstance(item_codes_json, str)
+        else (item_codes_json or [])
+    )
+    if not item_codes:
+        return {}
+
+    rows = frappe.get_all(
+        "Item",
+        filters={"name": ["in", item_codes]},
+        fields=["name", "min_order_qty", "lead_time_days"],
+        ignore_permissions=True,
+    )
+    return {
+        r.name: {
+            "moq"           : flt(r.min_order_qty or 0),
+            "lead_time_days": int(r.lead_time_days or 0),
+        }
+        for r in rows
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
