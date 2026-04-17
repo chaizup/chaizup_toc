@@ -1127,6 +1127,18 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   padding: 0;
 }
 
+/* WO plan tab: pane is a flex column so .wkp-table-wrap (flex:1;overflow:auto)
+   actually gets a definite height and scroll — making thead sticky work correctly.
+   Without this, .wkp-table-wrap expands to content height and never scrolls,
+   causing the pane itself to scroll and sticky not to work (WKP-015). */
+#wkp-pane-wo-plan { display: flex; flex-direction: column; overflow: hidden; }
+
+/* Shortage tab: header stays fixed; only the body div scrolls.
+   Fixes the "sticky header sticks past the shortage title bar" issue (WKP-016).
+   The .wkp-shortage-header retains flex-shrink:0; #wkp-shortage-body gets flex:1. */
+#wkp-pane-shortage { display: flex; flex-direction: column; overflow: hidden; }
+#wkp-shortage-body { flex: 1; overflow: auto; }
+
 
 /* ═══════════════════════════════════════════════════════
    § NEW: MATERIAL SHORTAGE REPORT (shortage tab)
@@ -1348,7 +1360,7 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 .wkp-dsp-row.wkp-dsp-critical { border-left: 3px solid var(--err-text); }
 .wkp-dsp-row.wkp-dsp-atrisk   { border-left: 3px solid var(--warn-text); }
 .wkp-dsp-row.wkp-dsp-ok       { border-left: 3px solid var(--ok-text); }
-.wkp-dsp-row.wkp-dsp-surplus  { border-left: 3px solid var(--brand-300); }
+.wkp-dsp-row.wkp-dsp-surplus  { border-left: 3px solid var(--buy); }
 .wkp-dsp-row.wkp-dsp-noorders { border-left: 3px solid var(--stone-300); }
 
 /* Summary card tints — reuse same status classes */
@@ -1386,9 +1398,10 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   background: var(--ok-bg); color: var(--ok-text); border-color: var(--ok-text);
 }
 .wkp-dsp-status-badge.wkp-dsp-surplus {
-  background: rgba(var(--brand-rgb, 59,130,246), 0.08);
-  color: var(--brand-600, var(--brand-500));
-  border-color: var(--brand-300);
+  /* Cyan / buy — positive informational state ("more supply than demand") */
+  background: var(--buy-bg);
+  color: var(--buy-text);
+  border-color: var(--buy);
 }
 .wkp-dsp-status-badge.wkp-dsp-noorders {
   background: var(--stone-100); color: var(--stone-500); border-color: var(--stone-300);
@@ -1397,7 +1410,7 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 /* Coverage cell emphasis ------------------------------------------------- */
 .wkp-dsp-coverage {
   font-weight: 700;
-  background: rgba(var(--brand-rgb, 59,130,246), 0.04);
+  background: rgba(6, 182, 212, 0.04); /* buy/cyan tint — surplus is cyan */
 }
 
 /* Pill badges for Pick List / Reservation -------------------------------- */
@@ -1412,8 +1425,9 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   letter-spacing: 0.3px; white-space: nowrap; border: 1.5px solid transparent;
 }
 /* R: JS assigns these */
-.wkp-dsp-pill-ok   { background: var(--ok-bg);    color: var(--ok-text);    border-color: var(--ok-text); }
-.wkp-dsp-pill-none { background: var(--stone-100); color: var(--stone-500);  border-color: var(--stone-300); }
+.wkp-dsp-pill-ok    { background: var(--ok-bg);    color: var(--ok-text);    border-color: var(--ok-text); }
+.wkp-dsp-pill-none  { background: var(--stone-100); color: var(--stone-500);  border-color: var(--stone-300); }
+.wkp-dsp-pill-draft { background: var(--warn-bg);  color: var(--warn-text);  border-color: var(--warn-border); font-style: italic; }
 
 /* WO chips below item name ---------------------------------------------- */
 .wkp-dsp-wo-chips {
@@ -1958,4 +1972,223 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   .wkp-ai-input-row    { padding: 4px 8px; }
   .wkp-ai-input-hint   { padding: 0 8px 3px; }
   .wkp-ai-chat-header  { padding: 4px 10px; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   § UI MODERNISATION (session 7)
+   Goal: eye-comfortable, modern, readable. All safe changes — no JS coupling.
+   ═══════════════════════════════════════════════════════════════════════════
+
+   1. Command bar: subtle shadow so it reads as a raised control bar.
+   2. Zebra striping on WO table and dispatch table — critical readability aid
+      on wide tables with many columns (alternating row contrast ≈ 8% tint).
+   3. Shortage hint bar: changed from yellow warn-bg to blue buy-bg — the hint
+      is informational, not a warning. Yellow was visually alarming.
+   4. Button polish: stronger hover border + shadow for tactile feedback.
+   5. Shortage selected row: slightly more prominent highlight.
+   6. Table header bottom border bump: from 2px to 2px solid with warm tint.
+   ──────────────────────────────────────────────────────────────────────── */
+
+/* 1. Command bar shadow -------------------------------------------------- */
+.wkp-cmd { box-shadow: 0 2px 4px rgba(0,0,0,.04); }
+
+/* 2. WO plan table zebra striping --------------------------------------- */
+.wkp-table tbody tr:nth-child(even) td { background: rgba(0,0,0,.018); }
+.wkp-table tbody tr:nth-child(even):hover td { background: var(--stone-50); }
+
+/* 2b. Dispatch main table zebra striping -------------------------------- */
+.wkp-dsp-table tbody tr:nth-child(even) td { background: rgba(0,0,0,.018); }
+.wkp-dsp-table tbody tr:nth-child(even):hover td { background: var(--stone-50); }
+
+/* 3. Shortage hint bar: informational (cyan) instead of warning (yellow) */
+.wkp-shortage-hint {
+  background: var(--buy-bg);
+  border-bottom-color: var(--buy-border);
+  color: var(--buy-text);
+}
+
+/* 4. Button polish ------------------------------------------------------- */
+.wkp-btn { border-color: var(--stone-300); }
+.wkp-btn:hover {
+  background: var(--stone-50);
+  border-color: var(--stone-400);
+  box-shadow: 0 1px 4px rgba(0,0,0,.07);
+}
+.wkp-btn-brand:hover {
+  box-shadow: 0 2px 6px rgba(249,115,22,.25);
+}
+
+/* 5. Shortage table — selected/expanded row highlight ------------------- */
+.wkp-modal-row-short td { background: rgba(239,68,68,.04); }
+
+/* 6. Table header text — slightly more readable ------------------------- */
+.wkp-table thead th,
+.wkp-modal-table thead th,
+.wkp-dsp-table thead th {
+  color: var(--stone-600);
+  letter-spacing: 0.4px;
+}
+
+/* 7. Summary strip cards — subtle status-matched left accent bar --------- */
+.wkp-sum-card { border-radius: var(--r-lg); }
+.wkp-sum-ok   { border-left: 3px solid var(--ok); }
+.wkp-sum-warn { border-left: 3px solid var(--warn); }
+.wkp-sum-err  { border-left: 3px solid var(--err); }
+.wkp-sum-cost { border-left: 3px solid var(--err); }
+
+/* 8. Tab bar: slightly taller, more breathing room ---------------------- */
+.wkp-tab-btn { padding: 10px 16px; letter-spacing: 0.2px; }
+
+/* 9. Filter bar: softer, unified with hint bar -------------------------- */
+.wkp-filter-bar { background: var(--stone-50); border-bottom-color: var(--stone-200); }
+
+/* 10. Dispatch detail sub-table: warmer separator ----------------------- */
+.wkp-dsp-so-table tbody td { border-bottom-color: rgba(0,0,0,.05); }
+
+/* 11. WO name link — cleaner mono look ---------------------------------- */
+.wkp-wo-link {
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--brand-600); text-decoration: none; font-weight: 600;
+}
+.wkp-wo-link:hover { text-decoration: underline; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   360° COST AUDIT MODAL  (session 8)
+   Opens via frappe.ui.Dialog with an HTML field.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* "₹ Cost" button in WO plan table last column ----------------------- */
+.wkp-td-actions { white-space: nowrap; }
+.wkp-btn-cost {
+  margin-left: 4px;
+  background: rgba(99, 102, 241, 0.06);   /* soft indigo tint */
+  color: var(--brand-700, #4338ca);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+.wkp-btn-cost:hover {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+/* Summary strip (3 cards: std / actual / variance) ------------------- */
+.wkp-cost-summary-strip {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.wkp-cost-sum-card {
+  flex: 1;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--stone-200);
+  padding: 12px 14px;
+  background: var(--stone-50);
+}
+.wkp-cost-sum-std   { border-left: 3px solid var(--stone-400); }
+.wkp-cost-sum-neutral { border-left: 3px solid var(--stone-300); background: var(--stone-50); }
+.wkp-cost-sum-over  { border-left: 3px solid var(--err); background: rgba(239,68,68,0.04); }
+.wkp-cost-sum-under { border-left: 3px solid var(--ok); background: rgba(34,197,94,0.04); }
+
+.wkp-cost-sum-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--stone-500);
+  margin-bottom: 4px;
+}
+.wkp-cost-sum-value { font-size: 20px; font-weight: 700; color: var(--stone-800); }
+.wkp-cost-sum-sub   { font-size: 10px; color: var(--stone-500); margin-top: 2px; }
+.wkp-cost-sum-rate  { font-size: 11px; color: var(--stone-600); margin-top: 4px; }
+
+/* Variance color tokens ---------------------------------------------- */
+.wkp-cost-var-over  { color: var(--err-text, #dc2626); font-weight: 700; }
+.wkp-cost-var-under { color: var(--ok-text,  #16a34a); font-weight: 700; }
+
+/* Secondary UOM label in per-unit display ----------------------------- */
+.wkp-cost-sec-uom   { font-size: 10px; color: var(--stone-400); }
+
+/* Section wrapper ---------------------------------------------------- */
+.wkp-cost-section {
+  margin-bottom: 20px;
+  border: 1px solid var(--stone-200);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.wkp-cost-section-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--stone-600);
+  background: var(--stone-50);
+  border-bottom: 1px solid var(--stone-200);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.wkp-cost-section-note {
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--stone-400);
+}
+
+/* Cost tables --------------------------------------------------------- */
+.wkp-cost-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.wkp-cost-table th,
+.wkp-cost-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--stone-100);
+  white-space: nowrap;
+}
+.wkp-cost-table thead th {
+  background: var(--stone-50);
+  color: var(--stone-600);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.wkp-cost-table tfoot td,
+.wkp-cost-table tfoot th {
+  background: var(--stone-50);
+  border-top: 1px solid var(--stone-200);
+  font-size: 12px;
+}
+.wkp-cost-total-col { background: rgba(99,102,241,0.04); }
+
+/* Empty state --------------------------------------------------------- */
+.wkp-cost-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--stone-500);
+  text-align: center;
+}
+.wkp-cost-error {
+  padding: 20px;
+  color: var(--err-text);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Historical note ----------------------------------------------------- */
+.wkp-cost-hist-note {
+  font-size: 10px;
+  color: var(--stone-400);
+  padding: 6px 12px;
+  border-top: 1px solid var(--stone-100);
+  background: var(--stone-50);
+}
+
+/* Footer ──────────────────────────────────────────────────────────────  */
+.wkp-cost-footer {
+  padding: 12px 0 4px;
+  text-align: right;
 }

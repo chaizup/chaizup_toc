@@ -33,8 +33,9 @@
  * - Shortage modal with recommendation card + per-component table (dual UOM + received qty)
  * - WO detail modal with decision guidance based on customer order pressure
  * - Warehouse picker dialog before MR creation (frappe.prompt — fixes Required Field error)
- * - Dispatch Bottleneck tab: SO-independent — shows ALL items with pending customer orders;
- *   customer column shows name + group + ERPNext ID; UOM shown on all qty columns;
+ * - Dispatch Bottleneck tab: SO-independent — shows ALL items with pending customer orders
+ *   (submitted SOs AND draft SOs); customer column shows name + group + ERPNext ID;
+ *   Draft SOs shown with amber "✏ Draft" badge; UOM on all qty columns;
  *   SO detail expand shows Ordered/Delivered/Pending in both stock UOM and secondary UOM
  * - Material Shortage tab: dual UOM on all qty columns; per-WO breakdown; received_qty_po column;
  *   per-row checkboxes + "Create MR for Selected" button; MOQ + Lead Time columns;
@@ -43,7 +44,11 @@
  * - WO Kitting tab: "Already Produced" column (produced_qty) with dual UOM after "Qty to Produce"
  * - AI Advisor: model selector with cost estimates; auto-insight uses HTML formatting;
  *   context includes UOM fields (uom, secondary_uom, secondary_factor) for accurate quantity citation;
- *   7 function-calling tools (server-side); AI cites which tools it used via wkp-ai-tools-badge
+ *   8 function-calling tools (server-side); AI cites which tools it used via wkp-ai-tools-badge
+ * - 360° Cost Audit per WO: "₹ Cost" button in last column → frappe.ui.Dialog showing:
+ *   BOM standard cost breakdown (qty_per_unit × valuation_rate per component),
+ *   actual consumed cost (Stock Entry Manufacture type), per-unit cost in stock UOM + secondary UOM,
+ *   variance (actual − standard, color-coded), last 5 completed WOs for same item (historical)
  *
  * UOM DISPLAY (all tabs)
  * ----------------------
@@ -92,8 +97,9 @@
  *   chaizup_toc.api.wo_kitting_api.get_items_min_order_qty   → (legacy; MOQ now from procInfo)
  *   chaizup_toc.api.wo_kitting_api.get_items_procurement_info → MOQ + lead_time_days per item;
  *                                                               called eagerly in _renderShortageReport
- *   chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck   → no args; all SO items;
- *                                                               so_list includes customer_name/group
+ *   chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck   → no args; all SO items incl. drafts;
+ *                                                               so_list includes customer_name/group,
+ *                                                               so_docstatus (0=Draft,1=Submitted)
  *   chaizup_toc.api.wo_kitting_api.compress_context_for_ai   → enriched summary + supply chain;
  *                                                               critical_wos includes uom fields;
  *                                                               dispatch_alerts includes uom+item_name
@@ -103,6 +109,10 @@
  *                                                               → returns: {reply, session_id,
  *                                                               is_html, tools_used}
  *   chaizup_toc.api.wo_kitting_api.get_available_ai_models   → model list with cost estimates
+ *   chaizup_toc.api.wo_kitting_api.get_wo_cost_audit        → args: wo_name
+ *                                                               → {bom_components, actual_consumed,
+ *                                                               std_cost_per_unit, total_actual_cost,
+ *                                                               variance_total, variance_pct, historical}
  *
  * AI FUNCTION TOOLS (server-side, in _AI_TOOLS in wo_kitting_api.py)
  * -------------------------------------------------------------------
@@ -113,6 +123,7 @@
  *   get_blocked_work_orders()         → WOs with kit_status block/partial + top blocker
  *   get_fulfillment_outlook()         → per-item demand vs production coverage
  *   get_overdue_customer_orders()     → WOs with prev_month_so > 0
+ *   get_cost_audit(wo_name)           → BOM std vs actual, variance, historical avg cost
  *
  * KNOWN BUGS / GOTCHAS
  * --------------------
@@ -139,6 +150,22 @@
  * WKP-014: Dispatch SO detail — so.qty / so.delivered_qty / so.pending_qty are in item.uom (stock UOM).
  *          item.secondary_factor converts stock→secondary: secondary_qty = stock_qty / secondary_factor.
  *          Example: item.uom=gram, item.secondary_uom=kg, item.secondary_factor=1000 → 5000g → 5.00kg.
+ * WKP-015: WO plan tab sticky heading requires #wkp-pane-wo-plan to be display:flex so
+ *          .wkp-table-wrap (flex:1;overflow:auto) gets a definite height and becomes the
+ *          scroll container. Without this, table-wrap expands to content height, pane scrolls,
+ *          and position:sticky on thead th has no effect (overflow:auto intercepts before pane).
+ * WKP-016: Shortage tab sticky heading — #wkp-pane-shortage must be display:flex and
+ *          #wkp-shortage-body must be flex:1;overflow:auto. Without this, the sticky header
+ *          sticks to top:0 of the pane (behind the shortage title bar), causing overlap.
+ * WKP-017: Dispatch tab draft SOs — _get_open_so_detail() includes docstatus IN (0,1).
+ *          Draft SOs carry so_docstatus=0; JS renders a "✏ Draft" amber badge. Draft SOs
+ *          are never marked is_overdue (cannot be overdue until submitted).
+ * WKP-018: Cost audit actual data: _get_wo_actual_cost() filters Stock Entry by
+ *          purpose='Manufacture' AND s_warehouse IS NOT NULL. If the finished good row
+ *          has BOTH s_warehouse and t_warehouse set (some ERPNext configs), it may appear
+ *          in the consumed list. Guard: the finished good's item_code ≠ any BOM component,
+ *          so a small mismatch is usually harmless. If std_cost_per_unit=0, the BOM has
+ *          no active submitted BOM — check ERPNext BOM list for that item.
  */
 
 "use strict";
@@ -183,9 +210,9 @@ const WKP_POPOVERS = {
 
   est_cost: {
     title: "Estimated Production Cost",
-    body:  "Approximate cost to produce the remaining quantity.\n\nCalculation: Valuation Rate (Item master) \u00D7 Remaining Qty\n\nThis is a rough estimate &mdash; actual costs may vary based on current material prices.",
-    example: "Remaining: 380 kg\nValuation rate: \u20B9120 per kg\nEst. cost: \u20B945,600",
-    action: "Use this to prioritize high-value WOs or identify where material shortages are most expensive.",
+    body:  "Rough cost estimate for the remaining production quantity.\n\nCalculation: Item master Valuation Rate \u00D7 Remaining Qty\n\nThis is a quick estimate only. For a full cost breakdown &mdash; BOM standard cost vs what was actually consumed, per-unit cost in all UOMs, cost variance, and historical comparison &mdash; click the <strong>\u20B9 Cost</strong> button at the end of each row.",
+    example: "Remaining: 380 kg\nValuation rate: \u20B9120 per kg\nEst. cost: \u20B945,600\n\nClick \u20B9 Cost to see: BOM recipe cost vs actual Stock Entry consumption vs last 5 completed WOs.",
+    action: "Use Est. Cost to spot high-value WOs quickly. Use the \u20B9 Cost audit to investigate valuation accuracy \u2014 incorrect costs here flow directly into your P&amp;L.",
   },
 
   prev_so: {
@@ -810,10 +837,14 @@ class WOKittingPlanner {
       ${_esc(stageLbl)}
     </span>
   </td>
-  <td class="ta-r">
+  <td class="ta-r wkp-td-actions">
     <button class="wkp-btn wkp-btn-sm" data-action="wo-detail" data-wo="${_esc(row.wo)}"
             title="View full detail: quantities, customer orders, material breakdown">
       View
+    </button>
+    <button class="wkp-btn wkp-btn-sm wkp-btn-cost" data-action="cost-audit" data-wo="${_esc(row.wo)}"
+            title="360\u00b0 Cost Audit \u2014 BOM standard vs actual consumed cost, per-unit cost in all UOMs, variance and historical comparison">
+      \u20b9 Cost
     </button>
   </td>
 </tr>`;
@@ -835,6 +866,13 @@ class WOKittingPlanner {
       btn.addEventListener("click", () => {
         const row = this.rows.find(r => r.wo === btn.dataset.wo);
         if (row) this._showWOModal(row);
+      });
+    });
+
+    document.querySelectorAll("[data-action='cost-audit']").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const row = this.rows.find(r => r.wo === btn.dataset.wo);
+        if (row) this._showCostAuditModal(row);
       });
     });
   }
@@ -2151,6 +2189,234 @@ ${decisionHtml}
     document.getElementById("wkp-wo-modal").style.display = "flex";
   }
 
+  // ─────────────────────────────────────────────────────────────────────
+  //  360° COST AUDIT MODAL
+  //
+  //  PURPOSE: Show BOM standard cost vs actual consumed cost per WO.
+  //
+  //  WHY: Inventory valuation errors silently distort P&L. This panel
+  //  lets managers spot when actual consumption > standard (scrap/rework),
+  //  stale valuation rates, or wrong Stock Entry posting.
+  //
+  //  LAYOUT (frappe.ui.Dialog with HTML field):
+  //    1. Summary strip: Std cost / Actual cost / Variance (color-coded)
+  //    2. BOM Components table (standard cost breakdown)
+  //    3. Actual Consumed table (from Stock Entry Manufacture)
+  //    4. Historical table (last 5 completed WOs for same item)
+  //
+  //  DATA FLOW:
+  //    _showCostAuditModal(row) → frappe.call get_wo_cost_audit(wo_name)
+  //    → _buildCostAuditHtml(audit) → inject into frappe.ui.Dialog HTML field
+  //
+  //  NOTE: get_wo_cost_audit() uses current Item.valuation_rate — not the
+  //  BOM snapshot rate — so std cost reflects today's material prices.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _showCostAuditModal(row) {
+    const dlg = new frappe.ui.Dialog({
+      title: "\u20B9 360\u00b0 Cost Audit \u2014 " + row.wo,
+      fields: [{ fieldtype: "HTML", fieldname: "audit_body" }],
+      size: "large",
+    });
+
+    const $body = dlg.fields_dict.audit_body.$wrapper;
+    $body.html(
+      '<div style="padding:32px;text-align:center;color:var(--stone-400);font-size:13px">'
+      + "Loading cost data\u2026</div>"
+    );
+    dlg.show();
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_wo_cost_audit",
+      args: { wo_name: row.wo },
+      callback: r => {
+        if (!r || !r.message) {
+          $body.html('<div class="wkp-cost-error">No cost data returned from server.</div>');
+          return;
+        }
+        $body.html(this._buildCostAuditHtml(r.message));
+      },
+      error: () => {
+        $body.html('<div class="wkp-cost-error">Failed to load cost data. Check Error Log.</div>');
+      },
+    });
+  }
+
+  _buildCostAuditHtml(a) {
+    // ── Helpers ────────────────────────────────────────────────────────
+    const fmt = (n, d) => n != null ? _fmt_num(n, d ?? 2) : "\u2014";
+
+    // ── Summary strip ──────────────────────────────────────────────────
+    const hasActual = a.total_actual_cost > 0;
+    const vPct      = a.variance_pct;
+    const vTotal    = a.variance_total;
+    let varClass = "";
+    let varSign  = "";
+    if (vTotal != null) {
+      if      (vTotal > 0) { varClass = "wkp-cost-var-over";  varSign = "+"; }
+      else if (vTotal < 0) { varClass = "wkp-cost-var-under"; varSign = ""; }
+    }
+
+    const stdPerUnit = a.std_cost_per_unit
+      ? `\u20B9${_fmt_num(a.std_cost_per_unit, 2)} / ${_esc(a.stock_uom)}`
+        + (a.std_cost_per_secondary ? ` &nbsp;|&nbsp; \u20B9${_fmt_num(a.std_cost_per_secondary, 2)} / ${_esc(a.secondary_uom)}` : "")
+      : "\u2014";
+
+    const actPerUnit = a.actual_cost_per_unit != null
+      ? `\u20B9${_fmt_num(a.actual_cost_per_unit, 2)} / ${_esc(a.stock_uom)}`
+        + (a.actual_cost_per_secondary ? ` &nbsp;|&nbsp; \u20B9${_fmt_num(a.actual_cost_per_secondary, 2)} / ${_esc(a.secondary_uom)}` : "")
+      : (hasActual ? "\u2014" : "<span style=\"color:var(--stone-400);font-size:11px\">No production yet</span>");
+
+    const summaryHtml = `
+<div class="wkp-cost-summary-strip">
+  <div class="wkp-cost-sum-card wkp-cost-sum-std">
+    <div class="wkp-cost-sum-label">BOM Standard Cost</div>
+    <div class="wkp-cost-sum-value">\u20B9${_fmt_num(a.total_std_cost, 0)}</div>
+    <div class="wkp-cost-sum-sub">for ${_fmt_num(a.remaining_qty, 0)}&nbsp;${_esc(a.stock_uom)} remaining</div>
+    <div class="wkp-cost-sum-rate">${stdPerUnit}</div>
+  </div>
+  <div class="wkp-cost-sum-card ${hasActual ? (vTotal > 0 ? "wkp-cost-sum-over" : "wkp-cost-sum-under") : "wkp-cost-sum-neutral"}">
+    <div class="wkp-cost-sum-label">Actual Consumed Cost</div>
+    <div class="wkp-cost-sum-value">${hasActual ? "\u20B9" + _fmt_num(a.total_actual_cost, 0) : "\u2014"}</div>
+    <div class="wkp-cost-sum-sub">for ${_fmt_num(a.produced_qty, 0)}&nbsp;${_esc(a.stock_uom)} produced</div>
+    <div class="wkp-cost-sum-rate">${actPerUnit}</div>
+  </div>
+  ${vTotal != null ? `
+  <div class="wkp-cost-sum-card ${vTotal > 0 ? "wkp-cost-sum-over" : "wkp-cost-sum-under"}">
+    <div class="wkp-cost-sum-label">Variance (Actual \u2212 Standard)</div>
+    <div class="wkp-cost-sum-value ${varClass}">${varSign}\u20B9${_fmt_num(Math.abs(vTotal), 0)}</div>
+    <div class="wkp-cost-sum-sub ${varClass}">${varSign}${_fmt_num(vPct, 1)}% vs standard</div>
+    <div class="wkp-cost-sum-rate">${vTotal > 0
+      ? "<span class=\"wkp-cost-var-over\">Overspent \u2014 check scrap / extra issues</span>"
+      : "<span class=\"wkp-cost-var-under\">Savings \u2014 or valuation rate too high</span>"}</div>
+  </div>` : ""}
+</div>`;
+
+    // ── BOM Components table ───────────────────────────────────────────
+    const bomRows = (a.bom_components || []).map(c =>
+      `<tr>
+        <td>${_esc(c.item_name)}</td>
+        <td class="ta-r">${fmt(c.qty_per_unit, 4)}</td>
+        <td>${_esc(c.uom)}</td>
+        <td class="ta-r">\u20B9${fmt(c.valuation_rate, 2)}</td>
+        <td class="ta-r">\u20B9${fmt(c.std_cost_per_unit, 4)}</td>
+        <td class="ta-r wkp-cost-total-col">\u20B9${_fmt_num(c.total_std_cost, 0)}</td>
+      </tr>`
+    ).join("");
+
+    const bomHtml = `
+<div class="wkp-cost-section">
+  <div class="wkp-cost-section-title">
+    BOM Standard Cost Breakdown
+    <span class="wkp-cost-section-note">BOM: ${_esc(a.bom_no || "\u2014")} &nbsp;|&nbsp; Batch size: ${fmt(a.bom_qty, 0)}&nbsp;${_esc(a.stock_uom)}</span>
+  </div>
+  ${bomRows.length ? `
+  <table class="wkp-cost-table">
+    <thead><tr>
+      <th>Component</th><th class="ta-r">Qty/Unit</th><th>UOM</th>
+      <th class="ta-r">Rate</th><th class="ta-r">Std Cost/Unit</th>
+      <th class="ta-r wkp-cost-total-col">Total Std Cost</th>
+    </tr></thead>
+    <tbody>${bomRows}</tbody>
+    <tfoot><tr>
+      <td colspan="4"><strong>Total Standard Cost</strong></td>
+      <td class="ta-r"><strong>\u20B9${fmt(a.std_cost_per_unit, 4)}</strong></td>
+      <td class="ta-r wkp-cost-total-col"><strong>\u20B9${_fmt_num(a.total_std_cost, 0)}</strong></td>
+    </tr></tfoot>
+  </table>` : '<div class="wkp-cost-empty">No active BOM found for this Work Order.</div>'}
+</div>`;
+
+    // ── Actual Consumed table ──────────────────────────────────────────
+    const actRows = (a.actual_consumed || []).map(c => {
+      const varAmt = c.variance;
+      const varCls = varAmt == null ? "" : (varAmt > 0 ? "wkp-cost-var-over" : (varAmt < 0 ? "wkp-cost-var-under" : ""));
+      return `<tr>
+        <td>${_esc(c.item_name)}</td>
+        <td class="ta-r">${fmt(c.consumed_qty, 2)}</td>
+        <td class="ta-r">${c.std_qty != null ? fmt(c.std_qty, 2) : "\u2014"}</td>
+        <td>${_esc(c.uom)}</td>
+        <td class="ta-r">\u20B9${fmt(c.avg_rate, 2)}</td>
+        <td class="ta-r">\u20B9${fmt(c.total_amount, 0)}</td>
+        <td class="ta-r ${varCls}">${varAmt != null ? (varAmt >= 0 ? "+" : "") + "\u20B9" + _fmt_num(Math.abs(varAmt), 0) : "\u2014"}</td>
+      </tr>`;
+    }).join("");
+
+    const actHtml = `
+<div class="wkp-cost-section">
+  <div class="wkp-cost-section-title">
+    Actual Consumed (Stock Entry \u2192 Manufacture)
+    <span class="wkp-cost-section-note">${_fmt_num(a.produced_qty, 0)}&nbsp;${_esc(a.stock_uom)} produced so far</span>
+  </div>
+  ${actRows.length ? `
+  <table class="wkp-cost-table">
+    <thead><tr>
+      <th>Material</th>
+      <th class="ta-r">Consumed</th><th class="ta-r">Std Qty</th><th>UOM</th>
+      <th class="ta-r">Avg Rate</th><th class="ta-r">Actual Cost</th>
+      <th class="ta-r">Variance</th>
+    </tr></thead>
+    <tbody>${actRows}</tbody>
+    <tfoot><tr>
+      <td colspan="5"><strong>Total Actual Cost</strong></td>
+      <td class="ta-r"><strong>\u20B9${_fmt_num(a.total_actual_cost, 0)}</strong></td>
+      <td class="ta-r ${vTotal != null && vTotal > 0 ? "wkp-cost-var-over" : "wkp-cost-var-under"}">
+        ${vTotal != null ? (vTotal >= 0 ? "+" : "") + "\u20B9" + _fmt_num(Math.abs(vTotal), 0) : "\u2014"}
+      </td>
+    </tr></tfoot>
+  </table>` : `<div class="wkp-cost-empty">
+    No Manufacture Stock Entries found yet.<br>
+    <span style="font-size:11px;color:var(--stone-400)">Standard cost shows BOM estimate. Actual cost will appear after materials are issued.</span>
+  </div>`}
+</div>`;
+
+    // ── Historical table ───────────────────────────────────────────────
+    const histRows = (a.historical || []).map(h => {
+      const cPU = h.actual_cost_per_unit;
+      const stdPU = a.std_cost_per_unit;
+      let histCls = "";
+      if (cPU != null && stdPU > 0) {
+        const diff = (cPU - stdPU) / stdPU * 100;
+        if (diff > 10) histCls = "wkp-cost-var-over";
+        else if (diff < -10) histCls = "wkp-cost-var-under";
+      }
+      return `<tr>
+        <td><a href="/app/work-order/${_esc(h.wo)}" target="_blank" class="wkp-wo-link">${_esc(h.wo)}</a></td>
+        <td>${_esc(h.actual_end_date || "\u2014")}</td>
+        <td class="ta-r">${_fmt_num(h.produced_qty || h.qty, 0)}&nbsp;${_esc(h.uom)}</td>
+        <td class="ta-r">\u20B9${_fmt_num(h.actual_cost, 0)}</td>
+        <td class="ta-r ${histCls}">${cPU != null ? "\u20B9" + _fmt_num(cPU, 2) + " /" + _esc(h.uom) : "\u2014"}</td>
+      </tr>`;
+    }).join("");
+
+    const histHtml = `
+<div class="wkp-cost-section">
+  <div class="wkp-cost-section-title">
+    Historical Cost \u2014 Last ${(a.historical || []).length} Completed WOs for ${_esc(a.item_name)}
+  </div>
+  ${histRows.length ? `
+  <table class="wkp-cost-table">
+    <thead><tr>
+      <th>Work Order</th><th>Completed</th><th class="ta-r">Produced</th>
+      <th class="ta-r">Total Cost</th><th class="ta-r">Cost / Unit</th>
+    </tr></thead>
+    <tbody>${histRows}</tbody>
+  </table>
+  <div class="wkp-cost-hist-note">
+    Color: <span class="wkp-cost-var-over">red = cost/unit &gt;10% above current BOM std</span> &nbsp;
+    <span class="wkp-cost-var-under">green = &gt;10% below current BOM std</span>
+  </div>` : `<div class="wkp-cost-empty">No completed Work Orders found for this item.</div>`}
+</div>`;
+
+    const openERP = `
+<div class="wkp-cost-footer">
+  <a href="/app/work-order/${_esc(a.wo)}" target="_blank" class="wkp-btn wkp-btn-brand">
+    Open Work Order in ERPNext \u2192
+  </a>
+</div>`;
+
+    return summaryHtml + bomHtml + actHtml + histHtml + openERP;
+  }
+
   /**
    * Builds the top decision card in the WO detail modal.
    * Tells the executive exactly what to do based on the situation.
@@ -2874,11 +3140,17 @@ ${decisionHtml}
       const custGroup = so.customer_group || "";
       const custId    = so.customer || "";
 
+      // Draft badge — shown when SO is saved but not yet submitted (docstatus=0)
+      const isDraft = (so.so_docstatus === 0);
+      const draftBadge = isDraft
+        ? `<span class="wkp-dsp-pill wkp-dsp-pill-draft" data-tip="This Sales Order is a Draft (not yet submitted/confirmed). Quantities are indicative only.">\u270F Draft</span>`
+        : "";
+
       return `
 <tr class="wkp-dsp-so-row ${isOverdue ? "wkp-dsp-so-overdue" : ""}">
   <td>
     <a href="/app/sales-order/${_esc(so.so_name)}" target="_blank" class="wkp-wo-link">${_esc(so.so_name)}</a>
-    ${overdueLbl}
+    ${overdueLbl}${draftBadge}
   </td>
   <td>
     <div style="font-weight:600">${_esc(custName)}</div>

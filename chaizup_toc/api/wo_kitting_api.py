@@ -31,6 +31,11 @@ PUBLIC API (all @frappe.whitelist())
   get_ai_auto_insight(context_json)
       Stateless AI briefing: called once after each simulation to summarise situation.
 
+  get_wo_cost_audit(wo_name)
+      360-degree cost audit per Work Order: BOM standard cost vs actual consumed cost,
+      per-unit cost in all UOMs, variance analysis, and last 5 completed WOs for same item.
+      Helps detect inventory valuation errors that silently distort P&L.
+
 SIMULATION MODES
 -----------------
   stock_mode = "current_only":
@@ -476,6 +481,187 @@ def get_items_procurement_info(item_codes_json):
             "lead_time_days": int(r.lead_time_days or 0),
         }
         for r in rows
+    }
+
+
+@frappe.whitelist()
+def get_wo_cost_audit(wo_name):
+    """
+    360-degree cost audit for a Work Order.
+
+    Compares BOM standard cost vs actual consumed cost, shows per-unit cost in
+    all UOMs, cost variance, and historical costs from last 5 completed WOs for
+    the same production item.
+
+    WHY THIS MATTERS
+    ----------------
+    ERPNext inventory valuation can silently produce incorrect P&L when:
+      a) Item master valuation_rate is stale (not updated after supplier price changes)
+      b) Actual material consumption > BOM standard (scrap, rework, extra issues)
+      c) Stock Entries posted with wrong rates (manual journals, rate overrides)
+    Actual cost > standard  →  inflated COGS  →  understated profit
+    Actual cost < standard  →  deflated COGS  →  overstated profit
+
+    DATA SOURCES
+    ------------
+      Standard cost : tabBOM Item (stock_qty) ÷ tabBOM.quantity (batch size)
+                      × current Item.valuation_rate (live — not BOM snapshot rate)
+      Actual cost   : tabStock Entry (purpose=Manufacture, docstatus=1)
+                      + tabStock Entry Detail (s_warehouse IS NOT NULL = consumed items)
+      Historical    : tabWork Order (status=Completed, same production_item, last 5)
+                      + their actual cost from Stock Entries
+
+    Args:
+        wo_name (str): Work Order name, e.g. "WO-2026-00042"
+
+    Returns:
+        dict with keys:
+            wo, item_code, item_name, bom_no, status, planned_start_date, company
+            planned_qty, produced_qty, remaining_qty
+            stock_uom, secondary_uom, secondary_factor
+            bom_qty           — BOM batch size (how many FG units the BOM recipe makes)
+            bom_components    — list of {item_code, item_name, uom, qty_per_unit,
+                                         valuation_rate, std_cost_per_unit,
+                                         total_required, total_std_cost}
+            std_cost_per_unit — INR per 1 stock UOM of FG (sum of component costs)
+            std_cost_per_secondary — INR per 1 secondary UOM (if secondary_uom set)
+            total_std_cost    — std_cost_per_unit × remaining_qty
+            actual_consumed   — list of {item_code, item_name, uom, consumed_qty,
+                                         avg_rate, total_amount, std_qty, std_cost, variance}
+            total_actual_cost — sum of actual Stock Entry amounts
+            actual_cost_per_unit — actual_cost / produced_qty (None if not started)
+            actual_cost_per_secondary — same in secondary UOM
+            variance_total    — total_actual_cost − (std_cost_per_unit × produced_qty)
+            variance_pct      — variance as % of standard (negative = savings)
+            historical        — list of {wo, status, qty, produced_qty, uom,
+                                         actual_cost, actual_cost_per_unit, actual_end_date}
+    """
+    if not wo_name:
+        frappe.throw("wo_name is required")
+
+    # ── Step 1: WO + Item details ──────────────────────────────────────
+    wo_rows = frappe.db.sql("""
+        SELECT wo.name,
+               wo.production_item,
+               wo.bom_no,
+               wo.qty,
+               wo.produced_qty,
+               wo.planned_start_date,
+               wo.status,
+               wo.company,
+               i.item_name,
+               i.stock_uom,
+               i.valuation_rate
+        FROM   `tabWork Order` wo
+        JOIN   `tabItem` i ON i.name = wo.production_item
+        WHERE  wo.name = %(wo)s
+        LIMIT 1
+    """, {"wo": wo_name}, as_dict=True)
+
+    if not wo_rows:
+        frappe.throw(f"Work Order {wo_name!r} not found.")
+    wo = wo_rows[0]
+
+    remaining_qty = flt(wo.qty) - flt(wo.produced_qty)
+    produced      = flt(wo.produced_qty)
+
+    # Secondary UOM for per-unit cost display
+    sec              = _get_secondary_uom({wo.production_item}).get(wo.production_item, {})
+    secondary_uom    = sec.get("uom", "")
+    secondary_factor = sec.get("factor", 1.0)
+
+    # ── Step 2: BOM standard cost breakdown ───────────────────────────
+    bom_detail = _get_bom_cost_detail(wo.bom_no or "") if wo.bom_no else {
+        "bom_qty": 1.0, "components": []
+    }
+    bom_qty    = bom_detail["bom_qty"]
+    components = bom_detail["components"]
+
+    # Scale std cost to remaining_qty
+    for comp in components:
+        comp["total_required"] = round(comp["qty_per_unit"] * remaining_qty, 4)
+        comp["total_std_cost"] = round(comp["std_cost_per_unit"] * remaining_qty, 2)
+
+    std_cost_per_unit = sum(c["std_cost_per_unit"] for c in components)
+    total_std_cost    = std_cost_per_unit * remaining_qty
+    std_cost_per_secondary = (
+        round(std_cost_per_unit * secondary_factor, 4) if secondary_uom else None
+    )
+
+    # ── Step 3: Actual consumed cost ──────────────────────────────────
+    actual_consumed   = _get_wo_actual_cost(wo_name)
+    total_actual_cost = sum(c["total_amount"] for c in actual_consumed)
+
+    # Per-unit actual (meaningful only once production has started)
+    actual_cost_per_unit      = round(total_actual_cost / produced, 4) if produced > 0 else None
+    actual_cost_per_secondary = (
+        round(actual_cost_per_unit * secondary_factor, 2)
+        if actual_cost_per_unit is not None and secondary_uom else None
+    )
+
+    # Cross-reference actual vs standard per component
+    std_map = {c["item_code"]: c for c in components}
+    for ac in actual_consumed:
+        sc = std_map.get(ac["item_code"], {})
+        if sc and produced > 0:
+            ac["std_qty"]  = round(sc["qty_per_unit"] * produced, 4)
+            ac["std_cost"] = round(sc["std_cost_per_unit"] * produced, 2)
+            ac["variance"] = round(ac["total_amount"] - ac["std_cost"], 2)
+        else:
+            ac["std_qty"]  = None
+            ac["std_cost"] = None
+            ac["variance"] = None
+
+    # Overall variance (actual vs standard for the produced portion)
+    std_for_produced = std_cost_per_unit * produced if produced > 0 else None
+    variance_total = (
+        round(total_actual_cost - std_for_produced, 2) if std_for_produced is not None else None
+    )
+    variance_pct = (
+        round((variance_total / std_for_produced) * 100, 2)
+        if std_for_produced and variance_total is not None else None
+    )
+
+    # ── Step 4: Historical WOs ─────────────────────────────────────────
+    historical = _get_historical_wo_costs(wo.production_item, exclude_wo=wo_name)
+
+    return {
+        # WO identity
+        "wo"               : wo_name,
+        "item_code"        : wo.production_item,
+        "item_name"        : wo.item_name or wo.production_item,
+        "bom_no"           : wo.bom_no or "",
+        "status"           : wo.status,
+        "planned_start_date": str(wo.planned_start_date or ""),
+        "company"          : wo.company,
+
+        # Quantities
+        "planned_qty"      : flt(wo.qty),
+        "produced_qty"     : produced,
+        "remaining_qty"    : remaining_qty,
+        "stock_uom"        : wo.stock_uom,
+        "secondary_uom"    : secondary_uom,
+        "secondary_factor" : secondary_factor,
+
+        # BOM standard cost
+        "bom_qty"          : bom_qty,
+        "bom_components"   : components,
+        "std_cost_per_unit"     : round(std_cost_per_unit, 4),
+        "std_cost_per_secondary": std_cost_per_secondary,
+        "total_std_cost"   : round(total_std_cost, 2),
+
+        # Actual consumed
+        "actual_consumed"       : actual_consumed,
+        "total_actual_cost"     : round(total_actual_cost, 2),
+        "actual_cost_per_unit"  : actual_cost_per_unit,
+        "actual_cost_per_secondary": actual_cost_per_secondary,
+
+        # Variance
+        "variance_total"   : variance_total,
+        "variance_pct"     : variance_pct,
+
+        # Historical
+        "historical"       : historical,
     }
 
 
@@ -1331,8 +1517,8 @@ def get_dispatch_bottleneck():
     Returns:
         dict: {item_code: {fg_stock, total_pending, ..., so_list, item_name, uom, ...}}
     """
-    # ── Step 1: Discover all items with pending SOs (no filter) ─────
-    so_rows = _get_open_so_detail()   # no filter → all pending SOs
+    # ── Step 1: Discover all items with pending SOs (submitted + drafts) ──
+    so_rows = _get_open_so_detail()   # no filter → all pending SOs incl. drafts
 
     if not so_rows:
         return {}
@@ -1374,12 +1560,14 @@ def get_dispatch_bottleneck():
             "customer"       : r["customer"] or "",
             "customer_name"  : r.get("customer_name") or r["customer"] or "",
             "customer_group" : r.get("customer_group") or "",
+            "so_docstatus"   : int(r.get("so_docstatus", 1)),   # 0=Draft, 1=Submitted
             "qty"            : flt(r["qty"]),
             "delivered_qty"  : flt(r["delivered_qty"]),
             "pending_qty"    : flt(r["pending_qty"]),
             "delivery_date"  : str(r["delivery_date"] or ""),
             "is_overdue"     : str(r["delivery_date"] or "") < today_str
-                               and flt(r["pending_qty"]) > 0,
+                               and flt(r["pending_qty"]) > 0
+                               and int(r.get("so_docstatus", 1)) == 1,  # drafts not overdue
             "pick_list_count": int(pick_map.get(r["so_name"], 0)),
             "reserved_qty"   : flt(reserved_map.get(r["so_name"], 0)),
             "dn_qty"         : flt(dn_map.get((ic, r["so_name"]), 0)),
@@ -1455,6 +1643,7 @@ def _get_open_so_detail(item_codes=None):
         rows = frappe.db.sql("""
             SELECT soi.item_code,
                    so.name                                         AS so_name,
+                   so.docstatus                                     AS so_docstatus,
                    so.customer,
                    COALESCE(so.customer_name, so.customer)         AS customer_name,
                    COALESCE(cust.customer_group, '')               AS customer_group,
@@ -1466,16 +1655,17 @@ def _get_open_so_detail(item_codes=None):
             JOIN   `tabSales Order` so ON so.name = soi.parent
             LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
             WHERE  soi.item_code IN %(items)s
-              AND  so.docstatus  = 1
-              AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
+              AND  so.docstatus  IN (0, 1)
+              AND  (so.docstatus = 0 OR so.status NOT IN ('Closed', 'Cancelled', 'Completed'))
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
-            ORDER BY so.delivery_date ASC, so.creation ASC
+            ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
         """, {"items": item_codes}, as_dict=True)
     else:
-        # No filter — fetch ALL items with pending SOs
+        # No filter — fetch ALL items with pending SOs (submitted + drafts)
         rows = frappe.db.sql("""
             SELECT soi.item_code,
                    so.name                                         AS so_name,
+                   so.docstatus                                     AS so_docstatus,
                    so.customer,
                    COALESCE(so.customer_name, so.customer)         AS customer_name,
                    COALESCE(cust.customer_group, '')               AS customer_group,
@@ -1486,10 +1676,10 @@ def _get_open_so_detail(item_codes=None):
             FROM   `tabSales Order Item` soi
             JOIN   `tabSales Order` so ON so.name = soi.parent
             LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
-            WHERE  so.docstatus  = 1
-              AND  so.status NOT IN ('Closed', 'Cancelled', 'Completed')
+            WHERE  so.docstatus  IN (0, 1)
+              AND  (so.docstatus = 0 OR so.status NOT IN ('Closed', 'Cancelled', 'Completed'))
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
-            ORDER BY so.delivery_date ASC, so.creation ASC
+            ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
         """, as_dict=True)
 
     return [dict(r) for r in rows]
@@ -1582,6 +1772,191 @@ def _get_dn_detail(item_codes, so_names):
         return {(r.item_code, r.so_name): flt(r.dn_qty) for r in rows}
     except Exception:
         return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  COST AUDIT HELPERS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _get_bom_cost_detail(bom_no):
+    """
+    Fetch BOM components with standard cost per unit of finished good.
+
+    Uses current Item.valuation_rate (live — not the snapshot rate stored in BOM)
+    so the audit reflects today's material costs against what you should expect.
+
+    Args:
+        bom_no (str): BOM name (must be submitted, is_active)
+
+    Returns:
+        dict: {
+            bom_qty: float,       — BOM batch size (FG units per recipe run)
+            components: [{
+                item_code, item_name, uom,
+                qty_per_unit,          — stock_qty / bom_qty (required per 1 FG unit)
+                valuation_rate,        — INR per 1 stock UOM of this component (from Item master)
+                std_cost_per_unit,     — qty_per_unit × valuation_rate (INR per 1 FG unit)
+            }]
+        }
+    """
+    if not bom_no:
+        return {"bom_qty": 1.0, "components": []}
+
+    rows = frappe.db.sql("""
+        SELECT bi.item_code,
+               bi.item_name,
+               bi.stock_qty,
+               bi.stock_uom         AS uom,
+               b.quantity           AS bom_qty,
+               COALESCE(i.valuation_rate, 0) AS valuation_rate
+        FROM   `tabBOM Item` bi
+        JOIN   `tabBOM` b      ON b.name = bi.parent
+        LEFT JOIN `tabItem` i  ON i.name = bi.item_code
+        WHERE  bi.parent     = %(bom)s
+          AND  bi.parenttype = 'BOM'
+          AND  b.docstatus   = 1
+        ORDER BY bi.idx
+    """, {"bom": bom_no}, as_dict=True)
+
+    if not rows:
+        return {"bom_qty": 1.0, "components": []}
+
+    bom_qty    = flt(rows[0].bom_qty) or 1.0
+    components = []
+    for r in rows:
+        qty_per_unit    = flt(r.stock_qty) / bom_qty
+        val_rate        = flt(r.valuation_rate)
+        std_cost_per_u  = qty_per_unit * val_rate
+        components.append({
+            "item_code"        : r.item_code,
+            "item_name"        : r.item_name or r.item_code,
+            "uom"              : r.uom or "Nos",
+            "qty_per_unit"     : round(qty_per_unit, 6),
+            "valuation_rate"   : round(val_rate, 4),
+            "std_cost_per_unit": round(std_cost_per_u, 6),
+        })
+
+    return {"bom_qty": bom_qty, "components": components}
+
+
+def _get_wo_actual_cost(wo_name):
+    """
+    Fetch actual material consumption from Stock Entry (purpose=Manufacture).
+
+    Rows where s_warehouse IS NOT NULL and t_warehouse IS NULL are consumed inputs.
+    The produced finished good has t_warehouse set (and no s_warehouse) — excluded.
+
+    Args:
+        wo_name (str): Work Order name
+
+    Returns:
+        list: [{item_code, item_name, uom, consumed_qty, avg_rate, total_amount}]
+              Returns [] if no submitted Manufacture Stock Entries exist yet.
+    """
+    rows = frappe.db.sql("""
+        SELECT sed.item_code,
+               sed.item_name,
+               sed.stock_uom                                    AS uom,
+               SUM(sed.qty)                                     AS consumed_qty,
+               SUM(sed.amount)                                  AS total_amount,
+               (SUM(sed.amount) / NULLIF(SUM(sed.qty), 0))      AS avg_rate
+        FROM   `tabStock Entry Detail` sed
+        JOIN   `tabStock Entry` se ON se.name = sed.parent
+        WHERE  se.work_order   = %(wo)s
+          AND  se.purpose      = 'Manufacture'
+          AND  se.docstatus    = 1
+          AND  sed.s_warehouse IS NOT NULL
+          AND  (sed.t_warehouse IS NULL OR sed.t_warehouse = '')
+        GROUP BY sed.item_code, sed.item_name, sed.stock_uom
+        ORDER BY SUM(sed.amount) DESC
+    """, {"wo": wo_name}, as_dict=True)
+
+    return [
+        {
+            "item_code"   : r.item_code,
+            "item_name"   : r.item_name or r.item_code,
+            "uom"         : r.uom or "Nos",
+            "consumed_qty": round(flt(r.consumed_qty), 4),
+            "avg_rate"    : round(flt(r.avg_rate), 4),
+            "total_amount": round(flt(r.total_amount), 2),
+        }
+        for r in rows
+    ]
+
+
+def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
+    """
+    Return the last N completed Work Orders for the same production_item,
+    each with actual total consumed cost from Stock Entries.
+
+    Used to benchmark whether the current WO's cost is in line with past runs.
+    Historical cost > current  → cheaper run (good)
+    Historical cost < current  → more expensive run — investigate why
+
+    Args:
+        item_code (str): Production item code
+        exclude_wo (str): Current WO name to exclude from results
+        limit (int): Max records to return (default 5)
+
+    Returns:
+        list: [{wo, status, qty, produced_qty, uom,
+                actual_cost, actual_cost_per_unit, actual_end_date}]
+    """
+    wo_rows = frappe.db.sql("""
+        SELECT wo.name,
+               wo.status,
+               wo.qty,
+               wo.produced_qty,
+               wo.actual_end_date,
+               i.stock_uom AS uom
+        FROM   `tabWork Order` wo
+        JOIN   `tabItem` i ON i.name = wo.production_item
+        WHERE  wo.production_item = %(item)s
+          AND  wo.name            != %(excl)s
+          AND  wo.status          = 'Completed'
+          AND  wo.docstatus       = 1
+        ORDER BY wo.actual_end_date DESC
+        LIMIT  %(lim)s
+    """, {"item": item_code, "excl": exclude_wo, "lim": limit}, as_dict=True)
+
+    if not wo_rows:
+        return []
+
+    hist_names = [r.name for r in wo_rows]
+
+    # Batch-fetch actual costs for all historical WOs
+    cost_rows = frappe.db.sql("""
+        SELECT se.work_order,
+               SUM(sed.amount) AS total_amount
+        FROM   `tabStock Entry Detail` sed
+        JOIN   `tabStock Entry` se ON se.name = sed.parent
+        WHERE  se.work_order   IN %(wos)s
+          AND  se.purpose      = 'Manufacture'
+          AND  se.docstatus    = 1
+          AND  sed.s_warehouse IS NOT NULL
+          AND  (sed.t_warehouse IS NULL OR sed.t_warehouse = '')
+        GROUP BY se.work_order
+    """, {"wos": hist_names}, as_dict=True)
+
+    cost_map = {r.work_order: flt(r.total_amount) for r in cost_rows}
+
+    result = []
+    for r in wo_rows:
+        actual_cost   = cost_map.get(r.name, 0.0)
+        produced      = flt(r.produced_qty) or flt(r.qty)
+        cost_per_unit = round(actual_cost / produced, 4) if produced > 0 else None
+        result.append({
+            "wo"                 : r.name,
+            "status"             : r.status,
+            "qty"                : flt(r.qty),
+            "produced_qty"       : flt(r.produced_qty),
+            "uom"                : r.uom,
+            "actual_cost"        : round(actual_cost, 2),
+            "actual_cost_per_unit": cost_per_unit,
+            "actual_end_date"    : str(r.actual_end_date or ""),
+        })
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1774,6 +2149,11 @@ _AI_SYSTEM_PROMPT = (
     "   PO Raised=ordered from supplier, In Production=being manufactured.\n"
     "8. received_qty_po = quantity already received from open POs (supply arriving).\n"
     "   This reduces the effective shortage — mention it when relevant.\n"
+    "9. Cost audit: get_cost_audit(wo_name) returns BOM standard cost vs actual consumed.\n"
+    "   variance_total = actual cost minus standard (negative = savings, positive = overspend).\n"
+    "   variance_pct: flag if >+10% (overspend risk) or <-10% (valuation error risk).\n"
+    "   Compare actual_cost_per_unit vs historical_avg_cost to spot systematic drift.\n"
+    "   Zero actual_cost means no Stock Entry yet — WO hasn't started production.\n"
 )
 
 # ── Tool definitions for DeepSeek function calling ──
@@ -1911,6 +2291,31 @@ _AI_TOOLS = [
                 "customers who are waiting, or past-due shipments."
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cost_audit",
+            "description": (
+                "Fetch a 360-degree cost audit for a specific Work Order — "
+                "BOM standard cost vs actual consumed cost, per-unit cost in all UOMs, "
+                "cost variance (actual minus standard, as amount and %), "
+                "and last 5 completed WOs for the same item for historical comparison. "
+                "Call this when the user asks about cost, inventory valuation, cost variance, "
+                "P&L impact, actual vs standard cost, why profit looks wrong, "
+                "or whether a WO is costing correctly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "wo_name": {
+                        "type": "string",
+                        "description": "Work Order name to audit, e.g. WO-00123 or MFG-WO-2026-00001",
+                    }
+                },
+                "required": ["wo_name"],
+            },
         },
     },
 ]
@@ -2604,6 +3009,52 @@ def _execute_ai_tool(fn_name, fn_args, context):
                     if overdue else "No overdue customer orders found."
                 ),
                 "work_orders": overdue[:20],
+            }
+
+        elif fn_name == "get_cost_audit":
+            # Live DB call — uses the helper functions (not in-memory context)
+            wo_name = fn_args.get("wo_name", "")
+            if not wo_name:
+                return {"error": "wo_name is required for get_cost_audit"}
+            audit = get_wo_cost_audit(wo_name)
+            # Return a compact summary for AI — full detail is in the JS modal
+            historical = audit.get("historical") or []
+            hist_total_cost = sum(h["actual_cost"] for h in historical)
+            hist_total_prod = sum((h["produced_qty"] or h["qty"]) for h in historical)
+            hist_avg_per_unit = (
+                round(hist_total_cost / hist_total_prod, 4)
+                if hist_total_prod > 0 else None
+            )
+            return {
+                "wo"                 : audit["wo"],
+                "item_name"          : audit["item_name"],
+                "status"             : audit["status"],
+                "stock_uom"          : audit["stock_uom"],
+                "secondary_uom"      : audit["secondary_uom"],
+                "produced_qty"       : audit["produced_qty"],
+                "remaining_qty"      : audit["remaining_qty"],
+                "std_cost_per_unit"  : audit["std_cost_per_unit"],
+                "total_std_cost"     : audit["total_std_cost"],
+                "total_actual_cost"  : audit["total_actual_cost"],
+                "actual_cost_per_unit": audit["actual_cost_per_unit"],
+                "variance_total"     : audit["variance_total"],
+                "variance_pct"       : audit["variance_pct"],
+                "components_count"   : len(audit["bom_components"]),
+                "top_cost_components": [
+                    {
+                        "material"         : c["item_name"],
+                        "uom"              : c["uom"],
+                        "std_cost_per_unit": c["std_cost_per_unit"],
+                        "total_std_cost"   : c.get("total_std_cost", 0),
+                    }
+                    for c in sorted(
+                        audit["bom_components"],
+                        key=lambda x: -x.get("total_std_cost", 0),
+                    )[:5]
+                ],
+                "historical_avg_cost_per_unit": hist_avg_per_unit,
+                "historical_count"   : len(historical),
+                "no_actual_data"     : audit["total_actual_cost"] == 0,
             }
 
         else:
