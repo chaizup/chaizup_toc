@@ -69,6 +69,14 @@
  * - Email: frappe.ui.Dialog → To / CC / Subject / Report tab selector;
  *   Python send_dashboard_email() wraps inline-styled snapshot HTML in an email template
  *   with sender info, live dashboard link, and sent date; uses frappe.sendmail()
+ * - UI polish (session 11): restored .wkp-btn base definition (buttons had no padding/bg/border
+ *   after an earlier edit removed it); added explicit color:#ffffff to .wkp-btn-brand at all
+ *   states (hover text was merging with the orange background); emergency/dispatch/AI panes
+ *   now have slate-100 tinted backgrounds so white cards inside float with visible depth;
+ *   AI pane has 10px/12px padding revealing tinted bg around cards; emergency cards converted
+ *   from flat border-bottom list to card-list style (border + border-radius + shadow + margin gap);
+ *   tab bar uses white bg + 2px bottom border + shadow for a clearer navigation layer;
+ *   shortage/emergency/dispatch section headers explicitly use slate-50 tint
  *
  * ══════════════════════════════════════════════════════════════════════
  * 🔒 RESTRICTED — DO NOT CHANGE (these are load-bearing architectural choices)
@@ -279,6 +287,11 @@
  * WKP-025: BOM tree modal toggle targets IDs built from item_code. IDs are scoped to the
  *          dialog DOM — no risk of collision with page elements. If item_code contains special
  *          chars, they are sanitised via replace(/[^a-zA-Z0-9]/g, "_").
+ * WKP-026: .wkp-btn base styles are defined in the SESSION 11 block at the END of
+ *          wo_kitting_planner.css. The session-7 "button polish" block (~mid-file) is
+ *          an override only — it assumes the base definition exists and adds hover shadows.
+ *          If the session-11 block is ever removed, all buttons will lose all visual styling.
+ *          Do NOT remove that block without providing a replacement base definition.
  */
 
 "use strict";

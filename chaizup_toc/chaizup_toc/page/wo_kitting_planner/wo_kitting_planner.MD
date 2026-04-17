@@ -71,3 +71,26 @@ When writing SQL queries for this application, be extremely careful with field n
 - **Demand**: `Sales Order`, `Sales Order Item`
 - **Supply**: `Purchase Order`, `Material Request`
 - **Consumption**: `Stock Entry`, `Stock Entry Detail`
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session 10)
+**Sync Block for Context-Aware AI Development**
+
+### Latest Logic & Architecture
+- **Dynamic Filtering**: Main "Show WOs" filter is now populated via `get_work_order_statuses` API to avoid hardcoding ERPNext statuses.
+- **Shortage Aggregation**: Components in the "Material Shortage Report" correctly use their own `item_group` (fetched via updated `_get_bom_items_bulk`) for accurate tab-level filtering.
+- **UI Design**: Modernized "Tiger Theme" using Slate/Emerald/Rose palette. Summary cards are clickable for instant filtering.
+- **Multi-level BOM**: Simulation supports recursive expansion (up to 6 levels) while preserving item metadata (`item_group`, `valuation_rate`).
+- **Cost Audit**: 360-degree audit tool compares BOM standard vs actual consumed cost with variance tracking.
+
+### Critical Implementation Details
+- **Field Mapping**: WO production item is `production_item`. PO price is `rate`. SE link is `work_order`.
+- **UOM Standard**: Always show "Stacked" dual UOMs in tables.
+- **HTML Security**: No single quotes in `.html` template (strictly enforced).
+- **AI Context**: Strip `rows` and `dispatch` keys before sending to LLM (token limit management).
+
+### Restricted Areas (Do Not Modify)
+- **JS State**: `_aiSessionId`, `_aiContext`, `rows`, `woOrder`.
+- **DOM IDs**: `#wkp-ai-*`, `#wsum-*`, `#wkp-pane-*`.
+- **API Return Schema**: Keyed by `item_code` for dispatch and item summary.
