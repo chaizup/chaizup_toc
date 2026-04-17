@@ -3,6 +3,18 @@ wo_kitting_api.py -- WO Kitting Planner Backend API
 =====================================================
 Simulation engine for Work Order kitting feasibility.
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  🔒 RESTRICTED — DO NOT CHANGE (Core Architecture):
+#    - Method names: get_open_work_orders, simulate_kitting, get_item_wo_summary,
+#      get_dispatch_bottleneck, chat_with_planner, get_ai_auto_insight.
+#    - Return schemas: Must strictly match the JS expectations in wo_kitting_planner.js.
+#
+#  ⚠️ CRITICAL: ERPNext Database Field Mapping (Common Pitfalls):
+#    - Work Order: The finished good item is 'production_item' (NOT 'item_code').
+#    - Purchase Order Item: The purchase price is 'rate' (NOT 'valuation_rate').
+#    - Stock Entry: The link to Work Order is 'work_order'.
+# ─────────────────────────────────────────────────────────────────────────────
+
 Covers ALL open Work Orders (Not Started / In Process / Material Transferred),
 regardless of whether items are TOC-enabled. This is a production planning tool,
 not restricted to TOC buffer-managed items.
@@ -188,6 +200,22 @@ _AI_MAX_TOOL_CALLS = 3
 # ═══════════════════════════════════════════════════════════════════════
 #  PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════
+
+@frappe.whitelist()
+def get_work_order_statuses():
+    """
+    Return all unique statuses currently present in open Work Orders.
+    Used to populate the 'Show WOs' filter dynamically instead of hardcoding.
+    """
+    statuses = frappe.db.sql_list(\"\"\"
+        SELECT DISTINCT status
+        FROM `tabWork Order`
+        WHERE docstatus = 1
+          AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
+        ORDER BY status ASC
+    \"\"\")
+    return statuses
+
 
 @frappe.whitelist()
 def get_open_work_orders(status_filter=None):
@@ -536,7 +564,7 @@ def get_item_wo_summary():
     wos = frappe.db.sql("""
         SELECT
             wo.name         AS wo_name,
-            wo.item_code,
+            wo.production_item AS item_code,
             wo.item_name,
             wo.stock_uom    AS uom,
             wo.qty          AS planned_qty,
@@ -616,11 +644,11 @@ def get_item_wo_summary():
 
     # ── 7. Last completed WO per item + its actual cost ───────────────────
     hist_wos = frappe.db.sql("""
-        SELECT wo.item_code, wo.name AS wo_name, wo.produced_qty, wo.modified AS completed_date
+        SELECT wo.production_item AS item_code, wo.name AS wo_name, wo.produced_qty, wo.modified AS completed_date
         FROM `tabWork Order` wo
         WHERE wo.docstatus = 1
           AND wo.status = 'Completed'
-          AND wo.item_code IN %(codes)s
+          AND wo.production_item IN %(codes)s
           AND wo.produced_qty > 0
         ORDER BY wo.modified DESC
     """, {"codes": code_list}, as_dict=True)
@@ -1161,7 +1189,8 @@ def _get_bom_items_bulk(bom_nos, multi_level=0):
                bi.stock_qty,
                bi.stock_uom       AS uom,
                b.quantity          AS bom_qty,
-               COALESCE(i.valuation_rate, 0) AS valuation_rate
+               COALESCE(i.valuation_rate, 0) AS valuation_rate,
+               i.item_group
         FROM   `tabBOM Item` bi
         JOIN   `tabBOM` b       ON b.name = bi.parent
         LEFT JOIN `tabItem` i   ON i.name = bi.item_code
@@ -1184,6 +1213,7 @@ def _get_bom_items_bulk(bom_nos, multi_level=0):
             "per_unit_qty"  : per_unit,
             "uom"           : r.uom or "Nos",
             "valuation_rate": flt(r.valuation_rate),
+            "item_group"    : r.item_group or "",
         })
 
     if multi_level:
@@ -1261,6 +1291,7 @@ def _explode_multi_level(bom_map, max_depth=6):
                             "per_unit_qty"  : sub_comp["per_unit_qty"] * scale,
                             "uom"           : sub_comp["uom"],
                             "valuation_rate": sub_comp["valuation_rate"],
+                            "item_group"    : sub_comp["item_group"],
                         })
                     expanded_any = True
                 else:
@@ -1493,6 +1524,7 @@ def _compute_requirements(wo, stock_pool, bom_items):
         result.append({
             "item_code"     : comp["item_code"],
             "item_name"     : comp["item_name"],
+            "item_group"    : comp.get("item_group", ""),
             "uom"           : comp["uom"],
             "required"      : round(required, 4),
             "available"     : round(available, 4),
@@ -1642,6 +1674,7 @@ def _assemble_result(wo, comps, stage_map, dispatch_map):
         shortage_items.append({
             "item_code"     : comp["item_code"],
             "item_name"     : comp["item_name"],
+            "item_group"    : comp.get("item_group", ""),
             "uom"           : comp["uom"],
             "required"      : comp["required"],
             "available"     : comp["available"],
@@ -2120,7 +2153,7 @@ def get_material_supply_detail(item_code):
             poi.qty - IFNULL(poi.received_qty, 0) AS pending_qty,
             poi.schedule_date,
             poi.uom,
-            IFNULL(poi.valuation_rate, 0)         AS valuation_rate
+            IFNULL(poi.rate, 0)                  AS valuation_rate
         FROM  `tabPurchase Order Item` poi
         JOIN  `tabPurchase Order` po ON po.name = poi.parent
         WHERE poi.item_code = %(ic)s

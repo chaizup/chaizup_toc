@@ -197,48 +197,56 @@
    HTML, CSS, and JS (JS reads class names that reference these tokens).
 
    COLOR GROUPS:
-     --stone-*   Neutral grays (UI chrome, borders, muted text)
-     --brand-*   Orange accent (active states, primary buttons)
-     --ok        Green (ready, in-stock, success)
+     --slate-*   Neutral grays (UI chrome, borders, muted text)
+     --brand-*   Orange/Amber accent (active states, primary buttons)
+     --ok        Emerald (ready, in-stock, success)
      --warn      Amber (partial shortage, caution)
-     --err       Red (blocked, critical shortage, overdue)
-     --buy       Cyan (expected/upcoming, kitted, informational)
+     --err       Rose (blocked, critical shortage, overdue)
+     --buy       Cyan/Sky (expected/upcoming, kitted, informational)
 
    IF A COLOR MUST CHANGE: Change the variable VALUE here only.
    Never change the variable NAME — all rules below reference the name.
    ───────────────────────────────────────────────────────────────────────── */
 :root {
-  --stone-50:  #faf9f8; --stone-100: #f5f5f4; --stone-200: #e7e5e4;
-  --stone-300: #d6d3d1; --stone-400: #a8a29e; --stone-500: #78716c;
-  --stone-600: #57534e; --stone-800: #292524; --stone-900: #1c1917;
-  --brand-500: #f97316; --brand-600: #ea580c;
-  --ok:  #10b981; --warn: #f59e0b; --err: #ef4444; --buy: #06b6d4;
-  --ok-bg: #ecfdf5; --ok-text: #047857; --ok-border: #a7f3d0;
-  --warn-bg: #fefce8; --warn-text: #ca8a04; --warn-border: #fde68a;
-  --err-bg: #fef2f2; --err-text: #dc2626; --err-border: #fca5a5;
-  --buy-bg: #ecfeff; --buy-text: #0e7490; --buy-border: #a5f3fc;
-  --border: #e7e5e4;
-  --bg-page: #faf9f8; --bg-surface: #ffffff;
-  --text-main: #292524; --text-muted: #78716c;
-  --font-sans: "DM Sans", system-ui, sans-serif;
+  /* Modern Neutrals (Slate) */
+  --slate-50:  #f8fafc; --slate-100: #f1f5f9; --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1; --slate-400: #94a3b8; --slate-500: #64748b;
+  --slate-600: #475569; --slate-700: #334155; --slate-800: #1e293b; --slate-900: #0f172a;
+
+  /* Semantic Colors - Professional Palette */
+  --brand-500: #f59e0b; --brand-600: #d97706; --brand-700: #b45309;
+  --ok:  #10b981; --warn: #f59e0b; --err: #f43f5e; --buy: #0ea5e9;
+
+  /* Status Backgrounds & Text (Softer, modern) */
+  --ok-bg: #ecfdf5;   --ok-text: #065f46;   --ok-border: #a7f3d0;
+  --warn-bg: #fffbeb; --warn-text: #92400e; --warn-border: #fde68a;
+  --err-bg: #fff1f2;   --err-text: #9f1239;   --err-border: #fecdd3;
+  --buy-bg: #f0f9ff;   --buy-text: #075985;   --buy-border: #bae6fd;
+
+  /* UI Surface & Borders */
+  --border: #e2e8f0;
+  --bg-page: #f8fafc; --bg-surface: #ffffff;
+  --text-main: #1e293b; --text-muted: #64748b;
+
+  /* Typography */
+  --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-display: "Oswald", sans-serif;
-  --mono: "Geist Mono", monospace;
-  --r-sm: 5px; --r-md: 8px; --r-lg: 10px; --r-full: 999px;
-  --sh-sm: 0 1px 3px rgba(0,0,0,.06); --sh-md: 0 4px 12px rgba(0,0,0,.09);
-  --sh-lg: 0 8px 24px rgba(0,0,0,.12);
-  --tf: 0.15s ease; --tb: 0.25s cubic-bezier(0.16,1,0.3,1);
+  --mono: "Geist Mono", "SFMono-Regular", Consolas, monospace;
+
+  /* Sizing & Borders */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 9999px;
+
+  /* Shadows - Modern and subtle */
+  --sh-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --sh-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --sh-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+
+  /* Transitions */
+  --tf: 0.2s ease; --tb: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
    §2  ROOT SHELL                                         ⚠️ CAUTION
-   ─────────────────────────────────────────────────────────────────────────
-   .wkp-root is the outermost flex column container.
-   JS calls _applyHeight() which sets height via inline style using:
-     window.innerHeight - getBoundingClientRect().top - 4
-   The CSS height is only a FALLBACK for the brief moment before JS runs.
-   → Do NOT remove the height property (needed as fallback).
-   → Do NOT change display:flex or flex-direction:column (layout depends on it).
-   → overflow:hidden is intentional — inner .wkp-table-wrap handles scrolling.
    ───────────────────────────────────────────────────────────────────────── */
 .wkp-root {
   font-family: var(--font-sans);
@@ -250,153 +258,187 @@
   min-height: 300px;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   font-size: 13px;
+  line-height: 1.5;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
    §3  COMMAND BAR                                        ✅ SAFE TO MODIFY
-   ─────────────────────────────────────────────────────────────────────────
-   Contains: Stock X/Y toggle, Scenario A/B toggle, Deep BOM pill,
-             status filter select, refresh button.
-   flex-shrink:0 ensures the command bar never collapses when table is tall.
-   → Safe to adjust: padding, gap, font-size, colors on .wkp-seg-btn
-   → Class names .wkp-seg-btn and .active are read by JS (R3) — do not rename.
    ───────────────────────────────────────────────────────────────────────── */
 .wkp-cmd {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 10px 20px;
+  gap: 12px;
+  padding: 12px 24px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  z-index: 10;
 }
-.wkp-cmd-left  { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.wkp-cmd-right { display: flex; align-items: center; gap: 8px; }
+.wkp-cmd-left  { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.wkp-cmd-right { display: flex; align-items: center; gap: 10px; }
 
 .wkp-toggle-group {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; align-items: center; gap: 10px;
 }
 .wkp-toggle-label {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.8px; color: var(--stone-400); font-family: var(--font-display);
+  letter-spacing: 0.05em; color: var(--slate-400); font-family: var(--font-display);
 }
+.wkp-toggle-sublabel {
+  font-size: 9px; color: var(--slate-400); margin-top: -2px;
+}
+
 .wkp-seg {
   display: flex;
-  background: var(--stone-100);
+  background: var(--slate-100);
   border-radius: var(--r-md);
-  padding: 2px;
+  padding: 3px;
   gap: 2px;
+  border: 1px solid var(--slate-200);
 }
 .wkp-seg-btn {
-  padding: 5px 12px;
+  padding: 6px 14px;
   border: none;
   border-radius: 6px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   background: transparent;
-  color: var(--stone-500);
+  color: var(--slate-500);
   transition: all var(--tf);
   white-space: nowrap;
 }
 .wkp-seg-btn.active {
-  background: #fff;
-  color: var(--brand-600);
+  background: var(--bg-surface);
+  color: var(--brand-700);
   box-shadow: var(--sh-sm);
 }
-.wkp-seg-btn:hover:not(.active) { color: var(--brand-600); }
+.wkp-seg-btn:hover:not(.active) { color: var(--slate-700); background: rgba(0,0,0,0.03); }
 
 /* Multi-level BOM pill toggle */
 .wkp-pill-btn {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--stone-200);
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--slate-200);
   border-radius: var(--r-full);
-  background: #fff;
-  font-size: 11.5px; font-weight: 600;
-  cursor: pointer; color: var(--stone-500);
+  background: var(--bg-surface);
+  font-size: 11px; font-weight: 600;
+  cursor: pointer; color: var(--slate-600);
   transition: all var(--tf);
+  box-shadow: var(--sh-sm);
 }
-.wkp-pill-btn.active { border-color: var(--brand-500); color: var(--brand-600); background: var(--brand-50, #fff7ed); }
+.wkp-pill-btn.active {
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+  background: var(--warn-bg);
+}
 .wkp-pill-dot {
   width: 8px; height: 8px; border-radius: 50%;
-  background: var(--stone-300);
+  background: var(--slate-300);
   transition: background var(--tf);
 }
-.wkp-pill-btn.active .wkp-pill-dot { background: var(--brand-500); }
+.wkp-pill-btn.active .wkp-pill-dot { background: var(--brand-500); box-shadow: 0 0 8px var(--brand-500); }
 
 .wkp-select {
-  padding: 6px 10px;
-  border: 1px solid var(--stone-200);
+  padding: 7px 12px;
+  border: 1px solid var(--slate-200);
   border-radius: var(--r-md);
-  font-size: 11.5px; font-weight: 500;
-  background: #fff; color: var(--text-main);
+  font-size: 12px; font-weight: 500;
+  background: var(--bg-surface); color: var(--text-main);
   cursor: pointer;
+  transition: border-color var(--tf);
 }
+.wkp-select:focus { border-color: var(--brand-500); outline: none; }
+
 .wkp-refresh-btn {
-  padding: 6px 14px;
-  border: 1px solid var(--stone-200);
+  padding: 7px 16px;
+  border: 1px solid var(--slate-200);
   border-radius: var(--r-md);
-  background: #fff;
+  background: var(--bg-surface);
   font-size: 12px; font-weight: 600;
-  cursor: pointer; color: var(--stone-600);
+  cursor: pointer; color: var(--slate-700);
   transition: all var(--tf);
+  box-shadow: var(--sh-sm);
 }
-.wkp-refresh-btn:hover { background: var(--stone-50); border-color: var(--stone-300); }
+.wkp-refresh-btn:hover { background: var(--slate-50); border-color: var(--slate-300); transform: translateY(-1px); }
+.wkp-refresh-btn:active { transform: translateY(0); }
 
 /* ─────────────────────────────────────────────────────────────────────────
    §4  CONTEXT BAR (hint bar)                             ✅ SAFE TO MODIFY
-   ─────────────────────────────────────────────────────────────────────────
-   Shows current mode + live simulation results summary.
-   JS updates #wkp-hint-mode and #wkp-hint-text textContent after each run.
-   → Safe to change: background, border, font-size, padding
-   → Do not change display:flex — JS shows/hides #wkp-drag-hint inside it.
    ───────────────────────────────────────────────────────────────────────── */
 .wkp-hint-bar {
-  padding: 7px 20px;
+  padding: 8px 24px;
   background: var(--buy-bg);
   border-bottom: 1px solid var(--buy-border);
-  font-size: 11.5px; color: var(--buy-text);
+  font-size: 12px; color: var(--buy-text);
   font-weight: 500;
   display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
 }
+.wkp-hint-mode {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-right: 8px;
+}
 .wkp-hint-drag {
-  font-weight: 700; color: var(--brand-600);
+  font-weight: 700; color: var(--brand-700);
+  background: rgba(245, 158, 11, 0.1);
+  padding: 2px 10px;
+  border-radius: var(--r-full);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
    §5  SUMMARY STRIP                                      ✅ SAFE TO MODIFY
-   ─────────────────────────────────────────────────────────────────────────
-   Five stat cards: Ready / Partial / Blocked / Total WOs / Shortage Value.
-   JS updates the .wkp-sum-val textContent by ID:
-     #wsum-ready  #wsum-partial  #wsum-blocked  #wsum-total  #wsum-shortage-val
-   → Safe to add more .wkp-sum-card blocks for additional stats.
-   → Safe to change card colors (the .wkp-sum-ok/warn/err/cost modifier classes).
-   → overflow-x:auto allows horizontal scroll on small screens — keep it.
    ───────────────────────────────────────────────────────────────────────── */
 .wkp-summary {
-  display: flex; gap: 10px;
-  padding: 10px 20px;
+  display: flex; gap: 12px;
+  padding: 16px 24px;
+  background: var(--bg-page);
   border-bottom: 1px solid var(--border);
   overflow-x: auto; flex-shrink: 0;
   scrollbar-width: none;
 }
 .wkp-summary::-webkit-scrollbar { display: none; }
+
 .wkp-sum-card {
-  background: #fff; border: 1px solid var(--border); border-radius: var(--r-md);
-  padding: 10px 18px;
-  display: flex; align-items: center; gap: 12px;
-  box-shadow: var(--sh-sm); white-space: nowrap; flex-shrink: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px 20px;
+  display: flex; align-items: center; gap: 14px;
+  box-shadow: var(--sh-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all var(--tf);
+  cursor: default;
+  min-width: 180px;
 }
-.wkp-sum-val { font-family: var(--font-display); font-size: 22px; font-weight: 700; line-height: 1; }
-.wkp-sum-lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--stone-500); }
-.wkp-sum-ok   .wkp-sum-val { color: var(--ok-text); }
-.wkp-sum-warn .wkp-sum-val { color: var(--warn-text); }
-.wkp-sum-err  .wkp-sum-val { color: var(--err-text); }
-.wkp-sum-cost .wkp-sum-val { color: var(--err-text); font-size: 16px; }
+.wkp-sum-card:hover { transform: translateY(-2px); box-shadow: var(--sh-md); }
+
+.wkp-sum-icon {
+  width: 40px; height: 40px;
+  border-radius: var(--r-md);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  background: var(--slate-50);
+}
+
+.wkp-sum-val { font-family: var(--font-display); font-size: 26px; font-weight: 700; line-height: 1; margin-bottom: 2px; }
+.wkp-sum-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--slate-500); }
+.wkp-sum-hint { font-size: 10px; color: var(--slate-400); font-weight: 500; }
+
+.wkp-sum-ok   .wkp-sum-val { color: var(--ok); }
+.wkp-sum-ok   .wkp-sum-icon { background: var(--ok-bg); color: var(--ok); }
+.wkp-sum-warn .wkp-sum-val { color: var(--warn); }
+.wkp-sum-warn .wkp-sum-icon { background: var(--warn-bg); color: var(--warn); }
+.wkp-sum-err  .wkp-sum-val { color: var(--err); }
+.wkp-sum-err  .wkp-sum-icon { background: var(--err-bg); color: var(--err); }
+.wkp-sum-cost .wkp-sum-val { color: var(--slate-800); }
+.wkp-sum-cost .wkp-sum-icon { background: var(--slate-100); color: var(--slate-600); }
 
 /* ── CONTENT AREA ── */
 .wkp-content {

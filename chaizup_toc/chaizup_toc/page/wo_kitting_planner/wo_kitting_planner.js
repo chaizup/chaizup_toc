@@ -503,6 +503,7 @@ class WOKittingPlanner {
     this._bindControls();
     this._bindTabs();
     this._bindFilterBar();
+    this._loadDynamicFilters();
     this._initHelpSystem();
     this._initAIPanel();
     this._setupFullHeight();
@@ -666,6 +667,35 @@ class WOKittingPlanner {
   // ─────────────────────────────────────────────────────────────────────
 
   _bindControls() {
+    // ── Summary Card Click-to-Filter ───────────────────────────────────────
+    // WKP-026: Each card in the summary strip can be clicked to quickly
+    // filter the main table by that status (Ready, Partial, Blocked).
+    // This is a major UX win for layman users who want to see "just the bad ones".
+    const cardStatusMap = {
+      "wsum-ready"   : "ok",
+      "wsum-partial" : "partial",
+      "wsum-blocked" : "block",
+    };
+    Object.entries(cardStatusMap).forEach(([id, status]) => {
+      const card = document.getElementById(id)?.closest(".wkp-sum-card");
+      if (card) {
+        card.style.cursor = "pointer";
+        card.addEventListener("click", () => {
+          const statusSel = document.getElementById("wkp-fbar-status");
+          if (statusSel) {
+            // Toggle logic: if already filtered by this status, clear it.
+            const newVal = (this._filterKitStatus === status) ? "" : status;
+            statusSel.value = newVal;
+            statusSel.dispatchEvent(new Event("change"));
+
+            // Visual feedback on the card
+            document.querySelectorAll(".wkp-sum-card").forEach(c => c.style.borderColor = "");
+            if (newVal) card.style.borderColor = "var(--brand-500)";
+          }
+        });
+      }
+    });
+
     // Stock X / Y toggle
     document.querySelectorAll("#wkp-seg-stock .wkp-seg-btn").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -928,11 +958,16 @@ class WOKittingPlanner {
     // Customer urgency badge
     const totalSO = row.total_pending_so || 0;
     let urgencyBadge = "";
+    let highPriorityClass = "";
+
     if (totalSO > 0) {
       const isOverdue = (row.prev_month_so || 0) > 0;
       const cls = isOverdue ? "wkp-pressure-high" : "wkp-pressure-med";
       const lbl = isOverdue ? "\u26A0 Overdue orders!" : "Orders due";
       urgencyBadge = `<span class="wkp-pressure ${cls}">${lbl}: ${_fmt_num(totalSO, 0)}</span>`;
+
+      // WKP-027: Apply a subtle glow/highlight to rows with overdue SOs
+      if (isOverdue) highPriorityClass = "wkp-row-priority-glow";
     }
 
     const estCostTxt = row.est_cost
@@ -950,10 +985,8 @@ class WOKittingPlanner {
     const stageBadgeCls = _status_badge_class(row.status);
 
     // Use EXACT ERPNext status name — no translation, no alias.
-    // Tooltip on the column header (? button) explains each status in plain language.
     const stageLbl = row.status || "\u2014";
 
-    // Status tooltip — explains the ERPNext term in plain language
     const statusTip = {
       "Not Started"         : "Work Order created. Production has not started. Materials not yet issued.",
       "In Process"          : "Production is actively ongoing. Materials being consumed on the floor.",
@@ -968,8 +1001,11 @@ class WOKittingPlanner {
       title="Type a number to change priority order (applies only in Mode B &mdash; Priority Queue)"
       ${this.calcMode !== "sequential" ? "readonly" : ""}>`;
 
+    // Modern row rendering with zebra striping and priority highlight
+    const rowClasses = `wkp-tr ${statusClass} ${highPriorityClass} ${idx % 2 === 0 ? "wkp-row-even" : "wkp-row-odd"}`;
+
     return `
-<tr class="wkp-tr ${statusClass}" data-wo="${_esc(row.wo)}" data-idx="${idx}">
+<tr class="${rowClasses}" data-wo="${_esc(row.wo)}" data-idx="${idx}">
   <td class="wkp-td-drag">
     <span class="wkp-drag-handle" title="Drag to change priority (Mode B only)">\u2630</span>
   </td>
@@ -991,17 +1027,17 @@ class WOKittingPlanner {
   </td>
   <td class="ta-r"
       data-tip="Qty to Produce (Remaining)&#10;How many units still need to be manufactured.&#10;Formula: Work Order Planned Qty &minus; Already Produced Qty">
-    <strong>${_fmt_num(row.remaining_qty, 0)}</strong>
-    <div style="font-size:10px;color:var(--stone-400)">${_esc(row.uom || "")}</div>
-    ${row.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(row.secondary_qty || (row.remaining_qty / (row.secondary_factor || 1)), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}
+    <div class="wkp-qty-primary">${_fmt_num(row.remaining_qty, 0)}</div>
+    <div class="wkp-qty-uom">${_esc(row.uom || "")}</div>
+    ${row.secondary_uom ? `<div class="wkp-qty-secondary">${_fmt_num(row.secondary_qty || (row.remaining_qty / (row.secondary_factor || 1)), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}
   </td>
   <td class="ta-r"
       data-tip="Already Produced&#10;Qty already manufactured and received into Finished Goods warehouse.&#10;This stock is available for dispatch right now.&#10;Source: Work Order Produced Qty field in ERPNext.">
     ${(row.produced_qty || 0) > 0
-      ? `<span style="color:var(--green-600,#16a34a);font-weight:600">${_fmt_num(row.produced_qty, 0)}</span>
-         <div style="font-size:10px;color:var(--stone-400)">${_esc(row.uom || "")}</div>
-         ${row.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num((row.produced_qty) / (row.secondary_factor || 1), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}`
-      : `<span style="color:var(--stone-400)">\u2014</span>`}
+      ? `<div class="wkp-qty-primary wkp-text-ok">${_fmt_num(row.produced_qty, 0)}</div>
+         <div class="wkp-qty-uom">${_esc(row.uom || "")}</div>
+         ${row.secondary_uom ? `<div class="wkp-qty-secondary">${_fmt_num((row.produced_qty) / (row.secondary_factor || 1), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}`
+      : `<span style="color:var(--slate-300)">\u2014</span>`}
   </td>
   <td>
     <span class="wkp-short-chip ${chipClass}"
@@ -1011,8 +1047,8 @@ class WOKittingPlanner {
       ${chipText}
     </span>
   </td>
-  <td class="ta-r">${estCostTxt}</td>
-  <td class="ta-r ${(row.prev_month_so || 0) > 0 ? "wkp-cell-red" : ""}">${prevSo}</td>
+  <td class="ta-r font-mono">${estCostTxt}</td>
+  <td class="ta-r ${(row.prev_month_so || 0) > 0 ? "wkp-cell-red font-bold" : ""}">${prevSo}</td>
   <td class="ta-r">${currSo}</td>
   <td class="ta-r">${totalSoTxt}</td>
   <td>
@@ -1364,6 +1400,30 @@ class WOKittingPlanner {
     if (groups.includes(current)) sel.value = current;
   }
 
+  _loadDynamicFilters() {
+    // WKP-028: Fetch Work Order statuses dynamically instead of hardcoding
+    // to support custom ERPNext setups and avoid "Not Started" missing etc.
+    // 🔒 RESTRICTED: Never hardcode ERPNext document statuses in HTML/JS.
+    // DOM ID #wkp-status-filter is used to bind the change event.
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_work_order_statuses",
+      callback: r => {
+        const statuses = r.message || [];
+        const sel = document.getElementById("wkp-status-filter");
+        if (!sel || !statuses.length) return;
+
+        // Preserve "All Open WOs"
+        while (sel.options.length > 1) sel.remove(1);
+        statuses.forEach(s => {
+          const opt = document.createElement("option");
+          opt.value = s;
+          opt.textContent = s;
+          sel.appendChild(opt);
+        });
+      }
+    });
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   //  MATERIAL SHORTAGE REPORT TAB
   //  Aggregates shortage_items across all WOs to show consolidated demand.
@@ -1391,6 +1451,8 @@ class WOKittingPlanner {
     this._shortageAggList = [];
 
     // Aggregate shortage items across all WOs
+    // 🔒 RESTRICTED: shortage_items[].item_group must be the component's group,
+    // NOT the parent WO's group, to allow proper dynamic filtering in this tab.
     const agg = {};  // item_code → aggregated data
     rows.forEach(row => {
       (row.shortage_items || []).forEach(comp => {
@@ -1400,7 +1462,7 @@ class WOKittingPlanner {
           agg[ic] = {
             item_code       : ic,
             item_name       : comp.item_name || ic,
-            item_group      : row.item_group || "",   // from WO row item_group
+            item_group      : comp.item_group || "",  // correctly use component group
             uom             : comp.uom || "",
             secondary_uom   : comp.secondary_uom || "",
             secondary_factor: comp.secondary_factor || 1.0,
@@ -1511,14 +1573,14 @@ class WOKittingPlanner {
 
     // ── Dual-UOM helper (stacked style for table cells) ───────────────────
     const _dualQtySR = (qty, uom, secFactor, secUom) => {
-      const base = _fmt_num(qty, 2) + "\u00a0" + _esc(uom || "");
+      const base = `<div class="wkp-qty-primary">${_fmt_num(qty, 2)}</div>
+                    <div class="wkp-qty-uom">${_esc(uom || "")}</div>`;
       if (secUom && secFactor > 1) {
         const secQty = qty / secFactor;
-        return base + `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(secQty, 2)}\u00a0${_esc(secUom)}</div>`;
+        return base + `<div class="wkp-qty-secondary">${_fmt_num(secQty, 2)}\u00a0${_esc(secUom)}</div>`;
       }
       return base;
     };
-
     // colspan = 13 (checkbox + material + 9 qty cols + MOQ + Lead Time + Details)
     const COL_SPAN = 13;
 
@@ -3024,46 +3086,24 @@ ${decisionHtml}
   //    This same context is sent with every chat message so the AI
   //    always has the current simulation snapshot.
   //
-  //    Function calling: Server runs a tool-call loop — AI may call
-  //    get_wo_shortage_detail, get_dispatch_detail, or get_top_shortage_items
-  //    before responding. Client never calls these directly.
-  //
-  //    HTML output: AI may return HTML tables/spans. _renderAIContent()
-  //    sanitises the HTML (removes script/on* attributes) before injecting
-  //    into the DOM via innerHTML.
-  //
-  //  COMPACT LAYOUT (session 6 — 13-inch laptop target):
-  //    Insight card: max-height 150px (scrollable) — reserves room for chat.
-  //    Chat messages area grows to fill remaining space (flex:1 + overflow:auto).
-  //    @media (max-height: 820px): insight further shrinks to 100px,
-  //      padding tightened throughout — targets ~800px viewport height.
-  //    Right guide column: 220px wide, compact font sizes, tighter spacing.
-  //
-  //  AUTO-INSIGHT PROMPT RULES (server-side, in wo_kitting_api.py):
-  //    - No preamble (never start with "Based on..." or "Here is...")
-  //    - Top 3 issues only (not 3-5) — short column names: Item / WO / Impact / Fix
-  //    - Exactly 3 action steps, one verb phrase each
-  //    - If answer fits one sentence, skip the table entirely
-  //
-  //  SYSTEM PROMPT COMPACT OUTPUT SECTION (added session 6):
-  //    - Summary: 1-2 sentences max
-  //    - Tables: max 4 cols, max 6 rows — drop less critical columns
-  //    - Action steps: exactly 3, one short sentence each
-  //
   //  ══════════════════════════════════════════════════════════════════
-  //  🔒 RESTRICTED — do not rename without updating HTML and CSS:
-  //    this._aiSessionId       (UUID for Redis cache key on server)
-  //    this._aiContext         (compressed simulation context object)
-  //    this._aiInsightLoaded   (gate: prevents duplicate auto-insight calls)
-  //    #wkp-ai-insight-body    (innerHTML target for auto-briefing)
-  //    #wkp-ai-messages        (chat bubble container — appended by JS)
-  //    #wkp-ai-input           (textarea for user message)
-  //    #wkp-ai-send            (send button)
-  //    #wkp-ai-status          (typing indicator row)
-  //    .wkp-msg-user           (user bubble class — R: JS assigns)
-  //    .wkp-msg-ai             (AI bubble class — R: JS assigns)
-  //  ✅ SAFE to change: quick question text, guide card text, bubble styling,
-  //    AI card subtitle, model badge label.
+  //  🔒 RESTRICTED — DO NOT CHANGE (Core stability):
+  //    JS STATE: this._aiSessionId, this._aiContext, this._aiInsightLoaded
+  //    DOM IDs:  #wkp-ai-insight-body, #wkp-ai-messages, #wkp-ai-input, 
+  //              #wkp-ai-send, #wkp-ai-status
+  //    CSS VARS: --ok, --warn, --err, --brand-500, --slate-*, --mono, --font-display
+  //
+  //  ⚠️ DESIGN SYSTEM RULES:
+  //    - Table rows: use .wkp-row-even/.wkp-row-odd and .wkp-row-priority-glow
+  //    - Qty Cells: must use .wkp-qty-primary, .wkp-qty-uom, .wkp-qty-secondary
+  //    - Buttons: use .wkp-btn and .wkp-btn-brand for primary actions
+  //
+  //  🤖 PROMPT RULES (Server-side & Client-side logic):
+  //    - No preamble ("Based on...", "Here is...")
+  //    - Exactly 3 action steps, one verb phrase each.
+  //    - Summary: 1-2 sentences max.
+  //    - Tables: max 4 cols, max 6 rows.
+  //    - Always include (item_code) in parentheses when mentioning items.
   //  ══════════════════════════════════════════════════════════════════
   // ─────────────────────────────────────────────────────────────────────
 

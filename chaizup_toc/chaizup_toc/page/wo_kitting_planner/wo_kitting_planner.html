@@ -206,11 +206,8 @@
       <div class="wkp-filter-group">
         <label class="wkp-filter-label" for="wkp-status-filter">Show WOs:</label>
         <select class="wkp-select" id="wkp-status-filter"
-                data-tip="Filter by production stage:&#10;&bull; All Open WOs = everything not yet completed&#10;&bull; Not Started = created but production not begun&#10;&bull; Material Transferred = materials sent to production floor&#10;&bull; In Process = actively being manufactured">
+                data-tip="Filter by production stage:&#10;&bull; All Open WOs = everything not yet completed&#10;&bull; Other statuses (e.g. Not Started, In Process) are fetched dynamically from your current Work Orders.">
           <option value="">All Open WOs</option>
-          <option value="Not Started">Not Started</option>
-          <option value="Material Transferred">Material Transferred</option>
-          <option value="In Process">In Process</option>
         </select>
       </div>
 
@@ -257,51 +254,51 @@
   <div class="wkp-summary" id="wkp-summary">
 
     <div class="wkp-sum-card wkp-sum-ok"
-         data-tip="Ready to Start&#10;These Work Orders have ALL required materials available in the warehouse right now.&#10;&#10;Action: You can release these to production immediately.">
+         data-tip="Ready to Start: These Work Orders have ALL required materials available in the warehouse right now.&#10;&#10;Action: You can release these to production immediately.">
       <div class="wkp-sum-icon">&#x2705;</div>
-      <div>
+      <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-ready">--</div>
         <div class="wkp-sum-lbl">Ready to Start</div>
-        <div class="wkp-sum-hint">All materials in stock</div>
+        <div class="wkp-sum-hint">Full stock available</div>
       </div>
     </div>
 
     <div class="wkp-sum-card wkp-sum-warn"
-         data-tip="Partial Shortage&#10;Some materials are available, some are missing. These WOs can produce partially, or need urgent procurement.&#10;&#10;Action: Click the yellow chip on any row to see which materials are missing.">
+         data-tip="Partial Shortage: Some materials are available, some are missing. These WOs can produce partially, or need urgent procurement.&#10;&#10;Action: Click the yellow chip on any row to see which materials are missing.">
       <div class="wkp-sum-icon">&#x26A0;</div>
-      <div>
+      <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-partial">--</div>
         <div class="wkp-sum-lbl">Partial Shortage</div>
-        <div class="wkp-sum-hint">Some materials missing</div>
+        <div class="wkp-sum-hint">Some items missing</div>
       </div>
     </div>
 
     <div class="wkp-sum-card wkp-sum-err"
-         data-tip="Cannot Start&#10;Critical materials are missing. These Work Orders are fully blocked and CANNOT begin production.&#10;&#10;Action: Click the red chip to see what is missing, then create a Purchase MR to order it.">
-      <div class="wkp-sum-icon">&#x1F534;</div>
-      <div>
+         data-tip="Cannot Start: Critical materials are missing. These Work Orders are fully blocked and CANNOT begin production.&#10;&#10;Action: Click the red chip to see what is missing, then create a Purchase MR to order it.">
+      <div class="wkp-sum-icon">&#x1F6AB;</div>
+      <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-blocked">--</div>
         <div class="wkp-sum-lbl">Cannot Start</div>
-        <div class="wkp-sum-hint">Materials not available</div>
+        <div class="wkp-sum-hint">Materials blocked</div>
       </div>
     </div>
 
     <div class="wkp-sum-card"
-         data-tip="Total Work Orders&#10;Total number of open Work Orders (Not Started + In Process + Material Transferred) included in this simulation.">
+         data-tip="Total Work Orders: Total number of open Work Orders included in this simulation.">
       <div class="wkp-sum-icon">&#x1F4E6;</div>
-      <div>
+      <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-total">--</div>
-        <div class="wkp-sum-lbl">Total Work Orders</div>
+        <div class="wkp-sum-lbl">Total Orders</div>
         <div class="wkp-sum-hint">Open &amp; in progress</div>
       </div>
     </div>
 
     <div class="wkp-sum-card wkp-sum-cost"
-         data-tip="Total Materials to Buy&#10;Estimated purchase cost of ALL missing materials across every blocked and partially-blocked Work Order.&#10;&#10;This is roughly how much you need to spend to unblock all production.">
+         data-tip="Total Materials to Buy: Estimated purchase cost of ALL missing materials across every blocked and partially-blocked Work Order.&#10;&#10;This is roughly how much you need to spend to unblock all production.">
       <div class="wkp-sum-icon">&#x20B9;</div>
-      <div>
+      <div class="wkp-sum-body">
         <div class="wkp-sum-val wkp-sum-val-sm" id="wsum-shortage-val">--</div>
-        <div class="wkp-sum-lbl">Materials to Buy</div>
+        <div class="wkp-sum-lbl">Procurement Value</div>
         <div class="wkp-sum-hint">To unblock all WOs</div>
       </div>
     </div>
@@ -311,28 +308,34 @@
   <!-- ════ 3.5. TAB BAR ════ -->
   <div class="wkp-tab-bar" id="wkp-tab-bar">
     <button class="wkp-tab-btn active" data-tab="wo-plan"
-            data-tip="WO Kitting Plan&#10;Main table: all open Work Orders with material availability simulation.&#10;Drag rows (Mode B) or enter a number to set priority order.">
-      &#x1F4CB; WO Kitting Plan
+            data-tip="WO Kitting Plan: Main table: all open Work Orders with material availability simulation.&#10;Drag rows (Mode B) or enter a number to set priority order.">
+      <span class="wkp-tab-icon">&#x1F4CB;</span>
+      <span class="wkp-tab-text">Production Plan</span>
     </button>
     <button class="wkp-tab-btn" data-tab="shortage-report"
-            data-tip="Material Shortage Report&#10;Consolidated view: all materials that are short across EVERY open Work Order.&#10;Sorted by gap size. Use this to plan bulk procurement.">
-      &#x1F6D2; Material Shortage Report
+            data-tip="Material Shortage: Consolidated view: all materials that are short across EVERY open Work Order.&#10;Sorted by gap size. Use this to plan bulk procurement.">
+      <span class="wkp-tab-icon">&#x1F6D2;</span>
+      <span class="wkp-tab-text">Material Shortage</span>
     </button>
     <button class="wkp-tab-btn" data-tab="emergency"
-            data-tip="Emergency Priorities&#10;Work Orders with unshipped customer orders (overdue or due this month).&#10;Use this to decide which WOs to push hardest.">
-      &#x26A0; Emergency Priorities
+            data-tip="Emergency Priorities: Work Orders with unshipped customer orders (overdue or due this month).&#10;Use this to decide which WOs to push hardest.">
+      <span class="wkp-tab-icon">&#x26A0;</span>
+      <span class="wkp-tab-text">Emergencies</span>
     </button>
     <button class="wkp-tab-btn" data-tab="dispatch"
-            data-tip="Dispatch Bottleneck&#10;Per finished-good item: compare Customer Orders vs (FG In Stock + Will Produce from WOs).&#10;Shows Pick List status, Stock Reservations, partial deliveries, and gaps.&#10;Use this to find items where production output will not cover customer commitments.">
-      &#x1F69A; Dispatch Bottleneck
+            data-tip="Dispatch Bottleneck: compare Customer Orders vs (FG In Stock + Will Produce from WOs).&#10;Find items where production output will not cover customer commitments.">
+      <span class="wkp-tab-icon">&#x1F69A;</span>
+      <span class="wkp-tab-text">Dispatch Risk</span>
     </button>
     <button class="wkp-tab-btn wkp-tab-btn-ai" data-tab="ai-chat"
-            data-tip="AI Production Advisor&#10;Get a plain-language briefing of your production situation.&#10;Ask questions about specific Work Orders, materials, or delivery commitments.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
-      &#x1F916; AI Advisor
+            data-tip="AI Advisor: Get a plain-language briefing of your production situation.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
+      <span class="wkp-tab-icon">&#x1F916;</span>
+      <span class="wkp-tab-text">AI Advisor</span>
     </button>
     <button class="wkp-tab-btn" data-tab="item-view"
-            data-tip="FG Item View&#10;All finished-good items with active Work Orders or pending Sales Orders.&#10;Shows WO count, planned/produced/remaining qty, SO demand, consumed material,&#10;and last historical production cost per unit.&#10;Supports UOM selector for cost display and CSV/PDF export.">
-      &#x1F4E6; Item View
+            data-tip="FG Item View: All finished-good items with active Work Orders or pending Sales Orders.&#10;Summary by product code with cost audit history.">
+      <span class="wkp-tab-icon">&#x1F4E6;</span>
+      <span class="wkp-tab-text">Product View</span>
     </button>
   </div>
 
