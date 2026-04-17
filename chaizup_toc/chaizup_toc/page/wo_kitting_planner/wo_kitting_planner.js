@@ -26,9 +26,13 @@
  * --------
  * - Stock Perspective X: physical Bin stock only
  * - Stock Perspective Y: Bin + open POs + open Purchase MRs + open WO expected output
+ *   (Stock Mode now propagated to Dispatch tab — fg_stock includes FG PO inbound when Y)
+ *   (Stock Mode change resets dispatch + item-view loaded flags → auto-refetch with new mode)
  * - Scenario A (Independent Check): each WO evaluated against FULL pool; order irrelevant
  * - Scenario B (Priority Queue): stock consumed in row order; drag rows to change priority
  * - Multi-level BOM toggle (Deep BOM Check — OFF by default for speed)
+ * - Deep BOM chip (session 10): 🌳 Deep BOM shown per WO item if any component has its own BOM;
+ *   click → _showBomTreeModal() → get_item_bom_tree() → collapsible tree up to 4 levels
  * - Summary strip: Ready / Partial / Blocked / Total / Shortage Value
  * - Shortage modal with recommendation card + per-component table (dual UOM + received qty)
  * - WO detail modal with decision guidance based on customer order pressure
@@ -36,19 +40,72 @@
  * - Dispatch Bottleneck tab: SO-independent — shows ALL items with pending customer orders
  *   (submitted SOs AND draft SOs); customer column shows name + group + ERPNext ID;
  *   Draft SOs shown with amber "✏ Draft" badge; UOM on all qty columns;
- *   SO detail expand shows Ordered/Delivered/Pending in both stock UOM and secondary UOM
+ *   SO detail expand shows Ordered/Delivered/Pending in both stock UOM and secondary UOM;
+ *   Coverage and Gap columns now show UOM label + secondary UOM (session 10)
  * - Material Shortage tab: dual UOM on all qty columns; per-WO breakdown; received_qty_po column;
  *   per-row checkboxes + "Create MR for Selected" button; MOQ + Lead Time columns;
  *   Details expand row shows per-WO shortage breakdown; UOM selector per row in MR dialog;
- *   Consolidated MR also uses the full review dialog (no longer a bare frappe.prompt)
+ *   Consolidated MR also uses the full review dialog (no longer a bare frappe.prompt);
+ *   Item group filter bar (session 10): filter shortage table by item group;
+ *   Material name is clickable (session 10) → _showMaterialSupplyModal(item_code)
+ *     → get_material_supply_detail() → shows open POs / MRs / receipts / active batches;
+ *   Duplicate WO detail bug fixed (session 10): same component in multiple BOM paths
+ *     now sums shortage instead of pushing duplicate WO rows
  * - WO Kitting tab: "Already Produced" column (produced_qty) with dual UOM after "Qty to Produce"
  * - AI Advisor: model selector with cost estimates; auto-insight uses HTML formatting;
  *   context includes UOM fields (uom, secondary_uom, secondary_factor) for accurate quantity citation;
- *   8 function-calling tools (server-side); AI cites which tools it used via wkp-ai-tools-badge
+ *   8 function-calling tools (server-side); AI cites which tools it used via wkp-ai-tools-badge;
+ *   item_code always included in AI responses — enforced via system prompt rule (session 10);
+ *   Data points indicator (session 10): shows "Data fed to AI: N WOs, M materials, ..." under insight;
+ *   compress_context_for_ai sends item_code in critical_wos + top_shortages (session 10)
  * - 360° Cost Audit per WO: "₹ Cost" button in last column → frappe.ui.Dialog showing:
  *   BOM standard cost breakdown (qty_per_unit × valuation_rate per component),
  *   actual consumed cost (Stock Entry Manufacture type), per-unit cost in stock UOM + secondary UOM,
  *   variance (actual − standard, color-coded), last 5 completed WOs for same item (historical)
+ * - FG Item View tab: all items with active WOs or pending SOs grouped by item_code;
+ *   columns: WO count, kit status summary, planned/produced/remaining, consumed (SE),
+ *   SO demand, last historical production cost per unit with live UOM selector
+ * - Export: CSV download (Item View + WO Plan tabs); PDF via browser print (new tab)
+ * - Email: frappe.ui.Dialog → To / CC / Subject / Report tab selector;
+ *   Python send_dashboard_email() wraps inline-styled snapshot HTML in an email template
+ *   with sender info, live dashboard link, and sent date; uses frappe.sendmail()
+ *
+ * ══════════════════════════════════════════════════════════════════════
+ * 🔒 RESTRICTED — DO NOT CHANGE (these are load-bearing architectural choices)
+ * ══════════════════════════════════════════════════════════════════════
+ * WKP-001: NO single quotes anywhere in wo_kitting_planner.html.
+ *          Frappe wraps the HTML file content in a JS single-quoted string at render time.
+ *          Single quotes inside the HTML will break the entire page with a JS parse error.
+ *          Use &apos; / &amp; / &gt; / &#x27; or template literals inside method strings.
+ *
+ * WKP-002: ALWAYS flush Redis cache after ANY file change:
+ *          redis-cli -h redis-cache -p 6379 FLUSHALL
+ *          Without this, Frappe serves the old file from cache.
+ *
+ * WKP-004: simulate() MUST use this.woOrder (not this.rows.map(r=>r.wo)) to preserve
+ *          Scenario B drag-reorder. Using rows directly resets priority to original WO order.
+ *
+ * WKP-006: AI context: NEVER send rows or dispatch keys to the LLM.
+ *          These are 300+ WOs × 10 shortage items each — HTTP 400 from DeepSeek.
+ *          Always strip: context_for_ai = {k: v for k, v in ctx.items() if k not in ("rows","dispatch")}
+ *
+ * WKP-012: WO Kitting tab column order must stay in sync between HTML <th> and JS _buildRow() <td>.
+ *          Current order: drag | seq | WO | item | qty_to_produce | produced_qty | status | cost |
+ *          prev_so | curr_so | total_so | erp_status | view
+ *          If columns are reordered in HTML without matching JS, data displays in wrong column.
+ *
+ * WKP-013: _openMRQtyDialog UOM selects are paired with qty inputs BY INDEX.
+ *          CSS.escape is not universally available; the NodeLists must stay in sync.
+ *
+ * WKP-015/016: Sticky table headers REQUIRE flex layout on the pane + flex:1;overflow:auto
+ *          on the scroll container child. Changing layout to block/grid will break sticky.
+ *
+ * _dispatchData, _dispatchLoaded, _dispatchLoading: keyed state for dispatch tab caching.
+ *   Change these only if you also update _fetchDispatchData() and _switchTab().
+ * _shortageAggList: set by _renderShortageReport(), consumed by _bindShortageCheckboxes().
+ *   Do not pre-clear or share between tabs.
+ * _aiContext, _aiSessionId: AI session state. _aiContext is the compressed context object.
+ *   Do not strip data_points key — it is used by _updateAIDataPointsBadge().
  *
  * UOM DISPLAY (all tabs)
  * ----------------------
@@ -82,12 +139,20 @@
  *                  → user edits qtys + selects UOM per row + picks warehouse
  *                  → create_purchase_mr_for_wo_shortages
  *   Consolidated → _createConsolidatedMR(allNetGapItems) → _openMRQtyDialog() same dialog
- *   Dispatch tab → _fetchDispatchData() → get_dispatch_bottleneck() (no args) →
+ *   Dispatch tab → _fetchDispatchData() → get_dispatch_bottleneck(stock_mode) →
  *                  _renderDispatchBottleneck() [merges SO data + WO will_produce]
  *                  SO detail shows: customer_name / customer_group / customer ID
+ *                  stock_mode passed to API so FG PO inbound is added when mode=Y
  *   AI tab      → _initAIPanel() → get_available_ai_models() → populate #wkp-ai-model-select
  *              → simulate triggers compress_context_for_ai → get_ai_auto_insight(model)
  *              → user messages → chat_with_planner(model)
+ *   Item View tab → _fetchItemView() → get_item_wo_summary() → _renderItemView()
+ *              merges this.rows (kit_status counts) with API data (SO + cost)
+ *              UOM selector → client-side cost recalc per chosen UOM
+ *   Export CSV → _exportCSV() → _downloadCSV() (Item View + WO Plan tabs)
+ *   Export PDF → _exportPDF() → window.open() + print() (landscape, email-safe HTML)
+ *   Email      → _showEmailDialog() (frappe.ui.Dialog) → _buildEmailSnapshot(tab)
+ *              → send_dashboard_email() → frappe.sendmail() with inline-styled HTML
  *
  * API CALLS
  * ---------
@@ -97,11 +162,22 @@
  *   chaizup_toc.api.wo_kitting_api.get_items_min_order_qty   → (legacy; MOQ now from procInfo)
  *   chaizup_toc.api.wo_kitting_api.get_items_procurement_info → MOQ + lead_time_days per item;
  *                                                               called eagerly in _renderShortageReport
- *   chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck   → no args; all SO items incl. drafts;
- *                                                               so_list includes customer_name/group,
- *                                                               so_docstatus (0=Draft,1=Submitted)
+ *   chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck   → args: stock_mode; all SO items incl.
+ *                                                               drafts; so_list includes customer_name/group,
+ *                                                               so_docstatus (0=Draft,1=Submitted);
+ *                                                               when stock_mode=current_and_expected,
+ *                                                               FG PO inbound qty added to fg_stock
+ *   chaizup_toc.api.wo_kitting_api.get_item_bom_tree         → args: item_code, max_depth=4
+ *                                                               → hierarchical BOM tree (session 10)
+ *   chaizup_toc.api.wo_kitting_api.get_material_supply_detail → args: item_code
+ *                                                               → {open_pos, open_mrs,
+ *                                                               recent_receipts, active_batches}
+ *                                                               (session 10 — shortage tab modal)
  *   chaizup_toc.api.wo_kitting_api.compress_context_for_ai   → enriched summary + supply chain;
- *                                                               critical_wos includes uom fields;
+ *                                                               critical_wos includes uom fields +
+ *                                                               item_code (session 10);
+ *                                                               top_shortages includes item_code (s10);
+ *                                                               data_points key for UI indicator (s10);
  *                                                               dispatch_alerts includes uom+item_name
  *   chaizup_toc.api.wo_kitting_api.get_ai_auto_insight       → args: context_json, model
  *   chaizup_toc.api.wo_kitting_api.chat_with_planner         → args: message, session_id,
@@ -113,6 +189,17 @@
  *                                                               → {bom_components, actual_consumed,
  *                                                               std_cost_per_unit, total_actual_cost,
  *                                                               variance_total, variance_pct, historical}
+ *   chaizup_toc.api.wo_kitting_api.get_item_wo_summary     → no args; returns list per item_code:
+ *                                                               {item_code, item_name, item_group,
+ *                                                               stock_uom, secondary_uom, secondary_factor,
+ *                                                               item_uoms[], wo_count, wo_list[],
+ *                                                               planned_qty, produced_qty, remaining_qty,
+ *                                                               consumed_qty, consumed_cost,
+ *                                                               so_count, so_pending_qty,
+ *                                                               last_cost_per_unit, last_cost_wo, last_cost_date}
+ *   chaizup_toc.api.wo_kitting_api.send_dashboard_email    → args: to_emails, cc_emails, subject,
+ *                                                               snapshot_html, report_tab
+ *                                                               → {sent, from_name, to[], cc[]}
  *
  * AI FUNCTION TOOLS (server-side, in _AI_TOOLS in wo_kitting_api.py)
  * -------------------------------------------------------------------
@@ -166,6 +253,32 @@
  *          in the consumed list. Guard: the finished good's item_code ≠ any BOM component,
  *          so a small mismatch is usually harmless. If std_cost_per_unit=0, the BOM has
  *          no active submitted BOM — check ERPNext BOM list for that item.
+ * WKP-019: Item View UOM selector: cost recalculation is client-side only (factor × base_cost).
+ *          This is an approximation — accurate cross-UOM cost requires SE data in that UOM.
+ *          The selector is for display convenience only; do not use for P&L reporting.
+ * WKP-020: Email snapshot is capped at 25 rows to avoid email size limits. The email always
+ *          includes a live dashboard link. PDF export opens a new tab — some browsers may
+ *          block pop-ups; instruct users to allow pop-ups for this site.
+ * WKP-021: Deep BOM detection queries tabBOM for component items that have their own submitted
+ *          active BOMs. Only first-level components are checked (not recursive). A component
+ *          that is a sub-assembly in a WO BOM but has no submitted BOM will NOT be flagged.
+ *          Multi-level toggle (Deep BOM Check) expands the BOM to sub-assembly components —
+ *          separate from the has_deep_bom visual indicator (which is always shown).
+ * WKP-022: Dispatch tab stock_mode propagation: when Stock Mode Y is selected, the dispatch
+ *          API adds open FG PO inbound qty to fg_stock. This changes Total Coverage and Gap
+ *          values on the dispatch tab. Mode change resets _dispatchLoaded so a fresh fetch
+ *          occurs — without this reset, the old fg_stock would be shown after mode toggle.
+ * WKP-023: Shortage report duplicate WO detail (fixed session 10): a component appearing in
+ *          multiple BOM paths for the same WO was pushed to wo_detail multiple times, inflating
+ *          WO count in the Details expand. Fix: find existing WO entry in wo_detail and sum
+ *          shortage instead of pushing a new entry. wo_list.includes() already prevented
+ *          duplicate WO names in the count; wo_detail needed the same dedup logic.
+ * WKP-024: Material supply modal batch valuation uses a correlated subquery on SLE. For items
+ *          with large SLE history this may be slow. If performance is an issue, add an index on
+ *          (item_code, batch_no, posting_date) in tabStock Ledger Entry.
+ * WKP-025: BOM tree modal toggle targets IDs built from item_code. IDs are scoped to the
+ *          dialog DOM — no risk of collision with page elements. If item_code contains special
+ *          chars, they are sanitised via replace(/[^a-zA-Z0-9]/g, "_").
  */
 
 "use strict";
@@ -259,6 +372,48 @@ const WKP_POPOVERS = {
 };
 
 
+// ─────────────────────────────────────────────────────────────────────────
+//  BOM TREE RENDERER  (used by _showBomTreeModal)
+//  Renders a recursive BOM node as indented HTML.
+//  Each level shows a collapse toggle, item code+name, UOM, qty per unit.
+// ─────────────────────────────────────────────────────────────────────────
+
+function _renderBomNode(node, depth) {
+  const nodeId = "wkp-bom-n-" + (node.item_code || "").replace(/[^a-zA-Z0-9]/g, "_") + "-" + depth;
+  const hasChildren = node.children && node.children.length > 0;
+  const indent = depth * 20;
+
+  const toggle = hasChildren
+    ? `<span class="wkp-bom-toggle" data-target="${nodeId}" style="cursor:pointer;margin-right:4px">\u25BC</span>`
+    : `<span style="display:inline-block;width:16px;margin-right:4px"></span>`;
+
+  const hasBomBadge = node.has_bom
+    ? `<span class="wkp-bom-badge-has" title="Has its own BOM">\uD83C\uDF33 Has BOM</span>`
+    : "";
+  const truncBadge  = node.truncated
+    ? `<span class="wkp-bom-badge-trunc" title="Tree truncated at depth limit">\u2026 deeper levels exist</span>`
+    : "";
+
+  const childrenHtml = hasChildren
+    ? `<div id="${nodeId}" class="wkp-bom-children">${node.children.map(c => _renderBomNode(c, depth + 1)).join("")}</div>`
+    : "";
+
+  return `
+<div class="wkp-bom-node" style="margin-left:${indent}px">
+  <div class="wkp-bom-row">
+    ${toggle}
+    <span class="wkp-bom-item-code">${_esc(node.item_code)}</span>
+    <span class="wkp-bom-item-name">${_esc(node.item_name || "")}</span>
+    ${node.qty_per_unit && node.qty_per_unit !== 1
+      ? `<span class="wkp-bom-qty">\u00D7${_fmt_num(node.qty_per_unit, 3)}\u00a0${_esc(node.uom || "")}</span>`
+      : `<span class="wkp-bom-qty">${_esc(node.uom || "")}</span>`}
+    ${hasBomBadge}${truncBadge}
+  </div>
+  ${childrenHtml}
+</div>`;
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════
 //  PAGE ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════
@@ -308,12 +463,17 @@ class WOKittingPlanner {
     this._dragSrc = null;
 
     // Tab system
-    this._activeTab = "wo-plan";  // "wo-plan" | "shortage-report" | "emergency" | "dispatch"
+    this._activeTab = "wo-plan";  // "wo-plan" | "shortage-report" | "emergency" | "dispatch" | "item-view"
 
     // Dispatch bottleneck data (fetched from separate API call after load)
     this._dispatchData   = {};   // {item_code: {fg_stock, total_pending, so_list, ...}}
     this._dispatchLoaded = false; // true once API responded
     this._dispatchLoading = false; // true while API call in-flight
+
+    // Item View data (FG-wise WO + SO summary)
+    this._itemViewData    = [];   // array from get_item_wo_summary()
+    this._itemViewLoaded  = false;
+    this._itemViewLoading = false;
 
     // Client-side filter state (applied in _getFilteredRows)
     this._filterItemGroup = "";   // item_group value from filter bar
@@ -513,6 +673,10 @@ class WOKittingPlanner {
         document.querySelectorAll("#wkp-seg-stock .wkp-seg-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         this.stockMode = btn.dataset.val;
+        // Stock mode affects dispatch FG stock calculation and item view — reset so they re-fetch
+        this._dispatchLoaded  = false;
+        this._dispatchLoading = false;
+        this._itemViewLoaded  = false;
         this.simulate();
       });
     });
@@ -524,6 +688,10 @@ class WOKittingPlanner {
         document.querySelectorAll("#wkp-seg-calc .wkp-seg-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         this.calcMode = btn.dataset.val;
+        // Calc mode affects which WOs are blocked — dispatch and item view must re-fetch
+        this._dispatchLoaded  = false;
+        this._dispatchLoading = false;
+        this._itemViewLoaded  = false;
         this._updateHintBar();
         this.simulate();
       });
@@ -561,6 +729,14 @@ class WOKittingPlanner {
 
     // Refresh
     document.getElementById("wkp-refresh").addEventListener("click", () => this.load());
+
+    // Export / Email buttons
+    const csvBtn   = document.getElementById("wkp-export-csv");
+    const pdfBtn   = document.getElementById("wkp-export-pdf");
+    const emailBtn = document.getElementById("wkp-send-email");
+    if (csvBtn)   csvBtn.addEventListener("click",   () => this._exportCSV());
+    if (pdfBtn)   pdfBtn.addEventListener("click",   () => this._exportPDF());
+    if (emailBtn) emailBtn.addEventListener("click", () => this._showEmailDialog());
 
     // Modal close buttons + backdrop click
     ["wkp-modal-close", "wkp-wo-close"].forEach(id => {
@@ -658,6 +834,9 @@ class WOKittingPlanner {
     this._dispatchLoaded  = false;
     this._dispatchData    = {};
     this._fetchDispatchData();
+    // Reset Item View so it reloads with fresh simulation data
+    this._itemViewLoaded  = false;
+    this._itemViewData    = [];
     // Reset AI insight so it regenerates with fresh simulation data
     this._aiInsightLoaded = false;
     this._aiContext       = null;
@@ -803,6 +982,12 @@ class WOKittingPlanner {
     <div class="wkp-item-name">${_esc(row.item_name || row.item_code)}</div>
     <div class="wkp-item-code">${_esc(row.item_code)}</div>
     ${row.item_group ? `<div class="wkp-item-group-tag">${_esc(row.item_group)}</div>` : ""}
+    ${row.has_deep_bom
+      ? `<span class="wkp-deep-bom-chip" data-action="bom-tree"
+               data-item="${_esc(row.item_code)}" data-bom="${_esc(row.bom_no || "")}"
+               title="This item has a multi-level BOM \u2014 some components are themselves manufactured. Click to explore."
+               >\uD83C\uDF33 Deep BOM</span>`
+      : ""}
   </td>
   <td class="ta-r"
       data-tip="Qty to Produce (Remaining)&#10;How many units still need to be manufactured.&#10;Formula: Work Order Planned Qty &minus; Already Produced Qty">
@@ -874,6 +1059,61 @@ class WOKittingPlanner {
         const row = this.rows.find(r => r.wo === btn.dataset.wo);
         if (row) this._showCostAuditModal(row);
       });
+    });
+
+    document.querySelectorAll("[data-action='bom-tree']").forEach(chip => {
+      chip.addEventListener("click", () => {
+        this._showBomTreeModal(chip.dataset.item, chip.dataset.bom);
+      });
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  DEEP BOM TREE MODAL
+  //  Shows a collapsible hierarchical BOM tree for items with multi-level BOMs.
+  //  Triggered by the 🌳 Deep BOM chip in _buildRow().
+  // ─────────────────────────────────────────────────────────────────────
+
+  _showBomTreeModal(item_code, _bom_no) {  // _bom_no reserved for future use
+    const d = new frappe.ui.Dialog({
+      title: "BOM Tree: " + item_code,
+      size: "large",
+      fields: [{ fieldtype: "HTML", fieldname: "tree_html" }],
+    });
+    d.fields_dict.tree_html.$wrapper.html(
+      `<div style="padding:12px;color:var(--stone-400);font-style:italic">Loading BOM tree\u2026</div>`
+    );
+    d.show();
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_item_bom_tree",
+      args: { item_code, max_depth: 4 },
+      callback: r => {
+        const tree = r && r.message;
+        if (!tree) {
+          d.fields_dict.tree_html.$wrapper.html(
+            `<div class="wkp-bom-tree-empty">No active BOM found for ${_esc(item_code)}.</div>`
+          );
+          return;
+        }
+        d.fields_dict.tree_html.$wrapper.html(
+          `<div class="wkp-bom-tree-wrap">${_renderBomNode(tree, 0)}</div>`
+        );
+        // Bind collapse toggles
+        d.fields_dict.tree_html.$wrapper.find(".wkp-bom-toggle").on("click", function() {
+          const target = document.getElementById(this.dataset.target);
+          if (target) {
+            const open = target.style.display !== "none";
+            target.style.display = open ? "none" : "";
+            this.textContent = open ? "\u25B6" : "\u25BC";
+          }
+        });
+      },
+      error: () => {
+        d.fields_dict.tree_html.$wrapper.html(
+          `<div class="wkp-bom-tree-empty">Error loading BOM tree.</div>`
+        );
+      },
     });
   }
 
@@ -1028,6 +1268,7 @@ class WOKittingPlanner {
       "emergency"      : "wkp-pane-emergency",
       "dispatch"       : "wkp-pane-dispatch",
       "ai-chat"        : "wkp-pane-ai-chat",
+      "item-view"      : "wkp-pane-item-view",
     };
     Object.entries(panes).forEach(([tab, paneId]) => {
       const pane = document.getElementById(paneId);
@@ -1052,11 +1293,20 @@ class WOKittingPlanner {
     if (this._activeTab === "ai-chat" && this._aiInsightLoaded) {
       // Insight was pre-rendered; just ensure panel is visible
     }
+
+    // If switching to Item View, fetch data if not yet loaded
+    if (this._activeTab === "item-view") {
+      if (this._itemViewLoaded) {
+        this._renderItemView();
+      } else if (!this._itemViewLoading) {
+        this._fetchItemView();
+      }
+    }
   }
 
   _showAllPanes(show) {
     ["wkp-pane-wo-plan", "wkp-pane-shortage", "wkp-pane-emergency",
-     "wkp-pane-dispatch", "wkp-pane-ai-chat"].forEach(id => {
+     "wkp-pane-dispatch", "wkp-pane-ai-chat", "wkp-pane-item-view"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = show ? "" : "none";
     });
@@ -1150,6 +1400,7 @@ class WOKittingPlanner {
           agg[ic] = {
             item_code       : ic,
             item_name       : comp.item_name || ic,
+            item_group      : row.item_group || "",   // from WO row item_group
             uom             : comp.uom || "",
             secondary_uom   : comp.secondary_uom || "",
             secondary_factor: comp.secondary_factor || 1.0,
@@ -1175,11 +1426,19 @@ class WOKittingPlanner {
         a.received_qty     = Math.max(a.received_qty, comp.received_qty_po || 0);
         a.mr_qty           = Math.max(a.mr_qty,       comp.mr_qty          || 0);
         if (!a.wo_list.includes(row.wo)) a.wo_list.push(row.wo);
-        a.wo_detail.push({
-          wo       : row.wo,
-          wo_item  : row.item_name || row.item_code || "",
-          shortage : comp.shortage || 0,
-        });
+        // Fix: deduplicate WO detail rows — same component can appear in multiple
+        // BOM paths for the same WO; if WO already in wo_detail, sum the shortage
+        // instead of creating a duplicate row (which caused inflated SO counts).
+        const existingDetail = a.wo_detail.find(d => d.wo === row.wo);
+        if (existingDetail) {
+          existingDetail.shortage += (comp.shortage || 0);
+        } else {
+          a.wo_detail.push({
+            wo       : row.wo,
+            wo_item  : row.item_name || row.item_code || "",
+            shortage : comp.shortage || 0,
+          });
+        }
       });
     });
 
@@ -1302,8 +1561,12 @@ class WOKittingPlanner {
            title="Select to include in Material Request">
   </td>
   <td>
-    <div class="wkp-item-name">${_esc(a.item_name)}</div>
-    <div class="wkp-item-code">${_esc(a.item_code)}</div>
+    <button class="wkp-sr-item-btn" data-item="${_esc(a.item_code)}"
+            title="Click to see open Purchase Orders, Material Requests, recent receipts and active batches for this material">
+      <div class="wkp-item-name">${_esc(a.item_name)}</div>
+      <div class="wkp-item-code">${_esc(a.item_code)}</div>
+    </button>
+    ${a.item_group ? `<div class="wkp-item-group-tag">${_esc(a.item_group)}</div>` : ""}
   </td>
   <td class="ta-r" data-tip="Total qty of this material needed across all Work Orders.">${_dualQtySR(a.total_required, a.uom, a.secondary_factor, a.secondary_uom)}</td>
   <td class="ta-r" data-tip="Physical warehouse stock right now (Bin.actual_qty).">${_dualQtySR(a.total_available, a.uom, a.secondary_factor, a.secondary_uom)}</td>
@@ -1340,15 +1603,28 @@ class WOKittingPlanner {
 </tr>`;
     }).join("");
 
-    body.innerHTML = `
+    // Build item group filter options from aggList
+    const igSet = new Set(aggList.map(a => a.item_group || "").filter(Boolean));
+    const igOptions = [...igSet].sort().map(ig =>
+      `<button class="wkp-sr-ig-btn" data-ig="${_esc(ig)}">${_esc(ig)}</button>`
+    ).join("");
+    const filterBar = igSet.size > 0
+      ? `<div class="wkp-sr-filter-bar">
+           <span class="wkp-sr-filter-lbl">Filter by Item Group:</span>
+           <button class="wkp-sr-ig-btn active" data-ig="">All</button>
+           ${igOptions}
+         </div>`
+      : "";
+
+    body.innerHTML = filterBar + `
 <div class="wkp-shortage-hint" data-tip="Items with positive Net Gap have no Purchase Order or Material Request raised yet. These need immediate procurement action.">
   <strong>How to use:</strong>
   Items sorted by Net Gap (highest unmet shortage first).
-  Tick checkboxes to select specific items, then click <strong>Create MR for Selected</strong> to raise a targeted Material Request.
+  Click any <strong>material name</strong> to see open POs, MRs, receipts and batches.
+  Tick checkboxes to select items, then click <strong>Create MR for Selected</strong>.
   Click <strong>Details</strong> on any row to see which Work Orders are affected.
-  For bulk action, use <strong>Create Consolidated MR (All Items)</strong> to order everything at once.
 </div>
-<table class="wkp-modal-table wkp-shortage-table">
+<table class="wkp-modal-table wkp-shortage-table" id="wkp-sr-table">
   <thead>
     <tr>
       <th class="ta-c wkp-sr-chk-cell" data-tip="Select / deselect all materials.">
@@ -1371,6 +1647,31 @@ class WOKittingPlanner {
   <tbody>${rowsHtml}</tbody>
 </table>`;
 
+    // Item group filter binding
+    body.querySelectorAll(".wkp-sr-ig-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        body.querySelectorAll(".wkp-sr-ig-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const ig = btn.dataset.ig || "";
+        const table = body.querySelector("#wkp-sr-table");
+        if (!table) return;
+        table.querySelectorAll("tbody tr:not(.wkp-sr-detail-row)").forEach(tr => {
+          const ic = tr.querySelector("[data-item]") ? tr.querySelector("[data-item]").dataset.item : "";
+          const entry = aggList.find(a => a.item_code === ic);
+          if (!ig || (entry && entry.item_group === ig)) {
+            tr.style.display = "";
+          } else {
+            tr.style.display = "none";
+          }
+        });
+      });
+    });
+
+    // Material supply modal binding — click item name to see supply pipeline
+    body.querySelectorAll(".wkp-sr-item-btn").forEach(btn => {
+      btn.addEventListener("click", () => this._showMaterialSupplyModal(btn.dataset.item));
+    });
+
     // "Create Consolidated MR" button — for all items with net gap > 0
     const hasNetGap = aggList.some(a => (a.total_shortage - a.po_qty - a.mr_qty) > 0);
     if (mrBtn) {
@@ -1384,6 +1685,126 @@ class WOKittingPlanner {
 
     // Activate checkbox selection system
     this._bindShortageCheckboxes();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  MATERIAL SUPPLY DETAIL MODAL
+  //  Opens when user clicks on a material name in the shortage report.
+  //  Shows the full procurement pipeline: open POs, open MRs,
+  //  recent receipts, and active batches.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _showMaterialSupplyModal(item_code) {
+    const d = new frappe.ui.Dialog({
+      title: "Supply Pipeline: " + item_code,
+      size: "extra-large",
+      fields: [{ fieldtype: "HTML", fieldname: "supply_html" }],
+    });
+    d.fields_dict.supply_html.$wrapper.html(
+      `<div style="padding:16px;color:var(--stone-400);font-style:italic">Loading supply details\u2026</div>`
+    );
+    d.show();
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_material_supply_detail",
+      args: { item_code },
+      callback: r => {
+        const data = r && r.message;
+        if (!data) {
+          d.fields_dict.supply_html.$wrapper.html(
+            `<div class="wkp-supply-modal-empty">No supply data found for ${_esc(item_code)}.</div>`
+          );
+          return;
+        }
+
+        const uom = data.uom || "";
+
+        // ── Open Purchase Orders ──
+        const poRows = (data.open_pos || []).map(po => `
+<tr>
+  <td><a href="/app/purchase-order/${_esc(po.po_name)}" target="_blank" class="wkp-wo-link">${_esc(po.po_name)}</a></td>
+  <td>${_esc(po.supplier || "")}</td>
+  <td class="ta-r">${_fmt_num(po.qty, 2)}&nbsp;${_esc(uom)}</td>
+  <td class="ta-r" style="color:var(--ok-text)">${_fmt_num(po.received_qty, 2)}&nbsp;${_esc(uom)}</td>
+  <td class="ta-r wkp-cell-red"><strong>${_fmt_num(po.pending_qty, 2)}&nbsp;${_esc(uom)}</strong></td>
+  <td>${_esc(po.schedule_date || "\u2014")}</td>
+  <td class="ta-r">${po.valuation_rate > 0 ? "\u20B9" + _fmt_num(po.valuation_rate, 2) : "\u2014"}</td>
+</tr>`).join("");
+
+        // ── Open Material Requests ──
+        const mrRows = (data.open_mrs || []).map(mr => `
+<tr>
+  <td><a href="/app/material-request/${_esc(mr.mr_name)}" target="_blank" class="wkp-wo-link">${_esc(mr.mr_name)}</a></td>
+  <td class="ta-r">${_fmt_num(mr.qty, 2)}&nbsp;${_esc(uom)}</td>
+  <td class="ta-r" style="color:var(--ok-text)">${_fmt_num(mr.ordered_qty, 2)}&nbsp;${_esc(uom)}</td>
+  <td class="ta-r wkp-cell-red"><strong>${_fmt_num(mr.pending_qty, 2)}&nbsp;${_esc(uom)}</strong></td>
+  <td>${_esc(mr.schedule_date || "\u2014")}</td>
+</tr>`).join("");
+
+        // ── Recent Receipts ──
+        const rcvRows = (data.recent_receipts || []).map(rcv => `
+<tr>
+  <td><a href="/app/purchase-receipt/${_esc(rcv.receipt_name)}" target="_blank" class="wkp-wo-link">${_esc(rcv.receipt_name)}</a></td>
+  <td class="ta-r">${_fmt_num(rcv.qty, 2)}&nbsp;${_esc(uom)}</td>
+  <td class="ta-r">${rcv.valuation_rate > 0 ? "\u20B9" + _fmt_num(rcv.valuation_rate, 2) : "\u2014"}</td>
+  <td>${_esc(rcv.posting_date || "\u2014")}</td>
+  <td>${_esc(rcv.warehouse || "\u2014")}</td>
+  <td>${rcv.batch_no ? `<a href="/app/batch/${_esc(rcv.batch_no)}" target="_blank" class="wkp-wo-link">${_esc(rcv.batch_no)}</a>` : "\u2014"}</td>
+</tr>`).join("");
+
+        // ── Active Batches ──
+        const batchRows = (data.active_batches || []).map(b => `
+<tr>
+  <td><a href="/app/batch/${_esc(b.batch_id)}" target="_blank" class="wkp-wo-link">${_esc(b.batch_id)}</a></td>
+  <td class="ta-r"><strong>${_fmt_num(b.qty, 2)}&nbsp;${_esc(uom)}</strong></td>
+  <td class="ta-r">${b.valuation_rate > 0 ? "\u20B9" + _fmt_num(b.valuation_rate, 2) : "\u2014"}</td>
+  <td>${_esc(b.warehouse || "\u2014")}</td>
+  <td>${_esc(b.manufacturing_date || "\u2014")}</td>
+  <td class="${b.expiry_date && b.expiry_date < new Date().toISOString().slice(0, 10) ? "wkp-cell-red" : ""}">${_esc(b.expiry_date || "\u2014")}</td>
+</tr>`).join("");
+
+        const _section = (title, tip, headers, rows, emptyMsg) => `
+<div class="wkp-supply-section">
+  <div class="wkp-supply-section-title" data-tip="${tip}">${title}</div>
+  ${rows
+    ? `<div class="wkp-supply-scroll"><table class="wkp-modal-table wkp-supply-table">
+         <thead><tr>${headers}</tr></thead>
+         <tbody>${rows}</tbody>
+       </table></div>`
+    : `<div class="wkp-supply-empty">${emptyMsg}</div>`}
+</div>`;
+
+        d.fields_dict.supply_html.$wrapper.html(`
+<div class="wkp-supply-modal-body">
+  <div class="wkp-supply-item-header">
+    <strong>${_esc(data.item_name || item_code)}</strong>
+    <span class="wkp-item-code">${_esc(item_code)}</span>
+    <span style="color:var(--stone-400);font-size:12px">Stock UOM: ${_esc(uom)}</span>
+  </div>
+  ${_section("Open Purchase Orders",
+    "Purchase Orders from suppliers that are not yet fully received. Pending qty = ordered minus received.",
+    `<th>PO #</th><th>Supplier</th><th class="ta-r">Ordered</th><th class="ta-r">Received</th><th class="ta-r">Pending</th><th>Schedule Date</th><th class="ta-r">Val. Rate</th>`,
+    poRows, "No open Purchase Orders for this material.")}
+  ${_section("Open Material Requests (Purchase)",
+    "Internal purchase requisitions not yet converted to a Purchase Order.",
+    `<th>MR #</th><th class="ta-r">Qty</th><th class="ta-r">Ordered</th><th class="ta-r">Pending</th><th>Schedule Date</th>`,
+    mrRows, "No open Purchase Material Requests for this material.")}
+  ${_section("Recent Receipts (last 30 days)",
+    "Purchase Receipts posted in the last 30 days. Includes batch number for traceability.",
+    `<th>Receipt #</th><th class="ta-r">Qty</th><th class="ta-r">Val. Rate</th><th>Posting Date</th><th>Warehouse</th><th>Batch</th>`,
+    rcvRows, "No recent receipts in the last 30 days.")}
+  ${_section("Active Batches in Stock",
+    "Batches currently in stock (positive qty). Sorted by expiry date. Red expiry = already expired.",
+    `<th>Batch ID</th><th class="ta-r">Qty in Stock</th><th class="ta-r">Val. Rate</th><th>Warehouse</th><th>Mfg Date</th><th>Expiry Date</th>`,
+    batchRows, "No active batches with stock for this material.")}
+</div>`);
+      },
+      error: () => {
+        d.fields_dict.supply_html.$wrapper.html(
+          `<div class="wkp-supply-modal-empty">Error loading supply data.</div>`
+        );
+      },
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -2805,6 +3226,8 @@ ${decisionHtml}
         const data = r.message || {};
         const text = data.insight || "<span class=\"wkp-ai-warn\">No insight returned.</span>";
         insightBody.innerHTML = data.is_html ? _sanitizeAIHtml(text) : _esc(text);
+        // Show data points indicator under the insight
+        this._updateAIDataPointsBadge();
       },
       error: () => {
         this._aiInsightLoaded = true;
@@ -2813,6 +3236,22 @@ ${decisionHtml}
           `<span class="wkp-ai-warn">AI briefing failed. Verify API key and connectivity.</span>`;
       },
     });
+  }
+
+  _updateAIDataPointsBadge() {
+    // Show a compact "Data fed to AI" indicator near the insight panel
+    const ctx = this._aiContext;
+    if (!ctx || !ctx.data_points) return;
+    const dp  = ctx.data_points;
+    const el  = document.getElementById("wkp-ai-data-points");
+    if (!el) return;
+    const parts = [
+      dp.wos             ? dp.wos + " WOs"              : "",
+      dp.shortage_items  ? dp.shortage_items + " materials short" : "",
+      dp.dispatch_items  ? dp.dispatch_items + " dispatch items"  : "",
+    ].filter(Boolean).join(" \u00b7 ");
+    el.textContent = parts ? "\uD83D\uDCC1 Data fed to AI: " + parts : "";
+    el.style.display = parts ? "" : "none";
   }
 
   _sendAIMessage(text) {
@@ -2912,6 +3351,546 @@ ${decisionHtml}
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  //  ITEM VIEW TAB (§10 — session 9)
+  //
+  //  PURPOSE: FG-wise summary of all items with active WOs or pending SOs.
+  //  Unlike the WO Kitting Plan tab (one row per WO), this tab groups by
+  //  item_code so the user can see totals across all WOs for the same item.
+  //
+  //  Data source: get_item_wo_summary() (server) — independent DB query.
+  //  This tab also merges kit_status summary from this.rows (client-side)
+  //  to show how many WOs are ok/partial/blocked per item.
+  //
+  //  Columns:
+  //    Item Name + Code + Group
+  //    Stock UOM | Secondary UOM | UOM list (for cost selector)
+  //    WO Count | WO list (expandable)
+  //    Planned Qty | Produced Qty | Remaining Qty (all dual UOM)
+  //    Consumed Qty | Consumed Cost (from Stock Entry Manufacture)
+  //    SO Count | SO Pending Qty
+  //    Last Cost/Unit (from last completed WO) + UOM selector
+  //    Kit Status Summary (ok/partial/blocked WO counts)
+  //
+  //  Restrictions:
+  //    this._itemViewData / this._itemViewLoaded / this._itemViewLoading
+  //    _fetchItemView() / _renderItemView() — called by _switchTab
+  //    #wkp-iv-body — JS target for innerHTML injection
+  //    #wkp-iv-loading — spinner shown while API in-flight
+  // ─────────────────────────────────────────────────────────────────────
+
+  _fetchItemView() {
+    this._itemViewLoading = true;
+    const loadEl = document.getElementById("wkp-iv-loading");
+    if (loadEl) loadEl.style.display = "flex";
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_item_wo_summary",
+      args: {},
+      callback: r => {
+        this._itemViewLoading = false;
+        this._itemViewLoaded  = true;
+        this._itemViewData    = r.message || [];
+        if (loadEl) loadEl.style.display = "none";
+        if (this._activeTab === "item-view") this._renderItemView();
+      },
+      error: () => {
+        this._itemViewLoading = false;
+        this._itemViewLoaded  = true;
+        if (loadEl) loadEl.style.display = "none";
+        const body = document.getElementById("wkp-iv-body");
+        if (body) body.innerHTML =
+          `<div class="wkp-reco wkp-reco-err" style="margin:16px">
+             <div class="wkp-reco-icon">\u26A0\uFE0F</div>
+             <div class="wkp-reco-body">
+               <div class="wkp-reco-headline">Failed to load Item View data.</div>
+               <div class="wkp-reco-detail">Check the browser console and server logs. Try refreshing.</div>
+             </div>
+           </div>`;
+      },
+    });
+  }
+
+  _renderItemView() {
+    const body = document.getElementById("wkp-iv-body");
+    if (!body) return;
+
+    const items = this._itemViewData || [];
+
+    if (!items.length) {
+      body.innerHTML = `<div class="wkp-reco wkp-reco-ok" style="margin:16px">
+        <div class="wkp-reco-icon">\u2705</div>
+        <div class="wkp-reco-body">
+          <div class="wkp-reco-headline">No active Work Orders or Sales Orders found.</div>
+          <div class="wkp-reco-detail">Create Work Orders or Sales Orders to see data here.</div>
+        </div>
+      </div>`;
+      return;
+    }
+
+    // Build kit_status summary from simulation rows (client-side merge)
+    const kitByItem = {};
+    (this.rows || []).forEach(row => {
+      const ic = row.item_code;
+      if (!kitByItem[ic]) kitByItem[ic] = { ok: 0, partial: 0, block: 0, kitted: 0 };
+      kitByItem[ic][row.kit_status] = (kitByItem[ic][row.kit_status] || 0) + 1;
+    });
+
+    // Build table
+    const rows = items.map(item => {
+      const kit    = kitByItem[item.item_code] || {};
+      const sf     = item.secondary_factor || 1;
+      const secUom = item.secondary_uom || "";
+
+      // Dual UOM helper for table cells
+      const dualCell = (qty, uom, secUom2, sf2) => {
+        if (!qty && qty !== 0) return "\u2014";
+        const prim = `<strong>${_fmt_num(qty, 0)}</strong>
+          <div style="font-size:10px;color:var(--stone-400)">${_esc(uom)}</div>`;
+        const sec2 = secUom2
+          ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(qty / (sf2 || 1), 2)}\u00a0${_esc(secUom2)}</div>`
+          : "";
+        return prim + sec2;
+      };
+
+      // Kit status badge cluster
+      let kitBadges = "";
+      if (kit.ok)      kitBadges += `<span class="wkp-iv-kit-chip wkp-iv-kit-ok">\u2714 ${kit.ok} Ready</span>`;
+      if (kit.partial) kitBadges += `<span class="wkp-iv-kit-chip wkp-iv-kit-warn">\u26A0 ${kit.partial} Partial</span>`;
+      if (kit.block)   kitBadges += `<span class="wkp-iv-kit-chip wkp-iv-kit-block">\u26D4 ${kit.block} Blocked</span>`;
+      if (kit.kitted)  kitBadges += `<span class="wkp-iv-kit-chip wkp-iv-kit-kitted">\u2713 ${kit.kitted} Kitted</span>`;
+      if (!kitBadges)  kitBadges  = `<span class="wkp-iv-kit-chip wkp-iv-kit-none">\u2014 No WOs</span>`;
+
+      // UOM list for last cost display: build a select
+      const uoms = (item.item_uoms || []).filter(u => u.factor > 0);
+      const uomOptions = uoms.map(u =>
+        `<option value="${_esc(u.uom)}" data-factor="${u.factor}">${_esc(u.uom)}</option>`
+      ).join("");
+      const uomSel = uoms.length > 1
+        ? `<select class="wkp-iv-uom-sel" data-item="${_esc(item.item_code)}"
+                   data-base-cost="${item.last_cost_per_unit || 0}"
+                   data-base-factor="1"
+                   title="Change UOM to see cost per unit in that UOM">${uomOptions}</select>`
+        : `<span>${_esc(item.stock_uom)}</span>`;
+
+      const costPerUnit = item.last_cost_per_unit
+        ? `\u20B9${_fmt_num(item.last_cost_per_unit, 2)}`
+        : "\u2014";
+
+      // WO list as comma-separated links
+      const woLinks = (item.wo_list || []).slice(0, 5).map(wo =>
+        `<a href="/app/work-order/${_esc(wo)}" target="_blank" class="wkp-wo-link"
+            style="font-size:10px;display:block">${_esc(wo)}</a>`
+      ).join("");
+      const woLinksExtra = (item.wo_list || []).length > 5
+        ? `<span style="font-size:10px;color:var(--stone-400)">+${item.wo_list.length - 5} more</span>`
+        : "";
+
+      return `
+<tr class="wkp-iv-tr" data-item="${_esc(item.item_code)}">
+  <td>
+    <div class="wkp-item-name">${_esc(item.item_name || item.item_code)}</div>
+    <div class="wkp-item-code">${_esc(item.item_code)}</div>
+    ${item.item_group ? `<div class="wkp-item-group-tag">${_esc(item.item_group)}</div>` : ""}
+  </td>
+  <td class="ta-c">
+    <div style="font-size:12px;font-weight:600">${item.wo_count || 0}</div>
+    <div style="margin-top:2px">${woLinks}${woLinksExtra}</div>
+  </td>
+  <td class="ta-c">${kitBadges}</td>
+  <td class="ta-r">${dualCell(item.planned_qty,   item.stock_uom, secUom, sf)}</td>
+  <td class="ta-r">${dualCell(item.produced_qty,  item.stock_uom, secUom, sf)}</td>
+  <td class="ta-r">${dualCell(item.remaining_qty, item.stock_uom, secUom, sf)}</td>
+  <td class="ta-r">
+    ${item.consumed_qty
+      ? `<strong>${_fmt_num(item.consumed_qty, 0)}</strong>
+         <div style="font-size:10px;color:var(--stone-400)">${_esc(item.stock_uom)}</div>
+         ${item.consumed_cost ? `<div style="font-size:10px;color:var(--stone-500)">\u20B9${_fmt_num(item.consumed_cost, 0)}</div>` : ""}`
+      : `<span style="color:var(--stone-400)">\u2014</span>`}
+  </td>
+  <td class="ta-r">
+    ${item.so_count
+      ? `<div style="font-weight:600;color:var(--amber-700)">${_fmt_num(item.so_pending_qty, 0)}</div>
+         <div style="font-size:10px;color:var(--stone-400)">${item.so_count} SO${item.so_count !== 1 ? "s" : ""}</div>
+         ${secUom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(item.so_pending_qty / sf, 2)}\u00a0${_esc(secUom)}</div>` : ""}`
+      : `<span style="color:var(--stone-400)">\u2014</span>`}
+  </td>
+  <td class="ta-r">
+    <span class="wkp-iv-cost-val" data-item="${_esc(item.item_code)}">${costPerUnit}</span>
+    <div style="font-size:10px;margin-top:2px">${uomSel}</div>
+    ${item.last_cost_date ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(item.last_cost_date)}</div>` : ""}
+    ${item.last_cost_wo ? `<a href="/app/work-order/${_esc(item.last_cost_wo)}" target="_blank"
+                             class="wkp-wo-link" style="font-size:10px">${_esc(item.last_cost_wo)}</a>` : ""}
+  </td>
+  <td>
+    <div style="font-size:11px;color:var(--stone-600)">
+      ${_esc(item.stock_uom)}${secUom ? ` / ${_esc(secUom)} (\xD71\u00f7${sf})` : ""}
+    </div>
+    ${uoms.map(u => `<div style="font-size:10px;color:var(--stone-400)">${_esc(u.uom)} \u00d7${u.factor}</div>`).join("")}
+  </td>
+</tr>`;
+    }).join("");
+
+    body.innerHTML = `
+<div class="wkp-iv-table-wrap">
+  <table class="wkp-iv-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th class="ta-c">WO Count</th>
+        <th class="ta-c">Kit Status</th>
+        <th class="ta-r">Planned Qty</th>
+        <th class="ta-r">Produced Qty</th>
+        <th class="ta-r">Remaining Qty</th>
+        <th class="ta-r">Consumed (SE)</th>
+        <th class="ta-r">SO Demand</th>
+        <th class="ta-r">Last Cost / Unit</th>
+        <th>UOM Details</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
+
+    // Bind UOM selects for live cost recalculation
+    body.querySelectorAll(".wkp-iv-uom-sel").forEach(sel => {
+      sel.addEventListener("change", () => {
+        const ic       = sel.dataset.item;
+        const baseCost = parseFloat(sel.dataset.baseCost || "0");
+        const opt      = sel.options[sel.selectedIndex];
+        const factor   = parseFloat(opt ? opt.dataset.factor || "1" : "1");
+        const newCost  = factor > 0 ? baseCost * factor : 0;
+        const valEl    = body.querySelector(`.wkp-iv-cost-val[data-item="${ic}"]`);
+        if (valEl) valEl.textContent = newCost > 0 ? `\u20B9${_fmt_num(newCost, 2)}` : "\u2014";
+      });
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  EXPORT  (CSV / PDF)
+  // ─────────────────────────────────────────────────────────────────────
+
+  _exportCSV() {
+    const tab = this._activeTab;
+
+    if (tab === "item-view" && this._itemViewData && this._itemViewData.length) {
+      // Export Item View data
+      const headers = [
+        "Item Code", "Item Name", "Item Group", "Stock UOM", "Secondary UOM",
+        "WO Count", "Planned Qty", "Produced Qty", "Remaining Qty",
+        "Consumed Qty", "Consumed Cost (INR)", "SO Count", "SO Pending Qty",
+        "Last Cost/Unit (INR)", "Last Cost WO", "Last Cost Date",
+      ];
+      const csvRows = this._itemViewData.map(d => [
+        d.item_code, d.item_name, d.item_group, d.stock_uom, d.secondary_uom,
+        d.wo_count, d.planned_qty, d.produced_qty, d.remaining_qty,
+        d.consumed_qty, d.consumed_cost, d.so_count, d.so_pending_qty,
+        d.last_cost_per_unit, d.last_cost_wo, d.last_cost_date,
+      ].map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","));
+
+      this._downloadCSV("wkp_item_view.csv", [headers.join(","), ...csvRows].join("\n"));
+      return;
+    }
+
+    if (tab === "wo-plan" && this.rows && this.rows.length) {
+      const headers = [
+        "Work Order", "Item Code", "Item Name", "UOM", "Planned Qty",
+        "Produced Qty", "Remaining Qty", "Kit Status", "Est. Cost (INR)",
+        "Last Month SO", "This Month SO", "Total Pending SO", "ERP Status",
+      ];
+      const csvRows = this.rows.map(r => [
+        r.wo, r.item_code, r.item_name, r.uom, r.planned_qty,
+        r.produced_qty, r.remaining_qty, r.kit_status, r.est_cost,
+        r.prev_month_so, r.curr_month_so, r.total_pending_so, r.status,
+      ].map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","));
+
+      this._downloadCSV("wkp_wo_plan.csv", [headers.join(","), ...csvRows].join("\n"));
+      return;
+    }
+
+    frappe.show_alert({ message: "No data to export for the current tab.", indicator: "orange" });
+  }
+
+  _downloadCSV(filename, csvContent) {
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    frappe.show_alert({ message: "CSV downloaded: " + filename, indicator: "green" });
+  }
+
+  _exportPDF() {
+    // Build a print-ready HTML page and open it in a new tab for browser print
+    const tab   = this._activeTab;
+    let content = "";
+
+    if (tab === "item-view" && this._itemViewData && this._itemViewData.length) {
+      content = this._buildItemViewPrintHtml(this._itemViewData);
+    } else if (tab === "wo-plan" && this.rows && this.rows.length) {
+      content = this._buildWOPlanPrintHtml(this.rows);
+    } else {
+      frappe.show_alert({ message: "No data to export for the current tab.", indicator: "orange" });
+      return;
+    }
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      frappe.show_alert({ message: "Pop-up blocked. Allow pop-ups and try again.", indicator: "orange" });
+      return;
+    }
+    win.document.write(content);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 800);
+  }
+
+  _buildItemViewPrintHtml(items) {
+    const rows = items.map(d => `
+<tr>
+  <td>${_esc(d.item_code)}</td><td>${_esc(d.item_name)}</td><td>${_esc(d.item_group)}</td>
+  <td>${d.wo_count}</td>
+  <td style="text-align:right">${_fmt_num(d.planned_qty, 0)}</td>
+  <td style="text-align:right">${_fmt_num(d.produced_qty, 0)}</td>
+  <td style="text-align:right">${_fmt_num(d.remaining_qty, 0)}</td>
+  <td style="text-align:right">${d.so_count || 0}</td>
+  <td style="text-align:right">${_fmt_num(d.so_pending_qty, 0)}</td>
+  <td style="text-align:right">${d.last_cost_per_unit ? "\u20B9" + _fmt_num(d.last_cost_per_unit, 2) : "\u2014"}</td>
+  <td>${_esc(d.stock_uom)}</td>
+</tr>`).join("");
+
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>WO Kitting Planner &mdash; Item View</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917;margin:20px}
+  h2{font-size:16px;margin:0 0 4px}
+  p{font-size:10px;color:#78716c;margin:0 0 12px}
+  table{border-collapse:collapse;width:100%}
+  th{background:#1c1917;color:#fff;padding:6px 8px;text-align:left;font-size:10px}
+  td{padding:5px 8px;border-bottom:1px solid #e7e5e4;vertical-align:top}
+  tr:nth-child(even) td{background:#fafaf9}
+  @media print{@page{size:landscape;margin:10mm}}
+</style></head><body>
+<h2>WO Kitting Planner &mdash; FG Item View</h2>
+<p>Exported: ${new Date().toLocaleString()}</p>
+<table>
+<thead><tr>
+  <th>Item Code</th><th>Item Name</th><th>Item Group</th><th>WOs</th>
+  <th>Planned</th><th>Produced</th><th>Remaining</th>
+  <th>SOs</th><th>SO Demand</th><th>Last Cost/Unit</th><th>UOM</th>
+</tr></thead><tbody>${rows}</tbody></table>
+</body></html>`;
+  }
+
+  _buildWOPlanPrintHtml(rows) {
+    const trs = rows.map(r => `
+<tr>
+  <td>${_esc(r.wo)}</td><td>${_esc(r.item_name || r.item_code)}</td>
+  <td style="text-align:right">${_fmt_num(r.remaining_qty, 0)}</td>
+  <td>${_esc(r.uom)}</td>
+  <td>${_esc(r.kit_status)}</td>
+  <td style="text-align:right">${r.est_cost ? "\u20B9" + _fmt_num(r.est_cost, 0) : "\u2014"}</td>
+  <td style="text-align:right">${r.total_pending_so ? _fmt_num(r.total_pending_so, 0) : "\u2014"}</td>
+  <td>${_esc(r.status)}</td>
+</tr>`).join("");
+
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>WO Kitting Planner &mdash; WO Plan</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:11px;color:#1c1917;margin:20px}
+  h2{font-size:16px;margin:0 0 4px}
+  p{font-size:10px;color:#78716c;margin:0 0 12px}
+  table{border-collapse:collapse;width:100%}
+  th{background:#1c1917;color:#fff;padding:6px 8px;text-align:left;font-size:10px}
+  td{padding:5px 8px;border-bottom:1px solid #e7e5e4;vertical-align:top}
+  tr:nth-child(even) td{background:#fafaf9}
+  @media print{@page{size:landscape;margin:10mm}}
+</style></head><body>
+<h2>WO Kitting Planner &mdash; WO Plan</h2>
+<p>Exported: ${new Date().toLocaleString()}</p>
+<table>
+<thead><tr>
+  <th>Work Order</th><th>Item</th><th>Remaining Qty</th><th>UOM</th>
+  <th>Kit Status</th><th>Est. Cost</th><th>Total Pending SO</th><th>ERP Status</th>
+</tr></thead><tbody>${trs}</tbody></table>
+</body></html>`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  SEND EMAIL
+  // ─────────────────────────────────────────────────────────────────────
+
+  _showEmailDialog() {
+    const tab = this._activeTab;
+    const tabLabels = {
+      "wo-plan"        : "WO Kitting Plan",
+      "shortage-report": "Material Shortage Report",
+      "emergency"      : "Emergency Priorities",
+      "dispatch"       : "Dispatch Bottleneck",
+      "item-view"      : "FG Item View",
+      "ai-chat"        : "AI Advisor",
+    };
+
+    const dlg = new frappe.ui.Dialog({
+      title  : "Send Dashboard Report by Email",
+      fields : [
+        {
+          label     : "To (comma-separated emails)",
+          fieldname : "to_emails",
+          fieldtype : "Small Text",
+          reqd      : 1,
+          description: "e.g. manager@company.com, ceo@company.com",
+        },
+        {
+          label     : "CC (comma-separated, optional)",
+          fieldname : "cc_emails",
+          fieldtype : "Small Text",
+        },
+        {
+          label     : "Subject",
+          fieldname : "subject",
+          fieldtype : "Data",
+          default   : `WO Kitting Planner \u2014 ${tabLabels[tab] || tab}`,
+        },
+        {
+          label     : "Report to include",
+          fieldname : "report_tab",
+          fieldtype : "Select",
+          options   : [
+            "WO Kitting Plan|wo-plan",
+            "Material Shortage Report|shortage-report",
+            "Emergency Priorities|emergency",
+            "Dispatch Bottleneck|dispatch",
+            "FG Item View|item-view",
+          ].join("\n"),
+          default   : tab === "ai-chat" ? "wo-plan" : tab,
+        },
+        {
+          fieldtype: "Section Break",
+          label    : "Preview",
+        },
+        {
+          fieldname: "preview_body",
+          fieldtype: "HTML",
+          options  : `<div style="font-size:12px;color:var(--stone-500);padding:8px 0">
+            Email will include a live dashboard link and your name as sender.
+            The snapshot table will be generated from current data on Send.
+          </div>`,
+        },
+      ],
+      primary_action_label: "Send Email",
+      primary_action: vals => {
+        if (!vals.to_emails || !vals.to_emails.trim()) {
+          frappe.show_alert({ message: "Please enter at least one recipient email.", indicator: "red" });
+          return;
+        }
+
+        // Map "Label|value" select options back to value
+        const reportTab = (vals.report_tab || "").includes("|")
+          ? vals.report_tab.split("|")[1]
+          : (vals.report_tab || tab);
+
+        const snapshotHtml = this._buildEmailSnapshot(reportTab);
+
+        dlg.hide();
+
+        frappe.call({
+          method: "chaizup_toc.api.wo_kitting_api.send_dashboard_email",
+          args: {
+            to_emails    : vals.to_emails.trim(),
+            cc_emails    : (vals.cc_emails || "").trim(),
+            subject      : vals.subject || `WO Kitting Planner \u2014 ${tabLabels[reportTab] || reportTab}`,
+            snapshot_html: snapshotHtml,
+            report_tab   : reportTab,
+          },
+          callback: r => {
+            if (!r.exc) {
+              const d = r.message || {};
+              frappe.show_alert({
+                message  : `Email sent to ${(d.to || []).join(", ")} by ${d.from_name || "you"}`,
+                indicator: "green",
+              });
+            }
+          },
+        });
+      },
+    });
+
+    dlg.show();
+  }
+
+  _buildEmailSnapshot(tabName) {
+    // Build an inline-styled HTML table snapshot for the given tab.
+    // This is email-safe: no external CSS, all styles inline.
+    const th = (txt) =>
+      `<th style="background:#1c1917;color:#fff;padding:7px 10px;text-align:left;
+                  font-size:11px;font-weight:600;white-space:nowrap">${txt}</th>`;
+    const td = (txt, right) =>
+      `<td style="padding:6px 10px;border-bottom:1px solid #e7e5e4;font-size:11px;
+                  ${right ? "text-align:right;" : ""}vertical-align:top">${txt}</td>`;
+    const tableWrap = (thead, tbodyRows) => {
+      if (!tbodyRows.length) return `<p style="color:#78716c;font-size:12px">No data available.</p>`;
+      return `<table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif">
+        <thead><tr>${thead}</tr></thead>
+        <tbody>${tbodyRows.join("")}</tbody>
+      </table>`;
+    };
+
+    if (tabName === "item-view" && this._itemViewData && this._itemViewData.length) {
+      const thead = [
+        th("Item"), th("WOs"), th("Planned"), th("Produced"),
+        th("Remaining"), th("SO Demand"), th("Last Cost/Unit"), th("UOM"),
+      ].join("");
+      const rows = this._itemViewData.slice(0, 25).map(d => {
+        return `<tr>
+          ${td(`<strong>${_esc(d.item_name || d.item_code)}</strong><br><span style="font-size:10px;color:#78716c">${_esc(d.item_code)}</span>`)}
+          ${td(String(d.wo_count || 0))}
+          ${td(_fmt_num(d.planned_qty, 0) + " " + _esc(d.stock_uom), true)}
+          ${td(_fmt_num(d.produced_qty, 0) + " " + _esc(d.stock_uom), true)}
+          ${td(_fmt_num(d.remaining_qty, 0) + " " + _esc(d.stock_uom), true)}
+          ${td(d.so_pending_qty ? _fmt_num(d.so_pending_qty, 0) + " (" + d.so_count + " SO" + (d.so_count !== 1 ? "s" : "") + ")" : "\u2014", true)}
+          ${td(d.last_cost_per_unit ? "\u20B9" + _fmt_num(d.last_cost_per_unit, 2) + " / " + _esc(d.stock_uom) : "\u2014", true)}
+          ${td(_esc(d.stock_uom) + (d.secondary_uom ? " / " + _esc(d.secondary_uom) : ""))}
+        </tr>`;
+      });
+      if (this._itemViewData.length > 25) {
+        rows.push(`<tr><td colspan="8" style="padding:6px 10px;font-size:10px;color:#78716c">
+          \u2026 and ${this._itemViewData.length - 25} more items (see live dashboard)</td></tr>`);
+      }
+      return tableWrap(thead, rows);
+    }
+
+    if (tabName === "wo-plan" && this.rows && this.rows.length) {
+      const thead = [
+        th("Work Order"), th("Item"), th("Remaining"), th("Kit Status"),
+        th("Est. Cost"), th("SO Pending"), th("ERP Status"),
+      ].join("");
+      const rows = this.rows.slice(0, 25).map(r => `<tr>
+        ${td(`<a href="/app/work-order/${_esc(r.wo)}" style="color:#1c1917">${_esc(r.wo)}</a>`)}
+        ${td(_esc(r.item_name || r.item_code))}
+        ${td(_fmt_num(r.remaining_qty, 0) + " " + _esc(r.uom), true)}
+        ${td(_esc(r.kit_status))}
+        ${td(r.est_cost ? "\u20B9" + _fmt_num(r.est_cost, 0) : "\u2014", true)}
+        ${td(r.total_pending_so ? _fmt_num(r.total_pending_so, 0) : "\u2014", true)}
+        ${td(_esc(r.status))}
+      </tr>`);
+      if (this.rows.length > 25) {
+        rows.push(`<tr><td colspan="7" style="padding:6px 10px;font-size:10px;color:#78716c">
+          \u2026 and ${this.rows.length - 25} more WOs (see live dashboard)</td></tr>`);
+      }
+      return tableWrap(thead, rows);
+    }
+
+    // Fallback for other tabs or no data
+    return `<p style="color:#78716c;font-size:12px">
+      This tab does not support inline snapshot export. Open the live dashboard for full detail.
+    </p>`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   //  DISPATCH BOTTLENECK TAB
   //
   //  PURPOSE: Answer "Can we fulfill ALL customer orders?"
@@ -2966,7 +3945,7 @@ ${decisionHtml}
 
     frappe.call({
       method: "chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck",
-      args: {},
+      args: { stock_mode: this.stockMode },
       callback: r => {
         this._dispatchLoading = false;
         this._dispatchLoaded  = true;
@@ -3215,11 +4194,17 @@ ${decisionHtml}
   <td class="ta-r wkp-dsp-coverage"
       data-tip="Total Coverage = FG In Stock + Will Produce&#10;This is the maximum quantity available for dispatch once all open WOs complete.&#10;Does NOT account for WOs that are blocked or partially short.">
     <strong>${_fmt_num(item.total_coverage, 0)}</strong>
+    <div style="font-size:10px;color:var(--stone-400)">${_esc(item.uom)}</div>
+    ${item.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(item.total_coverage / item.secondary_factor, 2)}\u00a0${_esc(item.secondary_uom)}</div>` : ""}
     <span class="wkp-th-help" data-popover="dispatch_coverage" title="How is this calculated?">?</span>
   </td>
   <td class="ta-r ${gapCls}"
       data-tip="Gap = Customer Orders &minus; Total Coverage&#10;Positive (red) = shortage even if all WOs complete. Action needed.&#10;Negative (green) = surplus.&#10;Zero = exactly meets demand.">
     <strong>${gapTxt}</strong>
+    ${item.gap !== 0 && item.uom
+      ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(item.uom)}</div>
+         ${item.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(Math.abs(item.gap) / item.secondary_factor, 2)}\u00a0${_esc(item.secondary_uom)}</div>` : ""}`
+      : ""}
     <span class="wkp-th-help" data-popover="dispatch_gap" title="What does Gap mean?">?</span>
   </td>
   <td>

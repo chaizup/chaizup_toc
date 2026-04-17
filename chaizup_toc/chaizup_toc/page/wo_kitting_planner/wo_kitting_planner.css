@@ -2192,3 +2192,359 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   padding: 12px 0 4px;
   text-align: right;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   EXPORT / EMAIL BUTTONS  (session 9)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.wkp-export-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+}
+.wkp-btn-export {
+  background: rgba(16, 185, 129, 0.06);
+  color: var(--green-700, #15803d);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.wkp-btn-export:hover {
+  background: rgba(16, 185, 129, 0.14);
+}
+.wkp-btn-email {
+  background: rgba(59, 130, 246, 0.06);
+  color: var(--blue-700, #1d4ed8);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+.wkp-btn-email:hover {
+  background: rgba(59, 130, 246, 0.14);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ITEM VIEW TAB  (session 9)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Pane layout --------------------------------------------------------- */
+.wkp-iv-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header -------------------------------------------------------------- */
+.wkp-iv-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid var(--stone-200);
+  flex-shrink: 0;
+}
+
+/* Loading indicator --------------------------------------------------- */
+.wkp-iv-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  font-size: 13px;
+  color: var(--stone-500);
+}
+
+/* Scrollable body ----------------------------------------------------- */
+.wkp-iv-body-wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+/* Table --------------------------------------------------------------- */
+.wkp-iv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.wkp-iv-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--stone-100);
+  color: var(--stone-600);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--stone-300);
+  white-space: nowrap;
+}
+.wkp-iv-tr td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--stone-100);
+  vertical-align: top;
+}
+.wkp-iv-tr:nth-child(even) td { background: var(--stone-50); }
+.wkp-iv-tr:hover td            { background: var(--amber-50, #fffbeb); }
+
+/* Kit status chips ---------------------------------------------------- */
+.wkp-iv-kit-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin: 1px 2px 1px 0;
+  white-space: nowrap;
+}
+.wkp-iv-kit-ok     { background: rgba(22,163,74,0.10); color: var(--green-700, #15803d); }
+.wkp-iv-kit-warn   { background: rgba(245,158,11,0.12); color: var(--amber-700, #b45309); }
+.wkp-iv-kit-block  { background: rgba(239,68,68,0.10); color: var(--red-700, #b91c1c); }
+.wkp-iv-kit-kitted { background: rgba(99,102,241,0.10); color: var(--indigo-600, #4f46e5); }
+.wkp-iv-kit-none   { background: var(--stone-100); color: var(--stone-500); }
+
+/* UOM select in cost column ------------------------------------------ */
+.wkp-iv-uom-sel {
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid var(--stone-200);
+  border-radius: 4px;
+  background: var(--stone-50);
+  color: var(--stone-700);
+  cursor: pointer;
+  max-width: 110px;
+}
+.wkp-iv-uom-sel:focus { outline: none; border-color: var(--brand-400); }
+
+/* Cost value display ------------------------------------------------- */
+.wkp-iv-cost-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--stone-800);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SESSION 10 — NEW COMPONENTS
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Deep BOM chip (WO table, item cell) ─────────────────────────────── */
+.wkp-deep-bom-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--green-700, #15803d);
+  background: rgba(22,163,74,0.08);
+  border: 1px solid rgba(22,163,74,0.25);
+  border-radius: 8px;
+  padding: 1px 6px;
+  margin-top: 3px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.wkp-deep-bom-chip:hover {
+  background: rgba(22,163,74,0.16);
+  border-color: rgba(22,163,74,0.4);
+}
+
+/* ── BOM Tree Modal ──────────────────────────────────────────────────── */
+.wkp-bom-tree-wrap {
+  padding: 12px 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.wkp-bom-tree-empty {
+  padding: 20px;
+  color: var(--stone-400);
+  font-style: italic;
+  text-align: center;
+}
+.wkp-bom-node {
+  border-left: 1px solid var(--stone-200);
+  padding: 2px 0 2px 4px;
+  margin: 1px 0;
+}
+.wkp-bom-node:first-child { border-left: none; padding-left: 0; }
+.wkp-bom-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+.wkp-bom-row:hover { background: var(--stone-50); }
+.wkp-bom-toggle {
+  font-size: 10px;
+  color: var(--stone-400);
+  user-select: none;
+  width: 14px;
+  text-align: center;
+}
+.wkp-bom-item-code {
+  font-weight: 600;
+  color: var(--brand-600);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.wkp-bom-item-name {
+  color: var(--stone-700);
+  font-size: 12px;
+  flex: 1;
+}
+.wkp-bom-qty {
+  font-size: 11px;
+  color: var(--stone-500);
+  white-space: nowrap;
+}
+.wkp-bom-badge-has {
+  font-size: 10px;
+  background: rgba(22,163,74,0.09);
+  color: var(--green-700);
+  border: 1px solid rgba(22,163,74,0.2);
+  border-radius: 8px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+.wkp-bom-badge-trunc {
+  font-size: 10px;
+  color: var(--stone-400);
+  font-style: italic;
+}
+.wkp-bom-children {
+  margin-left: 16px;
+  border-left: 1px dashed var(--stone-200);
+  padding-left: 8px;
+}
+
+/* ── Material Supply Detail Modal ────────────────────────────────────── */
+.wkp-supply-modal-body {
+  padding: 12px 0;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.wkp-supply-item-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 12px;
+  border-bottom: 1px solid var(--stone-200);
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+.wkp-supply-section {
+  margin: 12px 0;
+  padding: 0 16px;
+}
+.wkp-supply-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stone-600);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--stone-100);
+  cursor: help;
+}
+.wkp-supply-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--stone-200);
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.wkp-supply-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--stone-50);
+  z-index: 1;
+}
+.wkp-supply-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.wkp-supply-table th,
+.wkp-supply-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--stone-100);
+  white-space: nowrap;
+}
+.wkp-supply-empty {
+  font-size: 12px;
+  color: var(--stone-400);
+  font-style: italic;
+  padding: 8px 0;
+}
+.wkp-supply-modal-empty {
+  padding: 20px;
+  color: var(--stone-400);
+  font-style: italic;
+  text-align: center;
+}
+
+/* ── Material Shortage Report — item group filter bar ────────────────── */
+.wkp-sr-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--stone-50);
+  border-bottom: 1px solid var(--stone-200);
+  font-size: 12px;
+}
+.wkp-sr-filter-lbl {
+  color: var(--stone-500);
+  font-weight: 600;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.wkp-sr-ig-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--stone-300);
+  border-radius: 12px;
+  background: white;
+  color: var(--stone-600);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.wkp-sr-ig-btn:hover { background: var(--stone-100); }
+.wkp-sr-ig-btn.active {
+  background: var(--brand-600, #2563eb);
+  color: white;
+  border-color: var(--brand-600, #2563eb);
+}
+
+/* ── Material Shortage Report — clickable item name button ───────────── */
+.wkp-sr-item-btn {
+  all: unset;
+  display: block;
+  cursor: pointer;
+  width: 100%;
+}
+.wkp-sr-item-btn:hover .wkp-item-name {
+  color: var(--brand-600, #2563eb);
+  text-decoration: underline;
+}
+.wkp-sr-item-btn:hover .wkp-item-code {
+  color: var(--brand-400, #60a5fa);
+}
+
+/* ── AI Advisor — data points indicator ──────────────────────────────── */
+.wkp-ai-data-points {
+  font-size: 10px;
+  color: var(--stone-400);
+  padding: 4px 12px;
+  background: var(--stone-50);
+  border-top: 1px solid var(--stone-100);
+  border-radius: 0 0 8px 8px;
+}
+
+/* ── Dispatch Coverage/Gap UOM display ───────────────────────────────── */
+.wkp-dsp-coverage .wkp-th-help,
+.wkp-dsp-coverage + td .wkp-th-help {
+  vertical-align: middle;
+}

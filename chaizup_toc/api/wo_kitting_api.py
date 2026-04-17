@@ -36,6 +36,15 @@ PUBLIC API (all @frappe.whitelist())
       per-unit cost in all UOMs, variance analysis, and last 5 completed WOs for same item.
       Helps detect inventory valuation errors that silently distort P&L.
 
+  get_item_wo_summary()
+      FG-wise summary: all items with active Work Orders or pending Sales Orders.
+      Returns WO counts, planned/produced/remaining qty, SO pending qty, consumed qty/cost,
+      and last completed WO's actual cost per unit. Used by the Item View tab.
+
+  send_dashboard_email(to_emails, cc_emails, subject, snapshot_html, report_tab)
+      Send a dashboard report by email. JS builds an inline-styled HTML snapshot;
+      Python wraps it in an email template with sender info and a live dashboard link.
+
 SIMULATION MODES
 -----------------
   stock_mode = "current_only":
@@ -286,13 +295,27 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
     bom_nos = list({w["bom_no"] for w in wos if w.get("bom_no")})
     bom_items = _get_bom_items_bulk(bom_nos, multi_level=multi_level)
 
-    # ── Step 3: Stock pool ──────────────────────────────────────────────
+    # ── Step 2.5: Deep BOM detection ────────────────────────────────────
     # Collect every component item code across all BOMs
     all_comp_codes = list({
         comp["item_code"]
         for bom_comps in bom_items.values()
         for comp in bom_comps
     })
+    # Find which component items themselves have a submitted active BOM
+    # (these are "deep BOM" components — drill-through available in the UI)
+    deep_bom_items = set()
+    if all_comp_codes:
+        _db_rows = frappe.db.sql("""
+            SELECT DISTINCT item
+            FROM `tabBOM`
+            WHERE item IN %(items)s
+              AND is_active = 1
+              AND docstatus = 1
+        """, {"items": all_comp_codes}, as_dict=True)
+        deep_bom_items = {r.item for r in _db_rows}
+
+    # ── Step 3: Stock pool ──────────────────────────────────────────────
     stock_pool = _build_stock_pool(stock_mode, all_comp_codes)
 
     # ── Step 4: Dispatch info (Sales Orders) ────────────────────────────
@@ -317,6 +340,13 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
 
     for row in results:
         row["item_group"] = ig_map.get(row["wo"], "")
+        # has_deep_bom = True if any BOM component itself has an active submitted BOM
+        # Enables the UI to show a 🌳 Deep BOM chip + drill-through modal
+        bom_no = row.get("bom_no", "")
+        row["has_deep_bom"] = bool(deep_bom_items) and any(
+            c["item_code"] in deep_bom_items
+            for c in bom_items.get(bom_no, [])
+        )
         wo_consumed = consumed_map.get(row["wo"], {})
         for comp in row.get("shortage_items", []):
             ic  = comp["item_code"]
@@ -482,6 +512,391 @@ def get_items_procurement_info(item_codes_json):
         }
         for r in rows
     }
+
+
+@frappe.whitelist()
+def get_item_wo_summary():
+    """
+    FG-wise summary: all items with active Work Orders or pending Sales Orders.
+    Called by the Item View tab to show production + demand context per FG item.
+
+    DATA SOURCES
+    ------------
+      Active WOs  : tabWork Order (docstatus=1, status NOT IN Completed/Cancelled/Stopped)
+      Pending SOs : tabSales Order + tabSales Order Item (docstatus IN (0,1), pending qty > 0)
+      Consumed    : tabStock Entry (purpose=Manufacture) + tabStock Entry Detail
+                    s_warehouse IS NOT NULL, t_warehouse IS NULL or empty = consumed components
+      Last cost   : Last completed WO per item → Stock Entry actual cost
+      UOM list    : tabUOM Conversion Detail per item
+
+    Returns:
+        list of dicts, one per item_code, sorted by item_name
+    """
+    # ── 1. Active Work Orders ──────────────────────────────────────────────
+    wos = frappe.db.sql("""
+        SELECT
+            wo.name         AS wo_name,
+            wo.item_code,
+            wo.item_name,
+            wo.stock_uom    AS uom,
+            wo.qty          AS planned_qty,
+            wo.produced_qty,
+            (wo.qty - wo.produced_qty) AS remaining_qty,
+            wo.status
+        FROM `tabWork Order` wo
+        WHERE wo.docstatus = 1
+          AND wo.status NOT IN ('Completed', 'Cancelled', 'Stopped')
+    """, as_dict=True)
+
+    # Index WOs by item_code
+    wo_by_item = {}
+    for wo in wos:
+        ic = wo.item_code
+        if ic not in wo_by_item:
+            wo_by_item[ic] = {
+                "item_code"    : ic,
+                "item_name"    : wo.item_name or ic,
+                "uom"          : wo.uom or "",
+                "wo_list"      : [],
+                "planned_qty"  : 0.0,
+                "produced_qty" : 0.0,
+                "remaining_qty": 0.0,
+            }
+        wo_by_item[ic]["wo_list"].append(wo.wo_name)
+        wo_by_item[ic]["planned_qty"]   += flt(wo.planned_qty)
+        wo_by_item[ic]["produced_qty"]  += flt(wo.produced_qty)
+        wo_by_item[ic]["remaining_qty"] += flt(wo.remaining_qty)
+
+    # ── 2. Pending Sales Orders (submitted + draft) ────────────────────────
+    sos = frappe.db.sql("""
+        SELECT
+            soi.item_code,
+            soi.item_name,
+            soi.item_group,
+            SUM(soi.qty - COALESCE(soi.delivered_qty, 0)) AS so_pending_qty,
+            COUNT(DISTINCT soi.parent)                     AS so_count
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE so.docstatus IN (0, 1)
+          AND (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0.001
+        GROUP BY soi.item_code
+    """, as_dict=True)
+
+    so_by_item = {s.item_code: s for s in sos}
+
+    # ── 3. All item codes to process ──────────────────────────────────────
+    all_item_codes = set(wo_by_item.keys()) | set(so_by_item.keys())
+    if not all_item_codes:
+        return []
+
+    code_list = list(all_item_codes)
+
+    # ── 4. Item master: item_group ─────────────────────────────────────────
+    item_meta = {}
+    for r in frappe.db.sql(
+        "SELECT name, item_group FROM `tabItem` WHERE name IN %(codes)s",
+        {"codes": code_list}, as_dict=True
+    ):
+        item_meta[r.name] = r
+
+    # ── 5. Secondary UOM per item ─────────────────────────────────────────
+    sec_uom_data = _get_secondary_uom(code_list)
+
+    # ── 6. All UOM conversions per item (for the UOM selector) ───────────
+    uom_by_item = {}
+    for r in frappe.db.sql("""
+        SELECT parent AS item_code, uom, conversion_factor
+        FROM `tabUOM Conversion Detail`
+        WHERE parent IN %(codes)s
+        ORDER BY parent, conversion_factor ASC
+    """, {"codes": code_list}, as_dict=True):
+        uom_by_item.setdefault(r.item_code, []).append(
+            {"uom": r.uom, "factor": flt(r.conversion_factor)}
+        )
+
+    # ── 7. Last completed WO per item + its actual cost ───────────────────
+    hist_wos = frappe.db.sql("""
+        SELECT wo.item_code, wo.name AS wo_name, wo.produced_qty, wo.modified AS completed_date
+        FROM `tabWork Order` wo
+        WHERE wo.docstatus = 1
+          AND wo.status = 'Completed'
+          AND wo.item_code IN %(codes)s
+          AND wo.produced_qty > 0
+        ORDER BY wo.modified DESC
+    """, {"codes": code_list}, as_dict=True)
+
+    # Keep only the most recent per item
+    last_wo_per_item = {}
+    for hw in hist_wos:
+        if hw.item_code not in last_wo_per_item:
+            last_wo_per_item[hw.item_code] = hw
+
+    last_cost_per_item = {}
+    if last_wo_per_item:
+        last_wo_names = [v.wo_name for v in last_wo_per_item.values()]
+        cost_rows = frappe.db.sql("""
+            SELECT se.work_order, SUM(sed.amount) AS total_cost
+            FROM `tabStock Entry Detail` sed
+            JOIN `tabStock Entry` se ON se.name = sed.parent
+            WHERE se.work_order IN %(wos)s
+              AND se.purpose = 'Manufacture'
+              AND se.docstatus = 1
+              AND sed.s_warehouse IS NOT NULL AND sed.s_warehouse != ''
+              AND (sed.t_warehouse IS NULL OR sed.t_warehouse = '')
+            GROUP BY se.work_order
+        """, {"wos": last_wo_names}, as_dict=True)
+        cost_by_wo = {r.work_order: flt(r.total_cost) for r in cost_rows}
+        for ic, hw in last_wo_per_item.items():
+            total = cost_by_wo.get(hw.wo_name, 0)
+            qty   = flt(hw.produced_qty) or 1.0
+            last_cost_per_item[ic] = {
+                "wo_name"       : hw.wo_name,
+                "produced_qty"  : flt(hw.produced_qty),
+                "total_cost"    : total,
+                "cost_per_unit" : total / qty if qty else 0.0,
+                "completed_date": str(hw.completed_date)[:10] if hw.completed_date else "",
+            }
+
+    # ── 8. Consumed qty for currently active WOs ──────────────────────────
+    consumed_by_item = {}
+    if wos:
+        active_wo_names = [w.wo_name for w in wos]
+        # Also build a map from wo_name → item_code for the aggregation
+        wo_to_ic = {w.wo_name: w.item_code for w in wos}
+        consumed_rows = frappe.db.sql("""
+            SELECT se.work_order, SUM(sed.actual_qty) AS consumed_qty, SUM(sed.amount) AS consumed_cost
+            FROM `tabStock Entry Detail` sed
+            JOIN `tabStock Entry` se ON se.name = sed.parent
+            WHERE se.work_order IN %(wos)s
+              AND se.purpose = 'Manufacture'
+              AND se.docstatus = 1
+              AND sed.s_warehouse IS NOT NULL AND sed.s_warehouse != ''
+              AND (sed.t_warehouse IS NULL OR sed.t_warehouse = '')
+            GROUP BY se.work_order
+        """, {"wos": active_wo_names}, as_dict=True)
+        for r in consumed_rows:
+            ic = wo_to_ic.get(r.work_order)
+            if not ic:
+                continue
+            if ic not in consumed_by_item:
+                consumed_by_item[ic] = {"consumed_qty": 0.0, "consumed_cost": 0.0}
+            consumed_by_item[ic]["consumed_qty"]  += flt(r.consumed_qty)
+            consumed_by_item[ic]["consumed_cost"] += flt(r.consumed_cost)
+
+    # ── 9. Assemble result ─────────────────────────────────────────────────
+    result = []
+    for ic in sorted(all_item_codes):
+        wo_d  = wo_by_item.get(ic, {})
+        so_d  = so_by_item.get(ic, {})
+        sec   = sec_uom_data.get(ic, {})
+        meta  = item_meta.get(ic, {})
+        hist  = last_cost_per_item.get(ic, {})
+        cons  = consumed_by_item.get(ic, {})
+        uoms  = uom_by_item.get(ic, [])
+
+        item_name = wo_d.get("item_name") or so_d.get("item_name") or ic
+        stock_uom = wo_d.get("uom") or ""
+
+        # Ensure stock UOM is represented in the UOM list with factor=1
+        uom_list = list(uoms)
+        if stock_uom and not any(u["uom"] == stock_uom for u in uom_list):
+            uom_list = [{"uom": stock_uom, "factor": 1.0}] + uom_list
+
+        result.append({
+            "item_code"            : ic,
+            "item_name"            : item_name,
+            "item_group"           : so_d.get("item_group") or meta.get("item_group", ""),
+            "stock_uom"            : stock_uom,
+            "secondary_uom"        : sec.get("uom", ""),
+            "secondary_factor"     : sec.get("factor", 1.0),
+            "item_uoms"            : uom_list,
+            # WO data
+            "wo_count"             : len(wo_d.get("wo_list", [])),
+            "wo_list"              : wo_d.get("wo_list", []),
+            "planned_qty"          : round(flt(wo_d.get("planned_qty",   0)), 2),
+            "produced_qty"         : round(flt(wo_d.get("produced_qty",  0)), 2),
+            "remaining_qty"        : round(flt(wo_d.get("remaining_qty", 0)), 2),
+            # Consumed (from Stock Entry Manufacture)
+            "consumed_qty"         : round(flt(cons.get("consumed_qty",   0)), 2),
+            "consumed_cost"        : round(flt(cons.get("consumed_cost",  0)), 2),
+            # SO data
+            "so_count"             : int(so_d.get("so_count", 0)),
+            "so_pending_qty"       : round(flt(so_d.get("so_pending_qty", 0)), 2),
+            # Historical cost (last completed WO)
+            "last_cost_wo"         : hist.get("wo_name", ""),
+            "last_cost_per_unit"   : round(flt(hist.get("cost_per_unit", 0)), 4),
+            "last_cost_date"       : hist.get("completed_date", ""),
+            "last_cost_qty"        : round(flt(hist.get("produced_qty",  0)), 2),
+        })
+
+    return result
+
+
+@frappe.whitelist()
+def send_dashboard_email(to_emails, cc_emails, subject, snapshot_html, report_tab):
+    """
+    Send the WO Kitting Planner dashboard report by email.
+
+    Called from the JS email dialog. The JS builds an HTML snapshot of the active
+    tab's data (inline-styled table), then passes it here to be wrapped in an
+    email template and sent via Frappe's email queue.
+
+    Args:
+        to_emails   (str): Comma-separated list of recipient email addresses
+        cc_emails   (str): Comma-separated list of CC addresses (may be empty)
+        subject     (str): Email subject line
+        snapshot_html (str): Pre-rendered inline-styled HTML table from JS
+        report_tab  (str): Name of the tab being sent ("wo-plan", "shortage-report", etc.)
+
+    Returns:
+        dict: {sent: True, from_name: str, to: list, cc: list}
+    """
+    sender      = frappe.session.user
+    sender_name = frappe.db.get_value("User", sender, "full_name") or sender
+
+    site_url        = frappe.utils.get_url()
+    dashboard_link  = site_url + "/wo-kitting-planner"
+    sent_date       = frappe.utils.format_datetime(frappe.utils.now(), "dd MMM yyyy, HH:mm")
+
+    tab_labels = {
+        "wo-plan"        : "WO Kitting Plan",
+        "shortage-report": "Material Shortage Report",
+        "emergency"      : "Emergency Priorities",
+        "dispatch"       : "Dispatch Bottleneck",
+        "item-view"      : "FG Item View",
+        "ai-chat"        : "AI Advisor",
+    }
+    tab_label = tab_labels.get(report_tab, report_tab or "Dashboard")
+
+    email_html = _build_dashboard_email_html(
+        sender_name, sender, tab_label, snapshot_html, dashboard_link, sent_date
+    )
+
+    to_list = [e.strip() for e in to_emails.split(",") if e.strip()]
+    cc_list = [e.strip() for e in cc_emails.split(",") if e.strip()] if cc_emails else []
+
+    if not to_list:
+        frappe.throw("At least one recipient email address is required.")
+
+    frappe.sendmail(
+        recipients = to_list,
+        cc         = cc_list,
+        subject    = subject or f"WO Kitting Planner — {tab_label}",
+        message    = email_html,
+        now        = True,
+    )
+
+    return {"sent": True, "from_name": sender_name, "to": to_list, "cc": cc_list}
+
+
+def _build_dashboard_email_html(sender_name, sender_email, tab_label,
+                                 snapshot_html, dashboard_link, sent_date):
+    """
+    Build the full inline-styled HTML body for the dashboard email.
+
+    Inline styles are required for email client compatibility (Gmail, Outlook,
+    Apple Mail all strip <style> tags). No external CSS is referenced.
+    """
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>WO Kitting Planner Report</title></head>
+<body style="margin:0;padding:0;background:#f5f5f4;font-family:Arial,Helvetica,sans-serif;color:#1c1917;">
+
+  <!-- Wrapper -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f5f4;">
+    <tr><td align="center" style="padding:24px 12px;">
+
+      <!-- Card -->
+      <table width="640" cellpadding="0" cellspacing="0" border="0"
+             style="max-width:640px;background:#ffffff;border-radius:8px;
+                    box-shadow:0 1px 4px rgba(0,0,0,0.08);overflow:hidden;">
+
+        <!-- Header band -->
+        <tr>
+          <td style="background:#1c1917;padding:20px 28px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td>
+                  <div style="color:#fafaf9;font-size:18px;font-weight:700;
+                              letter-spacing:-0.3px;">
+                    WO Kitting Planner
+                  </div>
+                  <div style="color:#a8a29e;font-size:12px;margin-top:2px;">
+                    {tab_label}
+                  </div>
+                </td>
+                <td align="right">
+                  <div style="color:#a8a29e;font-size:11px;">{sent_date}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Sender info -->
+        <tr>
+          <td style="padding:16px 28px;border-bottom:1px solid #e7e5e4;">
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="width:36px;height:36px;border-radius:50%;background:#e7e5e4;
+                            text-align:center;vertical-align:middle;
+                            font-size:15px;font-weight:700;color:#57534e;">
+                  {sender_name[:1].upper()}
+                </td>
+                <td style="padding-left:10px;">
+                  <div style="font-size:13px;font-weight:600;color:#1c1917;">
+                    {sender_name}
+                  </div>
+                  <div style="font-size:11px;color:#78716c;">{sender_email} shared a report</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Snapshot content -->
+        <tr>
+          <td style="padding:20px 28px;">
+            <div style="font-size:12px;color:#78716c;margin-bottom:12px;
+                        text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">
+              {tab_label} &mdash; Snapshot
+            </div>
+            <div style="overflow-x:auto;">
+              {snapshot_html}
+            </div>
+          </td>
+        </tr>
+
+        <!-- Dashboard link CTA -->
+        <tr>
+          <td style="padding:16px 28px;background:#fafaf9;border-top:1px solid #e7e5e4;
+                     text-align:center;">
+            <a href="{dashboard_link}"
+               style="display:inline-block;background:#1c1917;color:#fafaf9;
+                      font-size:13px;font-weight:600;padding:10px 24px;
+                      border-radius:6px;text-decoration:none;letter-spacing:0.2px;">
+              Open Live Dashboard
+            </a>
+            <div style="font-size:10px;color:#a8a29e;margin-top:8px;">
+              {dashboard_link}
+            </div>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:12px 28px;border-top:1px solid #e7e5e4;text-align:center;">
+            <div style="font-size:10px;color:#a8a29e;">
+              Sent from WO Kitting Planner &bull; chaizup_toc &bull; {sent_date}
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
 
 
 @frappe.whitelist()
@@ -1484,7 +1899,7 @@ def _get_dispatch_info(item_codes):
 # ═══════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def get_dispatch_bottleneck():
+def get_dispatch_bottleneck(stock_mode="current_only"):
     """
     Dispatch bottleneck analysis — independent of WO simulation.
 
@@ -1497,6 +1912,11 @@ def get_dispatch_bottleneck():
     The will_produce figure (how much WOs will make) is computed by the JS client
     from this.rows, which it already has from simulate_kitting(). The server just
     provides the SO-side view.
+
+    Args:
+        stock_mode (str): "current_only" (default) = physical stock only.
+                          "current_and_expected" = add open PO inbound qty to fg_stock
+                          so that the Dispatch tab reflects the same mode as simulation.
 
     Returns per item:
         fg_stock         float  Physical FG stock (all warehouses, Bin.actual_qty)
@@ -1527,6 +1947,23 @@ def get_dispatch_bottleneck():
 
     # ── Step 2: FG physical stock ────────────────────────────────────
     fg_stock = _get_fg_stock(item_codes)
+
+    # When stock_mode = "current_and_expected", add open FG PO inbound qty
+    # so the Dispatch tab reflects the same mode as the main simulation.
+    if stock_mode == "current_and_expected":
+        po_inbound = frappe.db.sql("""
+            SELECT poi.item_code, SUM(poi.qty - IFNULL(poi.received_qty, 0)) AS inbound
+            FROM   `tabPurchase Order Item` poi
+            JOIN   `tabPurchase Order` po ON po.name = poi.parent
+            WHERE  poi.item_code IN %(items)s
+              AND  po.docstatus = 1
+              AND  po.status NOT IN ('Closed', 'Cancelled', 'Completed')
+              AND  poi.received_qty < poi.qty
+            GROUP BY poi.item_code
+        """, {"items": item_codes}, as_dict=True)
+        for r in po_inbound:
+            ic = r.item_code
+            fg_stock[ic] = flt(fg_stock.get(ic, 0)) + flt(r.inbound)
 
     # ── Step 3: Pick List + Reservation + DN ─────────────────────────
     so_names     = list({r["so_name"] for r in so_rows})
@@ -1593,6 +2030,181 @@ def get_dispatch_bottleneck():
         }
 
     return result
+
+
+@frappe.whitelist()
+def get_item_bom_tree(item_code, max_depth=4):
+    """
+    Return a hierarchical BOM tree for an item up to max_depth levels deep.
+
+    Used by the WO Kitting Planner's Deep BOM drill-through modal.
+    Only follows components that have their own active submitted BOM.
+
+    Returns:
+        dict: {
+            item_code, item_name, uom, qty_per_unit,
+            has_bom: bool,
+            children: [recursive same structure]
+        }
+    """
+    max_depth = cint(max_depth) or 4
+
+    def _build_node(item_cd, qty_per=1.0, depth=0):
+        # Get item name
+        item_name = frappe.db.get_value("Item", item_cd, "item_name") or item_cd
+        uom       = frappe.db.get_value("Item", item_cd, "stock_uom") or ""
+
+        if depth >= max_depth:
+            return {"item_code": item_cd, "item_name": item_name, "uom": uom,
+                    "qty_per_unit": qty_per, "has_bom": False, "children": [],
+                    "truncated": True}
+
+        # Find active submitted BOM for this item
+        bom_no = frappe.db.get_value("BOM", {"item": item_cd, "is_active": 1, "docstatus": 1},
+                                      "name", order_by="creation desc")
+        if not bom_no:
+            return {"item_code": item_cd, "item_name": item_name, "uom": uom,
+                    "qty_per_unit": qty_per, "has_bom": False, "children": []}
+
+        bom_items_rows = frappe.db.sql("""
+            SELECT bi.item_code, bi.item_name, bi.uom,
+                   bi.qty / b.quantity AS qty_per_unit
+            FROM   `tabBOM Item` bi
+            JOIN   `tabBOM` b ON b.name = bi.parent
+            WHERE  bi.parent = %(bom)s
+              AND  b.docstatus = 1
+            ORDER BY bi.idx
+        """, {"bom": bom_no}, as_dict=True)
+
+        children = [
+            _build_node(r.item_code, flt(r.qty_per_unit), depth + 1)
+            for r in bom_items_rows
+        ]
+
+        return {"item_code": item_cd, "item_name": item_name, "uom": uom,
+                "qty_per_unit": qty_per, "has_bom": True, "bom_no": bom_no,
+                "children": children}
+
+    return _build_node(item_code)
+
+
+@frappe.whitelist()
+def get_material_supply_detail(item_code):
+    """
+    Return procurement pipeline for a raw material / component.
+
+    Used by the Material Shortage Report modal when a user clicks on a material name.
+
+    Returns:
+        {
+            open_pos:       [{po_name, supplier, qty, received_qty, pending_qty,
+                              schedule_date, uom, valuation_rate}]
+            open_mrs:       [{mr_name, qty, ordered_qty, pending_qty, schedule_date, uom}]
+            recent_receipts:[{receipt_name, qty, valuation_rate, posting_date,
+                              warehouse, batch_no}]
+            active_batches: [{batch_id, qty, warehouse, valuation_rate,
+                              manufacturing_date, expiry_date}]
+            item_name:      str
+            uom:            str
+        }
+    """
+    item_name, uom = frappe.db.get_value("Item", item_code, ["item_name", "stock_uom"]) or (item_code, "")
+
+    # Open Purchase Orders
+    open_pos = frappe.db.sql("""
+        SELECT
+            poi.parent         AS po_name,
+            po.supplier,
+            poi.qty,
+            IFNULL(poi.received_qty, 0)          AS received_qty,
+            poi.qty - IFNULL(poi.received_qty, 0) AS pending_qty,
+            poi.schedule_date,
+            poi.uom,
+            IFNULL(poi.valuation_rate, 0)         AS valuation_rate
+        FROM  `tabPurchase Order Item` poi
+        JOIN  `tabPurchase Order` po ON po.name = poi.parent
+        WHERE poi.item_code = %(ic)s
+          AND po.docstatus  = 1
+          AND po.status NOT IN ('Closed', 'Cancelled', 'Completed')
+          AND poi.received_qty < poi.qty
+        ORDER BY poi.schedule_date ASC
+        LIMIT 20
+    """, {"ic": item_code}, as_dict=True)
+
+    # Open Material Requests (purpose = Purchase)
+    open_mrs = frappe.db.sql("""
+        SELECT
+            mri.parent          AS mr_name,
+            mri.qty,
+            IFNULL(mri.ordered_qty, 0)          AS ordered_qty,
+            mri.qty - IFNULL(mri.ordered_qty, 0) AS pending_qty,
+            mri.schedule_date,
+            mri.uom
+        FROM  `tabMaterial Request Item` mri
+        JOIN  `tabMaterial Request` mr ON mr.name = mri.parent
+        WHERE mri.item_code   = %(ic)s
+          AND mr.docstatus    = 1
+          AND mr.material_request_type = 'Purchase'
+          AND mr.status NOT IN ('Stopped', 'Cancelled', 'Ordered')
+          AND mri.ordered_qty < mri.qty
+        ORDER BY mri.schedule_date ASC
+        LIMIT 20
+    """, {"ic": item_code}, as_dict=True)
+
+    # Recent Purchase Receipts (last 30 days)
+    recent_receipts = frappe.db.sql("""
+        SELECT
+            pri.parent               AS receipt_name,
+            pri.qty,
+            IFNULL(pri.valuation_rate, 0) AS valuation_rate,
+            pr.posting_date,
+            pri.t_warehouse          AS warehouse,
+            IFNULL(pri.batch_no, '') AS batch_no
+        FROM  `tabPurchase Receipt Item` pri
+        JOIN  `tabPurchase Receipt` pr ON pr.name = pri.parent
+        WHERE pri.item_code    = %(ic)s
+          AND pr.docstatus     = 1
+          AND pr.posting_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+        ORDER BY pr.posting_date DESC
+        LIMIT 15
+    """, {"ic": item_code}, as_dict=True)
+
+    # Active batches with stock
+    active_batches = frappe.db.sql("""
+        SELECT
+            b.name                    AS batch_id,
+            sle.actual_qty            AS qty,
+            sle.warehouse,
+            IFNULL(b.manufacturing_date, '') AS manufacturing_date,
+            IFNULL(b.expiry_date, '')        AS expiry_date,
+            IFNULL(
+                (SELECT valuation_rate FROM `tabStock Ledger Entry`
+                 WHERE item_code = %(ic)s AND batch_no = b.name AND docstatus = 1
+                 ORDER BY posting_date DESC, posting_time DESC LIMIT 1),
+                0
+            ) AS valuation_rate
+        FROM  `tabBatch` b
+        JOIN  (
+            SELECT batch_no, warehouse, SUM(actual_qty) AS actual_qty
+            FROM   `tabStock Ledger Entry`
+            WHERE  item_code = %(ic)s AND docstatus = 1 AND batch_no IS NOT NULL
+            GROUP BY batch_no, warehouse
+            HAVING SUM(actual_qty) > 0
+        ) sle ON sle.batch_no = b.name
+        WHERE b.item = %(ic)s
+          AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
+        ORDER BY b.expiry_date ASC
+        LIMIT 15
+    """, {"ic": item_code}, as_dict=True)
+
+    return {
+        "item_name"      : item_name or item_code,
+        "uom"            : uom or "",
+        "open_pos"       : open_pos,
+        "open_mrs"       : open_mrs,
+        "recent_receipts": recent_receipts,
+        "active_batches" : active_batches,
+    }
 
 
 def _get_fg_stock(item_codes):
@@ -2141,6 +2753,9 @@ _AI_SYSTEM_PROMPT = (
     "5. When citing quantities, show BOTH the primary UOM and higher UOM if present.\n"
     "   Example: '5000 g (5 kg)' or '500 units (42 dozen)'.\n"
     "   The data already includes secondary_uom and secondary_factor fields.\n"
+    "5b. ALWAYS include the item_code in parentheses when mentioning an item by name.\n"
+    "   Example: 'Masala Blend 500g (MBLND-500G)' or 'Cardamom Powder (CARD-PWD-01)'.\n"
+    "   Never mention just the item name without its code — the manager needs the code to look it up in ERP.\n"
     "6. ERPNext terms: WO=Work Order, BOM=Bill of Materials (recipe),\n"
     "   MR=Material Request (replenishment order), PO=Purchase Order (supplier order).\n"
     "   Kit status: ok=fully ready to start, partial=some materials missing,\n"
@@ -3124,6 +3739,7 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
     critical_wos = [
         {
             "wo"             : r.get("wo", ""),
+            "item_code"      : r.get("item_code", ""),   # always include code for ERP lookup
             "item"           : (r.get("item_name") or r.get("item_code", ""))[:35],
             "status"         : r.get("kit_status", ""),
             "remaining_qty"  : round(flt(r.get("remaining_qty", 0)), 1),
@@ -3134,6 +3750,10 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
             "secondary_factor": flt(r.get("secondary_factor", 1)),
             "shortage_val"   : round(flt(r.get("shortage_value", 0)), 0),
             "customer_demand": round(flt(r.get("total_pending_so", 0)), 1),
+            "top_shortage_code": (
+                r["shortage_items"][0]["item_code"]
+                if r.get("shortage_items") else None
+            ),
             "top_shortage"   : (
                 r["shortage_items"][0]["item_name"][:25]
                 if r.get("shortage_items") else None
@@ -3183,9 +3803,10 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
             agg_shortages[ic]["mr_qty"]       = max(agg_shortages[ic]["mr_qty"], flt(si.get("mr_qty", 0)))
             agg_shortages[ic]["received_qty"] = max(agg_shortages[ic]["received_qty"], flt(si.get("received_qty_po", 0)))
 
-    top_shortages = sorted(agg_shortages.values(), key=lambda x: -x["value"])[:8]
+    top_shortages_sorted = sorted(agg_shortages.items(), key=lambda x: -x[1]["value"])[:8]
     top_shortages = [
         {
+            "item_code"    : ic,           # always include code for ERP lookup in AI responses
             "material"     : s["name"],
             "uom"          : s["uom"],
             "shortage_qty" : round(s["shortage_qty"], 1),
@@ -3196,10 +3817,31 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
             "received_qty" : round(s["received_qty"], 1),
             "net_gap"      : round(max(0, s["shortage_qty"] - s["po_qty"] - s["mr_qty"]), 1),
         }
-        for s in top_shortages
+        for ic, s in top_shortages_sorted
     ]
 
     company = frappe.db.get_default("company") or ""
+
+    # Item group distribution (for AI context + UI data points indicator)
+    ig_counter = {}
+    for r in rows:
+        ig = r.get("item_group", "Other") or "Other"
+        ig_counter[ig] = ig_counter.get(ig, 0) + 1
+    top_item_groups = sorted(ig_counter.items(), key=lambda x: -x[1])[:5]
+
+    # Unique shortage materials count (for data_points indicator in UI)
+    unique_shortage_items = len(agg_shortages)
+
+    # data_points: human-readable summary of what is fed to AI (shown in chat bubble)
+    data_points = {
+        "wos"              : total,
+        "shortage_items"   : unique_shortage_items,
+        "dispatch_items"   : len(dispatch),
+        "critical_wos"     : len(critical_wos),
+        "dispatch_alerts"  : len(dispatch_alerts),
+        "top_shortages"    : len(top_shortages),
+        "item_groups"      : [ig for ig, _ in top_item_groups],
+    }
 
     # Compact summary (sent to AI in system prompt — ~400 tokens)
     summary = {
@@ -3219,6 +3861,8 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
         "critical_wos"   : critical_wos,
         "dispatch_alerts": dispatch_alerts,
         "top_shortages"  : top_shortages,
+        "item_groups"    : dict(top_item_groups),
+        "data_points"    : data_points,
     }
 
     # Include full rows + dispatch only for tool-call resolution (not sent to LLM directly)

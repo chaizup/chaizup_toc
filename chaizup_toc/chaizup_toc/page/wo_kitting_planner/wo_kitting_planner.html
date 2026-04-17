@@ -2,7 +2,7 @@
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  wo_kitting_planner.html  --  WO Kitting Planner UI Template            ║
   ║  Part of chaizup_toc app  |  Page: wo-kitting-planner                   ║
-  ║  Last updated: 2026-04-17 (session 8)                                    ║
+  ║  Last updated: 2026-04-17 (session 10)                                   ║
   ╚══════════════════════════════════════════════════════════════════════════╝
 
   PURPOSE
@@ -50,7 +50,9 @@
      Tab bar:           #wkp-tab-bar
                         [data-tab="wo-plan"]  [data-tab="shortage-report"]
                         [data-tab="emergency"]  [data-tab="dispatch"]
-                        [data-tab="ai-chat"]
+                        [data-tab="ai-chat"]    [data-tab="item-view"]
+
+     Export/Email bar:  #wkp-export-csv  #wkp-export-pdf  #wkp-send-email
 
      Filter bar:        #wkp-filter-bar
                         #wkp-fbar-group  #wkp-fbar-status  #wkp-fbar-urgency
@@ -58,9 +60,10 @@
 
      Content area:      #wkp-content  #wkp-loader  #wkp-empty
                         #wkp-pane-wo-plan  #wkp-pane-shortage  #wkp-pane-emergency
-                        #wkp-pane-dispatch  #wkp-pane-ai-chat
+                        #wkp-pane-dispatch  #wkp-pane-ai-chat  #wkp-pane-item-view
                         #wkp-table-wrap  #wkp-table  #wkp-tbody
                         #wkp-shortage-body  #wkp-emerg-body  #wkp-dispatch-body
+                        #wkp-iv-body  #wkp-iv-loading
                         #wkp-shortage-btns
                         #wkp-shortage-mr-btn         (bulk MR for all net-gap items)
                         #wkp-shortage-mr-selected-btn (MR for checked rows only)
@@ -129,17 +132,18 @@
   ══════════════════════════════════════════════════════════════════════════
   SECTION MAP
   ══════════════════════════════════════════════════════════════════════════
-  1. COMMAND BAR      — toggles, filters, refresh
+  1. COMMAND BAR      — toggles, filters, refresh, export (CSV/PDF), email
   2. CONTEXT BAR      — live simulation result summary + mode indicator
   3. SUMMARY STRIP    — 5 stat cards: Ready / Partial / Blocked / Total / Cost
-  3.5 TAB BAR         — WO Kitting Plan | Shortage Report | Emergency Priorities | Dispatch | AI
+  3.5 TAB BAR         — WO Kitting Plan | Shortage Report | Emergency | Dispatch | AI | Item View
   3.6 FILTER BAR      — client-side filters: item group, shortage status, urgency
-  4. MAIN CONTENT     — loading overlay + empty state + 5 tab panes
+  4. MAIN CONTENT     — loading overlay + empty state + 6 tab panes
   5. FLOATING TOOLTIP — follows cursor; text from [data-tip] on hovered element
   6. COLUMN POPOVER   — appears on ? button click; content from WKP_POPOVERS in JS
   7. SHORTAGE MODAL   — material breakdown for one WO; injected by JS
   8. WO DETAIL MODAL  — full WO info + decision card; injected by JS
   9. AI ADVISOR PANE  — auto-insight card + session chat; powered by DeepSeek
+  10. ITEM VIEW PANE  — FG-wise Work Order + Sales Order summary; export + email
 -->
 
 <div class="wkp-root" id="wkp-root">
@@ -208,6 +212,22 @@
           <option value="Material Transferred">Material Transferred</option>
           <option value="In Process">In Process</option>
         </select>
+      </div>
+
+      <!-- Export / Email controls -->
+      <div class="wkp-export-group" id="wkp-export-group">
+        <button class="wkp-btn wkp-btn-sm wkp-btn-export" id="wkp-export-csv"
+                data-tip="Export current tab data as CSV file.&#10;Downloads a spreadsheet you can open in Excel.">
+          &#x2B07; CSV
+        </button>
+        <button class="wkp-btn wkp-btn-sm wkp-btn-export" id="wkp-export-pdf"
+                data-tip="Export current tab as PDF.&#10;Opens a print-ready view of this report.">
+          &#x1F5B6; PDF
+        </button>
+        <button class="wkp-btn wkp-btn-sm wkp-btn-email" id="wkp-send-email"
+                data-tip="Send this report by email.&#10;Choose recipients, CC, and which report to include.&#10;Email includes a link to the live dashboard.">
+          &#x2709; Email
+        </button>
       </div>
 
       <button class="wkp-refresh-btn" id="wkp-refresh"
@@ -309,6 +329,10 @@
     <button class="wkp-tab-btn wkp-tab-btn-ai" data-tab="ai-chat"
             data-tip="AI Production Advisor&#10;Get a plain-language briefing of your production situation.&#10;Ask questions about specific Work Orders, materials, or delivery commitments.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
       &#x1F916; AI Advisor
+    </button>
+    <button class="wkp-tab-btn" data-tab="item-view"
+            data-tip="FG Item View&#10;All finished-good items with active Work Orders or pending Sales Orders.&#10;Shows WO count, planned/produced/remaining qty, SO demand, consumed material,&#10;and last historical production cost per unit.&#10;Supports UOM selector for cost display and CSV/PDF export.">
+      &#x1F4E6; Item View
     </button>
   </div>
 
@@ -509,6 +533,8 @@
               <span>Generating production briefing&hellip;</span>
             </div>
           </div>
+          <!-- Data points indicator — shows what data was fed to AI for this insight -->
+          <div class="wkp-ai-data-points" id="wkp-ai-data-points" style="display:none"></div>
         </div>
 
         <!-- Chat messages area -->
@@ -637,6 +663,48 @@
       <div id="wkp-dispatch-body"></div>
 
     </div>
+
+    <!-- ════ 10. ITEM VIEW PANE ════
+         FG-wise summary: items with active Work Orders or pending Sales Orders.
+         Structure requirements:
+           #wkp-iv-loading    spinner shown while API call is in-flight
+           #wkp-iv-body       JS injects table HTML here
+         ─────────────────────────────────────────────────────────────────
+         Tab: [data-tab="item-view"]
+         JS methods: _fetchItemView() / _renderItemView()
+         API: chaizup_toc.api.wo_kitting_api.get_item_wo_summary
+         Export: _exportCSV() / _exportPDF()   (reads _itemViewData)
+         Email:  _showEmailDialog()              (builds inline snapshot HTML)
+    -->
+    <div class="wkp-tab-pane wkp-iv-pane" id="wkp-pane-item-view" style="display:none">
+
+      <!-- Header -->
+      <div class="wkp-iv-header">
+        <div>
+          <div class="wkp-shortage-title">
+            &#x1F4E6; FG Item View &mdash; Work Orders &amp; Sales Orders by Item
+          </div>
+          <div class="wkp-emerg-sub">
+            Every finished-good item that has active Work Orders or pending customer orders.
+            Shows WO count, planned/produced/remaining qty, SO demand, consumed material,
+            and the last historical production cost per unit.
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading indicator -->
+      <div class="wkp-iv-loading" id="wkp-iv-loading" style="display:none">
+        <div class="wkp-spinner" style="width:24px;height:24px"></div>
+        <span>Loading item summary&hellip;</span>
+      </div>
+
+      <!-- Table injected by JS _renderItemView() -->
+      <div class="wkp-iv-body-wrap">
+        <div id="wkp-iv-body"></div>
+      </div>
+
+    </div>
+    <!-- end Item View pane -->
 
   </div>
 
