@@ -1,0 +1,85 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-04-16 10:17:09.859416",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_njr7",
+  "amended_from",
+  "projection_month",
+  "column_break_cnfa",
+  "projection_year",
+  "projected_item_stable_section",
+  "table_mibv"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_njr7",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Sales Projection",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "projection_month",
+   "fieldtype": "Select",
+   "label": "Projection Month"
+  },
+  {
+   "fieldname": "column_break_cnfa",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "projection_year",
+   "fieldtype": "Int",
+   "label": "Projection Year"
+  },
+  {
+   "fieldname": "projected_item_stable_section",
+   "fieldtype": "Section Break",
+   "label": "Projected Item sTable"
+  },
+  {
+   "fieldname": "table_mibv",
+   "fieldtype": "Table",
+   "options": "Sales Projected Items"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-04-16 10:32:10.460264",
+ "modified_by": "Administrator",
+ "module": "Chaizup Toc",
+ "name": "Sales Projection",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1741,19 +1741,24 @@ _AI_SYSTEM_PROMPT = (
     "You are a production planning advisor for a food/FMCG manufacturing factory using ERPNext.\n"
     "You analyse Work Order kitting and dispatch data to help production managers make fast decisions.\n\n"
     "AUDIENCE: Factory manager — knows the business but may not know ERP terminology.\n\n"
+    "COMPACT OUTPUT — responses display in a small chat window on a 13-inch laptop:\n"
+    "- Keep summary to 1-2 sentences. No preamble (do not start with 'Based on...').\n"
+    "- Tables: max 4 columns, max 6 rows. Drop less critical columns.\n"
+    "- Action steps: exactly 3, one short sentence each.\n"
+    "- If the answer fits in one sentence, skip the table entirely.\n\n"
     "OUTPUT FORMAT — ALWAYS HTML (never plain text):\n"
-    "1. Lead with the answer. Use <p> or inline HTML for 1-3 sentence summaries.\n"
+    "1. Lead with the answer. Use <p> or inline HTML for 1-2 sentence summaries.\n"
     "   <span class=\"wkp-ai-ok\">text</span> = good news / on track\n"
     "   <span class=\"wkp-ai-warn\">text</span> = warning / needs attention\n"
     "   <span class=\"wkp-ai-err\">text</span> = critical / immediate action needed\n"
     "   <strong>text</strong> = urgent items, deadlines, critical quantities\n"
-    "2. For comparisons or lists of 3+ items, use an HTML table:\n"
+    "2. For lists of 3+ items, use a compact HTML table (max 4 cols, max 6 rows):\n"
     "   <table class=\"wkp-ai-table\"><thead><tr><th>Col</th></tr></thead>"
     "<tbody><tr><td>Val</td></tr></tbody></table>\n"
     "   ALWAYS include the item name (what is being produced / what material is short).\n"
     "   Include WO number as secondary info, not the primary identifier.\n"
-    "3. ALWAYS end with numbered action steps:\n"
-    "   <ol class=\"wkp-ai-actions\"><li>Action 1</li><li>Action 2</li></ol>\n"
+    "3. ALWAYS end with exactly 3 short action steps (no sub-bullets):\n"
+    "   <ol class=\"wkp-ai-actions\"><li>Short action</li><li>Short action</li><li>Short action</li></ol>\n"
     "4. Call a function tool ONLY when the user asks about a SPECIFIC Work Order name\n"
     "   (use get_wo_shortage_detail), a SPECIFIC finished item (use get_dispatch_detail),\n"
     "   or procurement planning for ALL materials (use get_top_shortage_items).\n"
@@ -2046,19 +2051,22 @@ def get_ai_auto_insight(context_json, model=None):
     # Resolve model
     effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
 
-    # Auto-insight prompt — always HTML output, reference item names not just WO numbers
+    # Auto-insight prompt — always HTML output, compact (13-inch laptop chat window)
+    # Rules: no preamble, top 3 issues only, short column names, 3 action steps.
     prompt = (
-        "Give me a production briefing based on this simulation data. "
-        "REQUIRED FORMAT (always HTML — never plain text):\n"
-        "1. One sentence overall status (use <span class=\"wkp-ai-ok/warn/err\"> for tone).\n"
-        "2. HTML table of top 3-5 issues: "
+        "Production briefing — compact HTML only (small chat window, no scrolling).\n"
+        "NO preamble (do not start with 'Based on...' or 'Here is...').\n"
+        "REQUIRED FORMAT:\n"
+        "1. One sentence status — use <span class=\"wkp-ai-ok\"> / <span class=\"wkp-ai-warn\"> "
+        "/ <span class=\"wkp-ai-err\"> for colour.\n"
+        "2. Top 3 issues only — HTML table (max 4 cols, max 3 rows): "
         "<table class=\"wkp-ai-table\"><thead><tr>"
-        "<th>Item Name</th><th>Work Order</th><th>Impact</th><th>Action</th>"
+        "<th>Item</th><th>WO</th><th>Impact</th><th>Fix</th>"
         "</tr></thead><tbody>...</tbody></table>\n"
-        "   Always show the ITEM NAME (what is being produced), not just the WO number.\n"
-        "   Impact = quantity/value at risk. Action = concrete step.\n"
-        "3. <ol class=\"wkp-ai-actions\"><li>Action 1</li><li>Action 2</li><li>Action 3</li></ol>\n"
-        "Be direct — no preamble, no sign-off."
+        "   Item = item name (not code). WO = WO number. Impact = qty/value at risk. Fix = one verb phrase.\n"
+        "3. Exactly 3 short action steps: "
+        "<ol class=\"wkp-ai-actions\"><li>...</li><li>...</li><li>...</li></ol>\n"
+        "No sign-off. No extra text after the action list."
     )
 
     # rows/dispatch are for _execute_ai_tool() lookups only — do NOT send to LLM

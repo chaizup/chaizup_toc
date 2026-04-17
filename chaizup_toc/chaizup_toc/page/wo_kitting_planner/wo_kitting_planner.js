@@ -1817,25 +1817,38 @@ class WOKittingPlanner {
       };
 
       const rowsHtml = items.map(it => {
-        const isShort      = (it.shortage || 0) > 0;
-        const valTxt       = (it.shortage_value || 0) > 0
+        const isShort  = (it.shortage || 0) > 0;
+        const valTxt   = (it.shortage_value || 0) > 0
           ? "\u20B9" + _fmt_num(it.shortage_value, 0) : "\u2014";
-        const stageCls     = "wkp-stage-" + (it.stage_color || "green");
-        const stageDesc    = _stage_description(it.stage);
-        const poTxt        = (it.po_qty  || 0) > 0 ? _fmt_num(it.po_qty,  2) : "\u2014";
-        const mrTxt        = (it.mr_qty  || 0) > 0 ? _fmt_num(it.mr_qty,  2) : "\u2014";
-        const rcvTxt       = (it.received_qty_po || 0) > 0 ? _fmt_num(it.received_qty_po, 2) : "\u2014";
-        const consumedTxt  = (it.consumed_qty || 0) > 0 ? _fmt_num(it.consumed_qty, 2) : "\u2014";
-        const netGap       = Math.max(0, (it.shortage || 0) - (it.po_qty || 0) - (it.mr_qty || 0));
-        const netCls       = netGap > 0 ? "wkp-cell-red" : (isShort ? "wkp-cell-green" : "");
-        const netTxt       = isShort
-          ? (netGap > 0 ? _fmt_num(netGap, 2) : "\u2714 Covered")
-          : "\u2014";
+        const stageCls = "wkp-stage-" + (it.stage_color || "green");
+        const stageDesc = _stage_description(it.stage);
 
-        const sec = it.secondary_uom || "";
+        const sec       = it.secondary_uom || "";
+        const secFactor = (it.secondary_factor || 0) > 1 ? it.secondary_factor : 0;
+
         const reqHtml  = _dualQty(it.required,  it.uom, it.required_secondary,  sec);
         const avlHtml  = _dualQty(it.available, it.uom, it.available_secondary, sec);
         const shtHtml  = isShort ? _dualQty(it.shortage, it.uom, it.shortage_secondary, sec) : "\u2014";
+
+        // Dual-UOM helper for qty fields without pre-computed secondary values.
+        // Shows "2,500 g" + secondary line "2.50 kg" if secondary UOM exists,
+        // or just "2,500 g" if no secondary. Returns "—" for zero/null.
+        const _dq = (qty) => {
+          if (!(qty > 0)) return "\u2014";
+          return secFactor
+            ? _dualQty(qty, it.uom, qty / secFactor, sec)
+            : _fmt_num(qty, 2) + "\u00a0" + _esc(it.uom || "");
+        };
+
+        const consumedTxt = _dq(it.consumed_qty    || 0);
+        const poTxt       = _dq(it.po_qty          || 0);
+        const rcvTxt      = _dq(it.received_qty_po || 0);
+        const mrTxt       = _dq(it.mr_qty          || 0);
+        const netGap      = Math.max(0, (it.shortage || 0) - (it.po_qty || 0) - (it.mr_qty || 0));
+        const netCls      = netGap > 0 ? "wkp-cell-red" : (isShort ? "wkp-cell-green" : "");
+        const netTxt      = isShort
+          ? (netGap > 0 ? _dq(netGap) : "\u2714 Covered")
+          : "\u2014";
 
         return `
 <tr class="${isShort ? "wkp-modal-row-short" : ""}">
@@ -2331,6 +2344,24 @@ ${decisionHtml}
   //    HTML output: AI may return HTML tables/spans. _renderAIContent()
   //    sanitises the HTML (removes script/on* attributes) before injecting
   //    into the DOM via innerHTML.
+  //
+  //  COMPACT LAYOUT (session 6 — 13-inch laptop target):
+  //    Insight card: max-height 150px (scrollable) — reserves room for chat.
+  //    Chat messages area grows to fill remaining space (flex:1 + overflow:auto).
+  //    @media (max-height: 820px): insight further shrinks to 100px,
+  //      padding tightened throughout — targets ~800px viewport height.
+  //    Right guide column: 220px wide, compact font sizes, tighter spacing.
+  //
+  //  AUTO-INSIGHT PROMPT RULES (server-side, in wo_kitting_api.py):
+  //    - No preamble (never start with "Based on..." or "Here is...")
+  //    - Top 3 issues only (not 3-5) — short column names: Item / WO / Impact / Fix
+  //    - Exactly 3 action steps, one verb phrase each
+  //    - If answer fits one sentence, skip the table entirely
+  //
+  //  SYSTEM PROMPT COMPACT OUTPUT SECTION (added session 6):
+  //    - Summary: 1-2 sentences max
+  //    - Tables: max 4 cols, max 6 rows — drop less critical columns
+  //    - Action steps: exactly 3, one short sentence each
   //
   //  ══════════════════════════════════════════════════════════════════
   //  🔒 RESTRICTED — do not rename without updating HTML and CSS:
