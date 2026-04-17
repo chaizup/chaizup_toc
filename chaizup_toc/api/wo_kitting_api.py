@@ -207,13 +207,13 @@ def get_work_order_statuses():
     Return all unique statuses currently present in open Work Orders.
     Used to populate the 'Show WOs' filter dynamically instead of hardcoding.
     """
-    statuses = frappe.db.sql_list(\"\"\"
+    statuses = frappe.db.sql_list("""
         SELECT DISTINCT status
         FROM `tabWork Order`
         WHERE docstatus = 1
           AND status NOT IN ('Completed', 'Stopped', 'Cancelled')
         ORDER BY status ASC
-    \"\"\")
+    """)
     return statuses
 
 
