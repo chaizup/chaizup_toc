@@ -125,7 +125,7 @@ Called by: chaizup_toc/page/wo_kitting_planner/wo_kitting_planner.js
 
 import calendar
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import frappe
 import requests as _requests
@@ -3919,3 +3919,331 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
         "rows"    : rows,      # used by _execute_ai_tool — not in the compressed summary
         "dispatch": dispatch,  # used by _execute_ai_tool — not in the compressed summary
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PURCHASE PRIORITY TAB  (session 14)
+#  ─────────────────────────────────────────────────────────────────────
+#  Heavy computation — called only when the Purchase Priority tab is opened.
+#  Two-level BOM discovery:
+#    Level 1 (direct):   BOM components of open WOs for FG items with open SOs.
+#    Level 2 (indirect): BOM components of open SFG WOs whose output is a BOM
+#                        component of a Level-1 FG WO (sub-assembly chain).
+#
+#  RESTRICTED: Do NOT call this from simulate_kitting or the main load path.
+#  It is a separate lazy endpoint — expensive SQL is acceptable here because
+#  the user explicitly triggers it by clicking the tab.
+# ═══════════════════════════════════════════════════════════════════════
+
+@frappe.whitelist()
+def get_purchase_priority():
+    """
+    Purchase Priority — materials to procure for WOs backed by open Sales Orders.
+
+    Discovers:
+      Level 1: BOM components of open WOs for FG items that have any open SO
+               (docstatus 0=Draft or 1=Submitted, status not Closed/Cancelled/Completed,
+               pending_qty > 0).
+      Level 2: BOM components of open sub-assembly WOs (open WOs whose production_item
+               appears as a BOM component in the Level-1 FG BOMs). These are the raw
+               materials needed to manufacture the intermediate goods.
+
+    Per raw material, returns:
+        item_code, item_name, item_group, uom, secondary_uom, secondary_factor
+        required_qty    — total qty needed across all linked WOs
+        in_stock        — Bin.actual_qty across all warehouses
+        open_po_qty     — open PO qty (ordered − received, docstatus=1)
+        open_mr_qty     — open MR qty (not yet PO'd, docstatus 0 or 1)
+        net_gap         — max(0, required − in_stock − open_po − open_mr)
+        moq             — minimum order qty from Item master
+        lead_time_days  — supplier lead time from Item master
+        wo_count        — number of linked WOs
+        so_count        — number of unique linked SOs
+        earliest_delivery — earliest SO delivery date (YYYY-MM-DD)
+        is_overdue      — True if earliest_delivery < today
+        urgency         — "overdue" | "this_week" | "this_month" | "future"
+        level           — "direct" (Level-1 FG WO) or "indirect" (Level-2 SFG WO)
+        wo_list         — [{wo_name, fg_item, fg_item_name, required_qty}]
+        so_list         — [{so_name, customer_name, delivery_date}]
+
+    Sorted by: urgency (overdue first), then earliest_delivery ASC, then net_gap DESC.
+
+    IMPORTANT: Return schema is consumed by _renderPurchasePriority() in JS.
+               Do NOT rename keys — JS reads them by exact name.
+    """
+    today_str = str(date.today())
+    today_dt  = date.today()
+
+    # ── Step 1: All FG items with open SOs ──────────────────────────────
+    so_rows = _get_open_so_detail()   # docstatus 0 and 1, pending_qty > 0
+    if not so_rows:
+        return []
+
+    fg_items_with_so = list({r["item_code"] for r in so_rows})
+
+    # Build SO info map: fg_item_code → list of {so_name, customer_name, delivery_date, pending_qty}
+    so_info_by_fg = {}
+    for r in so_rows:
+        ic = r["item_code"]
+        so_info_by_fg.setdefault(ic, []).append({
+            "so_name"      : r["so_name"],
+            "customer_name": r.get("customer_name") or r.get("customer") or "",
+            "delivery_date": str(r.get("delivery_date") or ""),
+            "pending_qty"  : flt(r["pending_qty"]),
+        })
+
+    # ── Step 2: Open WOs for those FG items ─────────────────────────────
+    fg_wos = frappe.db.sql("""
+        SELECT wo.name, wo.production_item, wo.bom_no,
+               wo.qty, wo.produced_qty,
+               COALESCE(i.item_name, wo.production_item) AS item_name
+        FROM   `tabWork Order` wo
+        JOIN   `tabItem` i ON i.name = wo.production_item
+        WHERE  wo.production_item IN %(items)s
+          AND  wo.docstatus = 1
+          AND  wo.status NOT IN ('Completed', 'Stopped', 'Cancelled')
+    """, {"items": fg_items_with_so}, as_dict=True)
+
+    if not fg_wos:
+        return []
+
+    fg_bom_nos = list({w.bom_no for w in fg_wos if w.bom_no})
+    fg_bom_items = _get_bom_items_bulk(fg_bom_nos) if fg_bom_nos else {}
+
+    # ── Step 3: Level-1 component requirements ───────────────────────────
+    # material_map: {item_code: aggregated procurement info}
+    material_map  = {}
+    sfg_candidates = set()   # component item codes that may have open WOs (sub-assemblies)
+
+    for wo in fg_wos:
+        remaining = max(0.0, flt(wo.qty) - flt(wo.produced_qty))
+        if remaining <= 0 or not wo.bom_no or wo.bom_no not in fg_bom_items:
+            continue
+
+        fg_so_list = so_info_by_fg.get(wo.production_item, [])
+
+        for comp in fg_bom_items[wo.bom_no]:
+            ic       = comp["item_code"]
+            required = flt(comp["per_unit_qty"]) * remaining
+
+            if ic not in material_map:
+                material_map[ic] = {
+                    "item_code"   : ic,
+                    "item_name"   : comp.get("item_name", ic),
+                    "item_group"  : comp.get("item_group", ""),
+                    "uom"         : comp.get("uom", ""),
+                    "required_qty": 0.0,
+                    "wo_refs"     : {},   # {wo_name: {wo_name, fg_item, fg_item_name, required_qty}}
+                    "so_set"      : set(),
+                    "level"       : "direct",
+                }
+            m = material_map[ic]
+            m["required_qty"] += required
+
+            # Accumulate WO reference (merge if same WO appears via multiple BOM paths)
+            if wo.name not in m["wo_refs"]:
+                m["wo_refs"][wo.name] = {
+                    "wo_name"     : wo.name,
+                    "fg_item"     : wo.production_item,
+                    "fg_item_name": wo.item_name or wo.production_item,
+                    "required_qty": 0.0,
+                }
+            m["wo_refs"][wo.name]["required_qty"] += required
+
+            for so in fg_so_list:
+                m["so_set"].add((so["so_name"], so["customer_name"], so["delivery_date"]))
+
+            sfg_candidates.add(ic)
+
+    # ── Step 4: Level-2 — find open sub-assembly WOs ────────────────────
+    # A sub-assembly WO exists when a Level-1 component is itself manufactured.
+    if sfg_candidates:
+        sfg_wos = frappe.db.sql("""
+            SELECT wo.name, wo.production_item, wo.bom_no,
+                   wo.qty, wo.produced_qty,
+                   COALESCE(i.item_name, wo.production_item) AS item_name
+            FROM   `tabWork Order` wo
+            JOIN   `tabItem` i ON i.name = wo.production_item
+            WHERE  wo.production_item IN %(items)s
+              AND  wo.docstatus = 1
+              AND  wo.status NOT IN ('Completed', 'Stopped', 'Cancelled')
+        """, {"items": list(sfg_candidates)}, as_dict=True)
+
+        if sfg_wos:
+            sfg_bom_nos = list({w.bom_no for w in sfg_wos if w.bom_no})
+            sfg_bom_items_map = _get_bom_items_bulk(sfg_bom_nos) if sfg_bom_nos else {}
+
+            # Map: sfg_item → SOs it inherits (from FG WOs that consume it)
+            sfg_to_so = {}
+            for wo in fg_wos:
+                if not wo.bom_no or wo.bom_no not in fg_bom_items:
+                    continue
+                fg_so_list = so_info_by_fg.get(wo.production_item, [])
+                for comp in fg_bom_items[wo.bom_no]:
+                    sfg_to_so.setdefault(comp["item_code"], set())
+                    for so in fg_so_list:
+                        sfg_to_so[comp["item_code"]].add(
+                            (so["so_name"], so["customer_name"], so["delivery_date"])
+                        )
+
+            for wo in sfg_wos:
+                remaining = max(0.0, flt(wo.qty) - flt(wo.produced_qty))
+                if remaining <= 0 or not wo.bom_no or wo.bom_no not in sfg_bom_items_map:
+                    continue
+
+                inherited_sos = sfg_to_so.get(wo.production_item, set())
+
+                for comp in sfg_bom_items_map[wo.bom_no]:
+                    ic       = comp["item_code"]
+                    required = flt(comp["per_unit_qty"]) * remaining
+
+                    # Skip if this component is the SFG itself (circular guard)
+                    if ic == wo.production_item:
+                        continue
+
+                    if ic not in material_map:
+                        material_map[ic] = {
+                            "item_code"   : ic,
+                            "item_name"   : comp.get("item_name", ic),
+                            "item_group"  : comp.get("item_group", ""),
+                            "uom"         : comp.get("uom", ""),
+                            "required_qty": 0.0,
+                            "wo_refs"     : {},
+                            "so_set"      : set(),
+                            "level"       : "indirect",
+                        }
+                    m = material_map[ic]
+                    m["required_qty"] += required
+
+                    if wo.name not in m["wo_refs"]:
+                        m["wo_refs"][wo.name] = {
+                            "wo_name"     : wo.name,
+                            "fg_item"     : wo.production_item,
+                            "fg_item_name": wo.item_name or wo.production_item,
+                            "required_qty": 0.0,
+                        }
+                    m["wo_refs"][wo.name]["required_qty"] += required
+                    m["so_set"].update(inherited_sos)
+
+    if not material_map:
+        return []
+
+    all_codes = list(material_map.keys())
+
+    # ── Step 5: Current stock (Bin) ──────────────────────────────────────
+    stock_rows = frappe.db.sql("""
+        SELECT item_code, SUM(actual_qty) AS qty
+        FROM   `tabBin`
+        WHERE  item_code IN %(items)s
+        GROUP BY item_code
+    """, {"items": all_codes}, as_dict=True)
+    stock_map = {r.item_code: flt(r.qty) for r in stock_rows}
+
+    # ── Step 6: Open Purchase Order qty ─────────────────────────────────
+    po_rows = frappe.db.sql("""
+        SELECT poi.item_code,
+               SUM(poi.qty - IFNULL(poi.received_qty, 0)) AS open_qty
+        FROM   `tabPurchase Order Item` poi
+        JOIN   `tabPurchase Order` po ON po.name = poi.parent
+        WHERE  poi.item_code IN %(items)s
+          AND  po.docstatus = 1
+          AND  po.status NOT IN ('Closed', 'Cancelled', 'Completed')
+          AND  poi.qty > IFNULL(poi.received_qty, 0)
+        GROUP BY poi.item_code
+    """, {"items": all_codes}, as_dict=True)
+    po_map = {r.item_code: flt(r.open_qty) for r in po_rows}
+
+    # ── Step 7: Open Material Request qty ────────────────────────────────
+    mr_rows = frappe.db.sql("""
+        SELECT mri.item_code,
+               SUM(mri.qty - IFNULL(mri.ordered_qty, 0)) AS open_qty
+        FROM   `tabMaterial Request Item` mri
+        JOIN   `tabMaterial Request` mr ON mr.name = mri.parent
+        WHERE  mri.item_code IN %(items)s
+          AND  mr.docstatus IN (0, 1)
+          AND  mr.material_request_type = 'Purchase'
+          AND  mr.status NOT IN ('Stopped', 'Cancelled', 'Ordered')
+          AND  mri.qty > IFNULL(mri.ordered_qty, 0)
+        GROUP BY mri.item_code
+    """, {"items": all_codes}, as_dict=True)
+    mr_map = {r.item_code: flt(r.open_qty) for r in mr_rows}
+
+    # ── Step 8: MOQ + Lead Time from Item master ─────────────────────────
+    proc_rows = frappe.db.sql("""
+        SELECT name AS item_code,
+               COALESCE(min_order_qty, 0)   AS moq,
+               COALESCE(lead_time_days, 0)  AS lead_time_days
+        FROM   `tabItem`
+        WHERE  name IN %(items)s
+    """, {"items": all_codes}, as_dict=True)
+    proc_map = {r.item_code: {"moq": flt(r.moq), "lead": int(r.lead_time_days or 0)}
+                for r in proc_rows}
+
+    # ── Step 9: Secondary UOM for dual-UOM display ───────────────────────
+    sec_uom = _get_secondary_uom(all_codes)
+
+    # ── Step 10: Assemble result rows ─────────────────────────────────────
+    result = []
+    for ic, m in material_map.items():
+        in_stock = flt(stock_map.get(ic, 0))
+        open_po  = flt(po_map.get(ic, 0))
+        open_mr  = flt(mr_map.get(ic, 0))
+        required = flt(m["required_qty"])
+        net_gap  = max(0.0, required - in_stock - open_po - open_mr)
+
+        proc = proc_map.get(ic, {})
+        sec  = sec_uom.get(ic, {})
+
+        # SO list — sort by delivery date ASC (soonest first)
+        so_set_sorted = sorted(m["so_set"], key=lambda x: x[2] or "9999-99-99")
+        so_list = [{"so_name": s[0], "customer_name": s[1], "delivery_date": s[2]}
+                   for s in so_set_sorted]
+
+        earliest = so_list[0]["delivery_date"] if so_list else ""
+        is_overdue = bool(earliest and earliest < today_str)
+
+        week_str  = str(today_dt + timedelta(days=7))
+        month_str = str(today_dt + timedelta(days=30))
+        if is_overdue:
+            urgency = "overdue"
+        elif earliest and earliest <= week_str:
+            urgency = "this_week"
+        elif earliest and earliest <= month_str:
+            urgency = "this_month"
+        else:
+            urgency = "future"
+
+        wo_list = list(m["wo_refs"].values())
+
+        result.append({
+            "item_code"        : ic,
+            "item_name"        : m["item_name"],
+            "item_group"       : m["item_group"],
+            "uom"              : m["uom"],
+            "secondary_uom"    : sec.get("uom", ""),
+            "secondary_factor" : sec.get("factor", 1.0),
+            "required_qty"     : round(required, 4),
+            "in_stock"         : round(in_stock, 4),
+            "open_po_qty"      : round(open_po, 4),
+            "open_mr_qty"      : round(open_mr, 4),
+            "net_gap"          : round(net_gap, 4),
+            "moq"              : flt(proc.get("moq", 0)),
+            "lead_time_days"   : int(proc.get("lead", 0)),
+            "wo_count"         : len(wo_list),
+            "so_count"         : len(so_list),
+            "earliest_delivery": earliest,
+            "is_overdue"       : is_overdue,
+            "urgency"          : urgency,
+            "level"            : m.get("level", "direct"),
+            "wo_list"          : wo_list,
+            "so_list"          : so_list,
+        })
+
+    # Sort: urgency tier → earliest delivery → net_gap DESC
+    _urgency_rank = {"overdue": 0, "this_week": 1, "this_month": 2, "future": 3}
+    result.sort(key=lambda r: (
+        _urgency_rank.get(r["urgency"], 4),
+        r["earliest_delivery"] or "9999-99-99",
+        -r["net_gap"],
+    ))
+    return result

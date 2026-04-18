@@ -104,6 +104,38 @@
  *   Tooltip: uses innerHTML (not textContent) so HTML in data-tip renders correctly;
  *     \n in data-tip values is converted to <br> before injection; background forced via !important
  *
+ * - Session 14 additions (2026-04-18):
+ *   Purchase Priority tab (§11): new lazy-loaded tab showing materials to buy for WOs backed
+ *     by open Sales Orders (any docstatus 0=Draft, 1=Submitted, 1=To Bill).
+ *     Two-level BOM discovery:
+ *       Level 1 (direct): BOM components of open WOs for FG items with open SOs.
+ *       Level 2 (indirect): BOM components of open SFG WOs whose output is a Level-1 component.
+ *     Per material: required_qty, in_stock, open_po_qty, open_mr_qty, net_gap, moq, lead_time_days.
+ *     Sorted by: urgency (overdue > this_week > this_month > future), then earliest SO delivery, then net_gap.
+ *     Urgency tiers: overdue (delivery < today), this_week (≤ 7 days), this_month (≤ 30 days), future.
+ *     MR creation: reuses _openMRQtyDialog() + create_purchase_mr_for_wo_shortages (same as Shortage tab).
+ *     Per-row checkboxes (.wkp-pp-chk) + "Create MR for Selected" + "Create MR All Gaps" buttons.
+ *     Supply pipeline modal: reuses _showMaterialSupplyModal() (click material name).
+ *     Details expand rows show linked WOs + SOs per material.
+ *     CSV export: wkp_purchase_priority.csv via _exportCSV().
+ *     Python API: get_purchase_priority() in wo_kitting_api.py (lazy — NOT called on load).
+ *     Tab CSS class: .wkp-tab-btn-pp (teal accent). Pane: #wkp-pane-purchase-priority.
+ *     Guide strip: What / Why / How / When — procurement decision guidance.
+ *
+ * - Session 13 additions (2026-04-18):
+ *   Font Awesome 6 Free icons: all OS-dependent emoji replaced with FA icons.
+ *     HTML: FA CDN <link> added before #wkp-root; all tab/summary/cmd-bar emoji → <i class="fa-solid ...">
+ *     JS: _updateHintBar() uses innerHTML + FA icons instead of textContent + emoji
+ *     IMPORTANT: FA icon <i> elements must use class="fa-solid fa-name" (double quotes only — WKP-001)
+ *   Global Search bug fix (WKP-029): tabBodyMap["shortage-report"] was ".wkp-short-table tbody"
+ *     (wrong class — table has class wkp-shortage-table and ID wkp-sr-table). Fixed to "#wkp-sr-table tbody".
+ *     Also: search loop now skips .wkp-sr-detail-row — classifying them as no-match hid the expand
+ *     rows permanently and broke the Details onclick button (CSS display:none blocked the toggle).
+ *   Item group filter + BOM expand fix (WKP-030): item group filter loop now also hides the paired
+ *     .wkp-sr-detail-row when a main shortage row is filtered out. Detail row ID = "wkp-sr-d-" +
+ *     item_code with non-alphanumeric chars replaced by "_". Detail button text is also reset to
+ *     "▼ Details" so it shows correctly when the filter is cleared.
+ *
  * ══════════════════════════════════════════════════════════════════════
  * 🔒 RESTRICTED — DO NOT CHANGE (these are load-bearing architectural choices)
  * ══════════════════════════════════════════════════════════════════════
@@ -143,10 +175,37 @@
  *
  * WKP-029: Cost audit batch column (hasBatch) uses a colspan on tfoot. If you add/remove
  *          columns from the actRows table, update actColSpan accordingly.
+ *          ALSO: Global search selector for shortage-report tab is "#wkp-sr-table tbody" (by ID).
+ *          Do NOT change back to a class selector — the shortage table has no class "wkp-short-table".
+ *          Detail rows (.wkp-sr-detail-row) must be skipped in the search loop — they are expand
+ *          rows, not data rows; classifying them as no-match permanently hides them via CSS.
  *
  * WKP-030: Item View cost display no longer uses a <select> UOM selector.
  *          The removal of wkp-iv-uom-sel / data-base-cost / data-base-factor is intentional.
  *          Costs are now stacked (stock UOM primary, secondary, extras). Do not re-add the select.
+ *          ALSO: Item group filter in shortage table MUST sync .wkp-sr-detail-row visibility.
+ *          When a main row is hidden by the filter, its paired detail row (ID = "wkp-sr-d-" +
+ *          item_code.replace(/[^a-zA-Z0-9]/g,"_")) must also be hidden and the Details button
+ *          text reset. Without this, expand rows float disconnected after filter+expand sequences.
+ *
+ * WKP-032: Purchase Priority tab — lazy-loaded; do NOT call get_purchase_priority() from
+ *          simulate(), load(), or any auto-trigger path. It runs heavy multi-table SQL.
+ *          _ppLoaded resets only when stockMode changes (same pattern as _dispatchLoaded).
+ *          #wkp-pp-table is the global search selector for the tab (tabBodyMap key).
+ *          .wkp-pp-chk checkboxes are bound after render inside _renderPurchasePriority().
+ *          Do NOT bind them in constructor or bindControls — the table doesn't exist yet.
+ *          Level "indirect" rows are sub-assembly components — they trace one BOM level deeper
+ *          than the FG WO. Do NOT remove this distinction (CSV "Level" column preserves it).
+ *          MR creation uses _openMRQtyDialog (same as Shortage tab) — items must have
+ *          {item_code, item_name, uom, qty, moq, secondary_uom, secondary_factor} structure.
+ *
+ * WKP-031: Icons — always use Font Awesome 6 Free <i class="fa-solid fa-name"> elements.
+ *          NEVER revert to Unicode emoji (textContent) for any icon that JS sets dynamically.
+ *          _updateHintBar() uses innerHTML = '<i ...>' not textContent = emoji.
+ *          Reason: emoji render differently per OS/device/font; FA icons are consistent everywhere.
+ *          FA CDN: cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css
+ *          WKP-001 still applies: all HTML in this file and in template strings must use double
+ *          quotes for HTML attributes (class="fa-solid fa-name" is correct; class='...' is NOT).
  *
  * _dispatchData, _dispatchLoaded, _dispatchLoading: keyed state for dispatch tab caching.
  *   Change these only if you also update _fetchDispatchData() and _switchTab().
@@ -246,6 +305,15 @@
  *                                                               consumed_qty, consumed_cost,
  *                                                               so_count, so_pending_qty,
  *                                                               last_cost_per_unit, last_cost_wo, last_cost_date}
+ *   chaizup_toc.api.wo_kitting_api.get_purchase_priority  → no args; returns list sorted by urgency:
+ *                                                               [{item_code, item_name, item_group,
+ *                                                               uom, secondary_uom, secondary_factor,
+ *                                                               required_qty, in_stock, open_po_qty,
+ *                                                               open_mr_qty, net_gap, moq, lead_time_days,
+ *                                                               wo_count, so_count, earliest_delivery,
+ *                                                               is_overdue, urgency, level,
+ *                                                               wo_list[], so_list[]}]
+ *                                                               (session 14 — Purchase Priority tab)
  *   chaizup_toc.api.wo_kitting_api.send_dashboard_email    → args: to_emails, cc_emails, subject,
  *                                                               snapshot_html, report_tab
  *                                                               → {sent, from_name, to[], cc[]}
@@ -528,6 +596,11 @@ class WOKittingPlanner {
     this._itemViewData    = [];   // array from get_item_wo_summary()
     this._itemViewLoaded  = false;
     this._itemViewLoading = false;
+
+    // Purchase Priority data (on-demand — loaded only when tab is first clicked)
+    this._ppData    = [];   // array from get_purchase_priority()
+    this._ppLoaded  = false;
+    this._ppLoading = false;
 
     // Client-side filter state (applied in _getFilteredRows)
     this._filterItemGroup = "";   // item_group value from filter bar
@@ -885,12 +958,14 @@ class WOKittingPlanner {
     const tab = this._activeTab;
 
     // Map tab name to which tbody to search
+    // WKP-029: shortage-report uses #wkp-sr-table (id) not .wkp-short-table (class does not exist)
     const tabBodyMap = {
-      "wo-plan"        : "#wkp-tbody",
-      "shortage-report": ".wkp-short-table tbody",
-      "emergency"      : "#wkp-emerg-list .wkp-emerg-card",
-      "dispatch"       : ".wkp-dsp-table tbody",
-      "item-view"      : ".wkp-iv-table tbody",
+      "wo-plan"          : "#wkp-tbody",
+      "shortage-report"  : "#wkp-sr-table tbody",
+      "emergency"        : "#wkp-emerg-list .wkp-emerg-card",
+      "dispatch"         : ".wkp-dsp-table tbody",
+      "item-view"        : ".wkp-iv-table tbody",
+      "purchase-priority": "#wkp-pp-table tbody",
     };
 
     const selector = tabBodyMap[tab];
@@ -920,8 +995,11 @@ class WOKittingPlanner {
     const active = q.length >= 2;
     if (table) table.classList.toggle("wkp-search-active", active);
 
+    // WKP-029: skip .wkp-sr-detail-row — they are expand rows, not searchable items.
+    // Classifying them as no-match hides them via CSS and blocks the Detail onclick expand.
     const rows = tbody.querySelectorAll("tr");
     rows.forEach(tr => {
+      if (tr.classList.contains("wkp-sr-detail-row")) return;
       tr.classList.remove("wkp-search-match", "wkp-search-no-match");
       if (!active) return;
       const text = tr.textContent.toLowerCase();
@@ -1444,12 +1522,13 @@ class WOKittingPlanner {
 
     // Show/hide panes
     const panes = {
-      "wo-plan"        : "wkp-pane-wo-plan",
-      "shortage-report": "wkp-pane-shortage",
-      "emergency"      : "wkp-pane-emergency",
-      "dispatch"       : "wkp-pane-dispatch",
-      "ai-chat"        : "wkp-pane-ai-chat",
-      "item-view"      : "wkp-pane-item-view",
+      "wo-plan"          : "wkp-pane-wo-plan",
+      "shortage-report"  : "wkp-pane-shortage",
+      "emergency"        : "wkp-pane-emergency",
+      "dispatch"         : "wkp-pane-dispatch",
+      "ai-chat"          : "wkp-pane-ai-chat",
+      "item-view"        : "wkp-pane-item-view",
+      "purchase-priority": "wkp-pane-purchase-priority",
     };
     Object.entries(panes).forEach(([tab, paneId]) => {
       const pane = document.getElementById(paneId);
@@ -1484,6 +1563,15 @@ class WOKittingPlanner {
       }
     }
 
+    // If switching to Purchase Priority, fetch data if not yet loaded (heavy query — lazy)
+    if (this._activeTab === "purchase-priority") {
+      if (this._ppLoaded) {
+        this._renderPurchasePriority(this._ppData);
+      } else if (!this._ppLoading) {
+        this._fetchPurchasePriority();
+      }
+    }
+
     // Re-apply global search to the newly active tab (if a query is active)
     const searchInput = document.getElementById("wkp-global-search");
     if (searchInput && searchInput.value) {
@@ -1493,7 +1581,8 @@ class WOKittingPlanner {
 
   _showAllPanes(show) {
     ["wkp-pane-wo-plan", "wkp-pane-shortage", "wkp-pane-emergency",
-     "wkp-pane-dispatch", "wkp-pane-ai-chat", "wkp-pane-item-view"].forEach(id => {
+     "wkp-pane-dispatch", "wkp-pane-ai-chat", "wkp-pane-item-view",
+     "wkp-pane-purchase-priority"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = show ? "" : "none";
     });
@@ -1868,13 +1957,22 @@ class WOKittingPlanner {
         const ig = btn.dataset.ig || "";
         const table = body.querySelector("#wkp-sr-table");
         if (!table) return;
+        // WKP-030: when hiding a main row, also hide its expand detail row (if open).
+        // If the detail row is left visible after filtering, it floats disconnected from its parent.
         table.querySelectorAll("tbody tr:not(.wkp-sr-detail-row)").forEach(tr => {
           const ic = tr.querySelector("[data-item]") ? tr.querySelector("[data-item]").dataset.item : "";
           const entry = aggList.find(a => a.item_code === ic);
-          if (!ig || (entry && entry.item_group === ig)) {
-            tr.style.display = "";
-          } else {
-            tr.style.display = "none";
+          const match = !ig || (entry && entry.item_group === ig);
+          tr.style.display = match ? "" : "none";
+
+          // Sync the paired detail row
+          const detailId = "wkp-sr-d-" + ic.replace(/[^a-zA-Z0-9]/g, "_");
+          const detailTr = document.getElementById(detailId);
+          if (detailTr && !match) {
+            detailTr.style.display = "none";
+            // Reset the Details button text so it reads "Details" again when row becomes visible
+            const detailBtn = tr.querySelector("button[onclick]");
+            if (detailBtn) detailBtn.textContent = "\u25BC Details";
           }
         });
       });
@@ -3229,7 +3327,7 @@ ${decisionHtml}
     // ── Results summary ─────────────────────────────────────────────
     if (!rows || !rows.length) {
       this._setHintText("Checking which Work Orders can start production today\u2026");
-      if (iconEl) iconEl.textContent = "\uD83D\uDCCA";
+      if (iconEl) iconEl.innerHTML = '<i class="fa-solid fa-chart-bar"></i>';
       return;
     }
 
@@ -3248,8 +3346,14 @@ ${decisionHtml}
     const summary = rows.length + " Work Orders \u2014 " + parts.join(" \u00B7 ");
     this._setHintText(summary);
 
+    // WKP-029: Use FA icons (not emoji textContent) for consistent cross-device rendering
     if (iconEl) {
-      iconEl.textContent = blocked > 0 ? "\u26A0\uFE0F" : (partial > 0 ? "\uD83D\uDFE1" : "\u2705");
+      if (blocked > 0)
+        iconEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color:var(--err)"></i>';
+      else if (partial > 0)
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-half-stroke" style="color:var(--warn)"></i>';
+      else
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--ok)"></i>';
     }
   }
 
@@ -3909,6 +4013,285 @@ ${decisionHtml}
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  //  PURCHASE PRIORITY TAB  (§11)
+  //
+  //  Lazy-loaded on first tab click. Calls get_purchase_priority() which
+  //  does a two-level BOM walk:
+  //    Level 1: BOM components of open WOs for FG items with open SOs.
+  //    Level 2: BOM components of open SFG WOs whose output is a Level-1 component.
+  //
+  //  WKP-032 RESTRICTED:
+  //    _ppData, _ppLoaded, _ppLoading must match the _switchTab trigger
+  //    above and the reset in simulate(). Do NOT reset _ppLoaded on every
+  //    simulation — only when stockMode changes (same as dispatch).
+  //    #wkp-pp-table (id) is the selector used in tabBodyMap for global search.
+  //    .wkp-pp-chk checkboxes are bound after render — do NOT bind in constructor.
+  //    MR creation reuses _openMRQtyDialog() + create_purchase_mr_for_wo_shortages.
+  // ─────────────────────────────────────────────────────────────────────
+
+  _fetchPurchasePriority() {
+    this._ppLoading = true;
+    const loadEl  = document.getElementById("wkp-pp-loading");
+    const bodyEl  = document.getElementById("wkp-pp-body");
+    if (loadEl) loadEl.style.display = "flex";
+    if (bodyEl) bodyEl.innerHTML = "";
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_purchase_priority",
+      callback: r => {
+        this._ppLoading = false;
+        if (loadEl) loadEl.style.display = "none";
+        if (r.exc) {
+          frappe.show_alert({ message: "Failed to load Purchase Priority.", indicator: "red" });
+          return;
+        }
+        this._ppData   = r.message || [];
+        this._ppLoaded = true;
+        this._renderPurchasePriority(this._ppData);
+      },
+    });
+  }
+
+  _renderPurchasePriority(data) {
+    const bodyEl     = document.getElementById("wkp-pp-body");
+    const mrBtn      = document.getElementById("wkp-pp-mr-btn");
+    const mrSelBtn   = document.getElementById("wkp-pp-mr-sel-btn");
+    if (!bodyEl) return;
+
+    if (!data || !data.length) {
+      bodyEl.innerHTML = `<div class="wkp-pp-empty">
+        <i class="fa-solid fa-circle-check" style="font-size:32px;color:var(--ok);margin-bottom:8px"></i>
+        <div style="font-weight:700;color:var(--slate-700)">No purchase gaps found</div>
+        <div style="color:var(--slate-500);font-size:12px;margin-top:4px">
+          All materials needed for Sales Order-backed Work Orders are covered by stock, POs, or MRs.
+        </div>
+      </div>`;
+      if (mrBtn)    mrBtn.style.display    = "none";
+      if (mrSelBtn) mrSelBtn.style.display = "none";
+      return;
+    }
+
+    // ── Dual-UOM stacked helper ──────────────────────────────────────────
+    const _dualPP = (qty, uom, secFactor, secUom) => {
+      const primary = `<div class="wkp-qty-primary">${_fmt_num(qty, 2)}</div><div class="wkp-qty-uom">${_esc(uom || "")}</div>`;
+      if (secUom && secFactor > 1) {
+        return primary + `<div class="wkp-qty-secondary">${_fmt_num(qty / secFactor, 2)}\u00a0${_esc(secUom)}</div>`;
+      }
+      return primary;
+    };
+
+    // ── Urgency badge HTML ───────────────────────────────────────────────
+    const _urgBadge = (item) => {
+      const map = {
+        overdue   : ["wkp-pp-overdue",    "fa-circle-exclamation", "Overdue"],
+        this_week : ["wkp-pp-this-week",  "fa-clock",              "This Week"],
+        this_month: ["wkp-pp-this-month", "fa-calendar",           "This Month"],
+        future    : ["wkp-pp-future",     "fa-hourglass-half",     "Future"],
+      };
+      const [cls, icon, label] = map[item.urgency] || map.future;
+      return `<span class="wkp-pp-badge ${cls}"><i class="fa-solid ${icon}"></i> ${label}</span>`;
+    };
+
+    const COL_SPAN = 14;  // checkbox + material + group + urgency + date + 5 qty + MOQ + LT + WOs + SOs
+
+    const hasNetGap = data.some(d => d.net_gap > 0);
+
+    const rowsHtml = data.map((item, idx) => {
+      const netCls = item.net_gap > 0 ? "wkp-cell-red" : "wkp-cell-green";
+      const netTxt = item.net_gap > 0
+        ? _dualPP(item.net_gap, item.uom, item.secondary_factor, item.secondary_uom)
+        : "<i class='fa-solid fa-check' style='color:var(--ok)'></i> Covered";
+
+      const detailId = "wkp-pp-d-" + item.item_code.replace(/[^a-zA-Z0-9]/g, "_");
+
+      const levelBadge = item.level === "indirect"
+        ? `<span class="wkp-pp-level-badge" title="Component of a sub-assembly WO">SFG</span>`
+        : "";
+
+      // WO details in expand row
+      const woRows = (item.wo_list || []).map(w =>
+        `<tr>
+          <td style="padding:3px 10px;font-family:monospace;font-size:11px">${_esc(w.wo_name)}</td>
+          <td style="padding:3px 10px;font-size:11px">${_esc(w.fg_item_name || w.fg_item)}</td>
+          <td style="padding:3px 10px;text-align:right;font-size:11px">${_fmt_num(w.required_qty, 2)}\u00a0${_esc(item.uom)}</td>
+        </tr>`
+      ).join("");
+
+      const soRows = (item.so_list || []).map(s => {
+        const overdue = s.delivery_date && s.delivery_date < new Date().toISOString().slice(0, 10);
+        return `<tr>
+          <td style="padding:3px 10px;font-family:monospace;font-size:11px">${_esc(s.so_name)}</td>
+          <td style="padding:3px 10px;font-size:11px">${_esc(s.customer_name)}</td>
+          <td style="padding:3px 10px;font-size:11px;${overdue ? "color:var(--err);font-weight:700" : ""}">${_esc(s.delivery_date) || "&mdash;"}</td>
+        </tr>`;
+      }).join("");
+
+      return `<tr data-item="${_esc(item.item_code)}" data-idx="${idx}">
+  <td class="ta-c wkp-sr-chk-cell"><input type="checkbox" class="wkp-pp-chk" data-item="${_esc(item.item_code)}" data-idx="${idx}"></td>
+  <td>
+    <button class="wkp-sr-item-btn" data-item="${_esc(item.item_code)}"
+            style="font-weight:600;background:none;border:none;cursor:pointer;color:var(--brand-600);padding:0;text-align:left"
+            title="Click to see open POs, MRs, and stock batches for this material">
+      ${_esc(item.item_code)}
+    </button>
+    <div style="font-size:11px;color:var(--slate-500)">${_esc(item.item_name)}</div>
+    ${levelBadge}
+  </td>
+  <td style="font-size:11px;color:var(--slate-500)">${_esc(item.item_group)}</td>
+  <td>${_urgBadge(item)}</td>
+  <td style="font-size:11px;white-space:nowrap">${_esc(item.earliest_delivery) || "&mdash;"}</td>
+  <td class="ta-r">${_dualPP(item.required_qty, item.uom, item.secondary_factor, item.secondary_uom)}</td>
+  <td class="ta-r">${_dualPP(item.in_stock, item.uom, item.secondary_factor, item.secondary_uom)}</td>
+  <td class="ta-r">${_dualPP(item.open_po_qty, item.uom, item.secondary_factor, item.secondary_uom)}</td>
+  <td class="ta-r">${_dualPP(item.open_mr_qty, item.uom, item.secondary_factor, item.secondary_uom)}</td>
+  <td class="ta-r ${netCls}">${netTxt}</td>
+  <td class="ta-r" style="font-size:11px">${item.moq > 0 ? _fmt_num(item.moq, 0) + "\u00a0" + _esc(item.uom) : "&mdash;"}</td>
+  <td class="ta-r" style="font-size:11px">${item.lead_time_days > 0 ? item.lead_time_days + " d" : "&mdash;"}</td>
+  <td class="ta-c">
+    ${item.wo_count > 0
+      ? `<button class="wkp-btn wkp-btn-sm"
+           onclick="var r=document.getElementById('${detailId}');if(r){r.style.display=r.style.display===''?'none':'';this.textContent=r.style.display===''?'\u25B2 Hide':'\u25BC Details'}"
+           title="Show linked Work Orders and Sales Orders">\u25BC Details</button>`
+      : "\u2014"}
+  </td>
+</tr>
+<tr class="wkp-sr-detail-row" id="${detailId}" style="display:none">
+  <td colspan="${COL_SPAN}" style="padding:4px 0 4px 48px;background:var(--slate-50);border-bottom:2px solid var(--slate-200)">
+    <div style="display:flex;gap:24px;flex-wrap:wrap">
+      ${woRows ? `<div>
+        <div style="font-size:11px;font-weight:700;color:var(--slate-600);margin-bottom:4px">Work Orders</div>
+        <table style="border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:var(--slate-100)">
+            <th style="padding:3px 10px;text-align:left;font-weight:600">WO</th>
+            <th style="padding:3px 10px;text-align:left;font-weight:600">FG Item</th>
+            <th style="padding:3px 10px;text-align:right;font-weight:600">Required</th>
+          </tr></thead>
+          <tbody>${woRows}</tbody>
+        </table>
+      </div>` : ""}
+      ${soRows ? `<div>
+        <div style="font-size:11px;font-weight:700;color:var(--slate-600);margin-bottom:4px">Linked Sales Orders</div>
+        <table style="border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:var(--slate-100)">
+            <th style="padding:3px 10px;text-align:left;font-weight:600">SO</th>
+            <th style="padding:3px 10px;text-align:left;font-weight:600">Customer</th>
+            <th style="padding:3px 10px;text-align:left;font-weight:600">Delivery Date</th>
+          </tr></thead>
+          <tbody>${soRows}</tbody>
+        </table>
+      </div>` : ""}
+    </div>
+  </td>
+</tr>`;
+    }).join("");
+
+    bodyEl.innerHTML = `
+<div style="overflow-x:auto">
+<table class="wkp-modal-table wkp-shortage-table" id="wkp-pp-table">
+  <thead>
+    <tr>
+      <th class="ta-c wkp-sr-chk-cell" title="Select all">
+        <input type="checkbox" id="wkp-pp-select-all" title="Select all materials">
+      </th>
+      <th>Material</th>
+      <th>Group</th>
+      <th>Urgency</th>
+      <th>SO Delivery</th>
+      <th class="ta-r" title="Total qty needed by all linked Work Orders">Required</th>
+      <th class="ta-r" title="Current stock (Bin.actual_qty across all warehouses)">In Stock</th>
+      <th class="ta-r" title="Open Purchase Order qty (ordered but not yet received)">Open PO</th>
+      <th class="ta-r" title="Open Material Request qty (not yet converted to PO)">Open MR</th>
+      <th class="ta-r" title="Net Gap = Required minus Stock minus PO minus MR. This must be ordered urgently.">Net Gap</th>
+      <th class="ta-r" title="Minimum Order Qty from supplier">MOQ</th>
+      <th class="ta-r" title="Supplier lead time in days">Lead (d)</th>
+      <th class="ta-c">Details</th>
+    </tr>
+  </thead>
+  <tbody>${rowsHtml}</tbody>
+</table>
+</div>`;
+
+    // ── Select-all checkbox ───────────────────────────────────────────────
+    const selAll = document.getElementById("wkp-pp-select-all");
+    if (selAll) {
+      selAll.addEventListener("change", () => {
+        bodyEl.querySelectorAll(".wkp-pp-chk").forEach(chk => {
+          chk.checked = selAll.checked;
+        });
+        this._updatePPSelectedBtn();
+      });
+    }
+    bodyEl.querySelectorAll(".wkp-pp-chk").forEach(chk => {
+      chk.addEventListener("change", () => this._updatePPSelectedBtn());
+    });
+
+    // ── Supply pipeline modal (reuses existing _showMaterialSupplyModal) ─
+    bodyEl.querySelectorAll(".wkp-sr-item-btn").forEach(btn => {
+      btn.addEventListener("click", () => this._showMaterialSupplyModal(btn.dataset.item));
+    });
+
+    // ── MR buttons ────────────────────────────────────────────────────────
+    if (mrSelBtn) {
+      mrSelBtn.style.display = "flex";
+      mrSelBtn.disabled = true;
+      mrSelBtn.onclick = () => {
+        const selected = this._getPPSelectedItems(data);
+        if (selected.length) this._openMRQtyDialog(selected, {}, "Create MR for Selected (Purchase Priority)");
+      };
+    }
+
+    if (mrBtn) {
+      mrBtn.style.display = hasNetGap ? "flex" : "none";
+      mrBtn.onclick = () => {
+        const gapItems = data
+          .filter(d => d.net_gap > 0)
+          .map(d => ({
+            item_code   : d.item_code,
+            item_name   : d.item_name,
+            uom         : d.uom,
+            qty         : d.net_gap,
+            moq         : d.moq,
+            secondary_uom   : d.secondary_uom,
+            secondary_factor: d.secondary_factor,
+          }));
+        if (gapItems.length) this._openMRQtyDialog(gapItems, {}, "Create MR for All Gaps (Purchase Priority)");
+      };
+    }
+  }
+
+  _updatePPSelectedBtn() {
+    const sel = document.querySelectorAll(".wkp-pp-chk:checked");
+    const btn = document.getElementById("wkp-pp-mr-sel-btn");
+    if (btn) {
+      btn.disabled = sel.length === 0;
+      btn.textContent = sel.length
+        ? `\u2713 Create MR for ${sel.length} Selected`
+        : "\u2713 Create MR for Selected";
+    }
+  }
+
+  _getPPSelectedItems(data) {
+    const checked = document.querySelectorAll(".wkp-pp-chk:checked");
+    const items = [];
+    checked.forEach(chk => {
+      const idx = parseInt(chk.dataset.idx, 10);
+      const d = data[idx];
+      if (d) {
+        items.push({
+          item_code       : d.item_code,
+          item_name       : d.item_name,
+          uom             : d.uom,
+          qty             : d.net_gap > 0 ? d.net_gap : d.required_qty,
+          moq             : d.moq,
+          secondary_uom   : d.secondary_uom,
+          secondary_factor: d.secondary_factor,
+        });
+      }
+    });
+    return items;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   //  EXPORT  (CSV / PDF)
   // ─────────────────────────────────────────────────────────────────────
 
@@ -4025,6 +4408,24 @@ ${decisionHtml}
         this._downloadCSV("wkp_dispatch.csv", [headers.join(","), ...csvRows].join("\n"));
         return;
       }
+    }
+
+    if (tab === "purchase-priority" && this._ppData && this._ppData.length) {
+      const headers = [
+        "Item Code", "Item Name", "Item Group", "UOM",
+        "Urgency", "Earliest SO Delivery", "Required Qty",
+        "In Stock", "Open PO Qty", "Open MR Qty", "Net Gap",
+        "MOQ", "Lead Time (Days)", "WO Count", "SO Count", "Level",
+      ];
+      const csvRows = this._ppData.map(d => [
+        d.item_code, d.item_name, d.item_group, d.uom,
+        d.urgency, d.earliest_delivery, d.required_qty,
+        d.in_stock, d.open_po_qty, d.open_mr_qty, d.net_gap,
+        d.moq, d.lead_time_days, d.wo_count, d.so_count, d.level,
+      ].map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","));
+
+      this._downloadCSV("wkp_purchase_priority.csv", [headers.join(","), ...csvRows].join("\n"));
+      return;
     }
 
     frappe.show_alert({ message: "No data to export for the current tab.", indicator: "orange" });

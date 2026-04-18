@@ -2,7 +2,7 @@
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  wo_kitting_planner.html  --  WO Kitting Planner UI Template            ║
   ║  Part of chaizup_toc app  |  Page: wo-kitting-planner                   ║
-  ║  Last updated: 2026-04-17 (session 12)                                   ║
+  ║  Last updated: 2026-04-18 (session 14)                                   ║
   ╚══════════════════════════════════════════════════════════════════════════╝
 
   PURPOSE
@@ -52,6 +52,7 @@
                         [data-tab="wo-plan"]  [data-tab="shortage-report"]
                         [data-tab="emergency"]  [data-tab="dispatch"]
                         [data-tab="ai-chat"]    [data-tab="item-view"]
+                        [data-tab="purchase-priority"]
 
      Export/Email bar:  #wkp-export-csv  #wkp-export-pdf  #wkp-send-email
 
@@ -62,6 +63,10 @@
      Content area:      #wkp-content  #wkp-loader  #wkp-empty
                         #wkp-pane-wo-plan  #wkp-pane-shortage  #wkp-pane-emergency
                         #wkp-pane-dispatch  #wkp-pane-ai-chat  #wkp-pane-item-view
+                        #wkp-pane-purchase-priority
+                        #wkp-pp-loading  #wkp-pp-body
+                        #wkp-pp-mr-btn  #wkp-pp-mr-sel-btn
+                        .wkp-pp-chk  (per-row checkboxes in purchase priority table)
                         #wkp-table-wrap  #wkp-table  #wkp-tbody
                         #wkp-shortage-body  #wkp-emerg-body  #wkp-dispatch-body
                         #wkp-iv-body  #wkp-iv-loading
@@ -147,6 +152,9 @@
   10. ITEM VIEW PANE  — FG-wise Work Order + Sales Order summary; export + email
 -->
 
+<!-- Font Awesome 6 Free — consistent cross-device icons (replaces OS-dependent emoji) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+
 <div class="wkp-root" id="wkp-root">
 
   <!-- ════ 1. COMMAND BAR ════ -->
@@ -206,7 +214,7 @@
 
       <!-- Global Search -->
       <div class="wkp-search-group">
-        <span class="wkp-search-icon">&#x1F50D;</span>
+        <span class="wkp-search-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
         <input type="search" class="wkp-search-input" id="wkp-global-search"
                placeholder="Search all tabs&hellip;"
                data-tip="Global search: filter Work Orders, items, or Sales Orders across all tabs.&#10;Searches item code, item name, WO name, and customer. Min 2 characters.">
@@ -227,21 +235,21 @@
       <div class="wkp-export-group" id="wkp-export-group">
         <button class="wkp-btn wkp-btn-sm wkp-btn-export" id="wkp-export-csv"
                 data-tip="Export current tab data as CSV file.&#10;Downloads a spreadsheet you can open in Excel.">
-          &#x2B07; CSV
+          <i class="fa-solid fa-download"></i> CSV
         </button>
         <button class="wkp-btn wkp-btn-sm wkp-btn-export" id="wkp-export-pdf"
                 data-tip="Export current tab as PDF.&#10;Opens a print-ready view of this report.">
-          &#x1F5B6; PDF
+          <i class="fa-solid fa-file-pdf"></i> PDF
         </button>
         <button class="wkp-btn wkp-btn-sm wkp-btn-email" id="wkp-send-email"
                 data-tip="Send this report by email.&#10;Choose recipients, CC, and which report to include.&#10;Email includes a link to the live dashboard.">
-          &#x2709; Email
+          <i class="fa-solid fa-envelope"></i> Email
         </button>
       </div>
 
       <button class="wkp-refresh-btn" id="wkp-refresh"
               data-tip="Reload all data from the ERP system.&#10;Use this after:&#10; &bull; Receiving a material delivery&#10; &bull; Creating a new Purchase Order&#10; &bull; Any warehouse stock movement">
-        &#x21BB; Refresh
+        <i class="fa-solid fa-rotate-right"></i> Refresh
       </button>
     </div>
   </div>
@@ -249,7 +257,7 @@
   <!-- ════ 2. CONTEXT BAR (replaces old hint bar) ════ -->
   <div class="wkp-hint-bar" id="wkp-hint-bar">
     <div class="wkp-hint-left">
-      <span class="wkp-hint-icon" id="wkp-hint-icon">&#x1F4CA;</span>
+      <span class="wkp-hint-icon" id="wkp-hint-icon"><i class="fa-solid fa-chart-bar"></i></span>
       <div class="wkp-hint-texts">
         <span class="wkp-hint-mode" id="wkp-hint-mode">Mode A &mdash; Independent Check</span>
         <span class="wkp-hint-detail" id="wkp-hint-text">
@@ -258,7 +266,7 @@
       </div>
     </div>
     <span class="wkp-hint-drag" id="wkp-drag-hint" style="display:none">
-      &#x2630; Drag rows up/down to set production priority
+      <i class="fa-solid fa-grip-lines"></i> Drag rows up/down to set production priority
     </span>
   </div>
 
@@ -267,7 +275,7 @@
 
     <div class="wkp-sum-card wkp-sum-ok"
          data-tip="Ready to Start: These Work Orders have ALL required materials available in the warehouse right now.&#10;&#10;Action: You can release these to production immediately.">
-      <div class="wkp-sum-icon">&#x2705;</div>
+      <div class="wkp-sum-icon"><i class="fa-solid fa-circle-check"></i></div>
       <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-ready">--</div>
         <div class="wkp-sum-lbl">Ready to Start</div>
@@ -277,7 +285,7 @@
 
     <div class="wkp-sum-card wkp-sum-warn"
          data-tip="Partial Shortage: Some materials are available, some are missing. These WOs can produce partially, or need urgent procurement.&#10;&#10;Action: Click the yellow chip on any row to see which materials are missing.">
-      <div class="wkp-sum-icon">&#x26A0;</div>
+      <div class="wkp-sum-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
       <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-partial">--</div>
         <div class="wkp-sum-lbl">Partial Shortage</div>
@@ -287,7 +295,7 @@
 
     <div class="wkp-sum-card wkp-sum-err"
          data-tip="Cannot Start: Critical materials are missing. These Work Orders are fully blocked and CANNOT begin production.&#10;&#10;Action: Click the red chip to see what is missing, then create a Purchase MR to order it.">
-      <div class="wkp-sum-icon">&#x1F6AB;</div>
+      <div class="wkp-sum-icon"><i class="fa-solid fa-ban"></i></div>
       <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-blocked">--</div>
         <div class="wkp-sum-lbl">Cannot Start</div>
@@ -297,7 +305,7 @@
 
     <div class="wkp-sum-card"
          data-tip="Total Work Orders: Total number of open Work Orders included in this simulation.">
-      <div class="wkp-sum-icon">&#x1F4E6;</div>
+      <div class="wkp-sum-icon"><i class="fa-solid fa-boxes-stacked"></i></div>
       <div class="wkp-sum-body">
         <div class="wkp-sum-val" id="wsum-total">--</div>
         <div class="wkp-sum-lbl">Total Orders</div>
@@ -321,33 +329,38 @@
   <div class="wkp-tab-bar" id="wkp-tab-bar">
     <button class="wkp-tab-btn active" data-tab="wo-plan"
             data-tip="WO Kitting Plan: Main table: all open Work Orders with material availability simulation.&#10;Drag rows (Mode B) or enter a number to set priority order.">
-      <span class="wkp-tab-icon">&#x1F4CB;</span>
+      <span class="wkp-tab-icon"><i class="fa-solid fa-list-check"></i></span>
       <span class="wkp-tab-text">Production Plan</span>
     </button>
     <button class="wkp-tab-btn" data-tab="shortage-report"
             data-tip="Material Shortage: Consolidated view: all materials that are short across EVERY open Work Order.&#10;Sorted by gap size. Use this to plan bulk procurement.">
-      <span class="wkp-tab-icon">&#x1F6D2;</span>
+      <span class="wkp-tab-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
       <span class="wkp-tab-text">Material Shortage</span>
     </button>
     <button class="wkp-tab-btn" data-tab="emergency"
             data-tip="Emergency Priorities: Work Orders with unshipped customer orders (overdue or due this month).&#10;Use this to decide which WOs to push hardest.">
-      <span class="wkp-tab-icon">&#x26A0;</span>
+      <span class="wkp-tab-icon"><i class="fa-solid fa-circle-exclamation"></i></span>
       <span class="wkp-tab-text">Emergencies</span>
     </button>
     <button class="wkp-tab-btn" data-tab="dispatch"
             data-tip="Dispatch Bottleneck: compare Customer Orders vs (FG In Stock + Will Produce from WOs).&#10;Find items where production output will not cover customer commitments.">
-      <span class="wkp-tab-icon">&#x1F69A;</span>
+      <span class="wkp-tab-icon"><i class="fa-solid fa-truck"></i></span>
       <span class="wkp-tab-text">Dispatch Bottleneck</span>
     </button>
     <button class="wkp-tab-btn wkp-tab-btn-ai" data-tab="ai-chat"
             data-tip="AI Advisor: Get a plain-language briefing of your production situation.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
-      <span class="wkp-tab-icon">&#x1F916;</span>
+      <span class="wkp-tab-icon"><i class="fa-solid fa-robot"></i></span>
       <span class="wkp-tab-text">AI Advisor</span>
     </button>
     <button class="wkp-tab-btn" data-tab="item-view"
             data-tip="FG Item View: All finished-good items with active Work Orders or pending Sales Orders.&#10;Summary by product code with cost audit history.">
-      <span class="wkp-tab-icon">&#x1F4E6;</span>
+      <span class="wkp-tab-icon"><i class="fa-solid fa-box-open"></i></span>
       <span class="wkp-tab-text">Product View</span>
+    </button>
+    <button class="wkp-tab-btn wkp-tab-btn-pp" data-tab="purchase-priority"
+            data-tip="Purchase Priority: Materials to buy for Work Orders backed by open Sales Orders (any status).&#10;Two-level discovery: direct BOM components + sub-assembly components.&#10;Ranked by SO delivery urgency. Heavy computation &mdash; loads on first click.">
+      <span class="wkp-tab-icon"><i class="fa-solid fa-cart-arrow-down"></i></span>
+      <span class="wkp-tab-text">Purchase Priority</span>
     </button>
   </div>
 
@@ -735,6 +748,103 @@
 
     </div>
     <!-- end Item View pane -->
+
+    <!-- ════ 11. PURCHASE PRIORITY PANE ════
+         What:  Materials needed for WOs that are backed by open Sales Orders.
+         Why:   Normal Shortage tab shows ALL shortages; this tab shows only materials
+                where a real customer order is waiting — genuine procurement urgency.
+         How:   Two-level BOM discovery (FG WOs + SFG sub-assembly WOs).
+                Loads on first tab click (lazy — expensive query).
+         When:  Use at the start of each planning cycle to decide what to buy first.
+
+         Structure:
+           #wkp-pp-loading   — spinner shown while API call is in flight
+           #wkp-pp-body      — JS injects table HTML here
+           #wkp-pp-mr-btn    — Create MR for all items with net_gap > 0
+           #wkp-pp-mr-sel-btn — Create MR for selected (checked) items
+
+         RESTRICTED (WKP-032):
+           data-tab="purchase-priority" — JS reads this; changing breaks _switchTab
+           #wkp-pp-loading, #wkp-pp-body — JS writes to these IDs
+           .wkp-pp-chk — per-row checkboxes; JS binds change event by class
+           #wkp-pp-mr-btn, #wkp-pp-mr-sel-btn — JS shows/hides + sets onclick
+    -->
+    <div class="wkp-tab-pane wkp-pp-pane" id="wkp-pane-purchase-priority" style="display:none">
+
+      <!-- Header -->
+      <div class="wkp-pp-header">
+        <div class="wkp-pp-header-left">
+          <div class="wkp-shortage-title">
+            <i class="fa-solid fa-cart-arrow-down"></i> Purchase Priority
+          </div>
+          <div class="wkp-emerg-sub">
+            Materials needed for Work Orders tied to open customer Sales Orders (draft, submitted, or to-bill).
+            Ranked by delivery urgency. Includes direct materials + sub-assembly raw materials.
+          </div>
+        </div>
+        <div class="wkp-pp-action-btns">
+          <button class="wkp-btn" id="wkp-pp-mr-sel-btn" style="display:none" disabled
+                  data-tip="Select rows using the checkboxes, then click here to create a Purchase MR for only those items.">
+            <i class="fa-solid fa-check"></i> Create MR for Selected
+          </button>
+          <button class="wkp-btn wkp-btn-brand" id="wkp-pp-mr-btn" style="display:none"
+                  data-tip="Create one Purchase Material Request covering ALL items with a positive Net Gap in the Purchase Priority list.">
+            <i class="fa-solid fa-cart-arrow-down"></i> Create MR (All Gaps)
+          </button>
+        </div>
+      </div>
+
+      <!-- Urgency legend -->
+      <div class="wkp-pp-legend">
+        <span class="wkp-pp-badge wkp-pp-overdue"
+              data-tip="Customer order delivery date is already past. Top priority.">
+          <i class="fa-solid fa-circle-exclamation"></i> Overdue
+        </span>
+        <span class="wkp-pp-badge wkp-pp-this-week"
+              data-tip="Customer order delivery date is within the next 7 days. Urgent.">
+          <i class="fa-solid fa-clock"></i> Due This Week
+        </span>
+        <span class="wkp-pp-badge wkp-pp-this-month"
+              data-tip="Customer order delivery date is within the next 30 days.">
+          <i class="fa-solid fa-calendar"></i> Due This Month
+        </span>
+        <span class="wkp-pp-badge wkp-pp-future"
+              data-tip="Customer order delivery date is more than 30 days away.">
+          <i class="fa-solid fa-hourglass-half"></i> Future
+        </span>
+      </div>
+
+      <!-- Guide strip: what / why / how / when -->
+      <div class="wkp-pp-guide">
+        <div class="wkp-pp-guide-item">
+          <span class="wkp-pp-guide-label">WHAT</span>
+          <span class="wkp-pp-guide-text">Raw materials and components needed to produce finished goods for open customer orders.</span>
+        </div>
+        <div class="wkp-pp-guide-item">
+          <span class="wkp-pp-guide-label">WHY</span>
+          <span class="wkp-pp-guide-text">Net Gap = materials not yet in stock, not on a PO, and not on an MR. These are UNPLANNED gaps.</span>
+        </div>
+        <div class="wkp-pp-guide-item">
+          <span class="wkp-pp-guide-label">HOW</span>
+          <span class="wkp-pp-guide-text">Tick items and click &ldquo;Create MR for Selected&rdquo; to raise a Purchase Material Request in one step.</span>
+        </div>
+        <div class="wkp-pp-guide-item">
+          <span class="wkp-pp-guide-label">WHEN</span>
+          <span class="wkp-pp-guide-text">Act on Overdue and Due-This-Week rows immediately. Plan This-Month rows before production begins.</span>
+        </div>
+      </div>
+
+      <!-- Loading indicator (shown while API call is in flight) -->
+      <div class="wkp-pp-loading" id="wkp-pp-loading" style="display:none">
+        <div class="wkp-spinner" style="width:28px;height:28px"></div>
+        <span>Discovering purchase needs across all Sales Orders&hellip;</span>
+      </div>
+
+      <!-- Table injected by JS _renderPurchasePriority() -->
+      <div id="wkp-pp-body"></div>
+
+    </div>
+    <!-- end Purchase Priority pane -->
 
   </div>
 
