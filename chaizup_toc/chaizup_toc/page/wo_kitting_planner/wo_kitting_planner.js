@@ -65,7 +65,8 @@
  * - FG Item View tab: all items with active WOs or pending SOs grouped by item_code;
  *   columns: WO count, kit status summary, planned/produced/remaining, consumed (SE),
  *   SO demand, last historical production cost per unit with live UOM selector
- * - Export: CSV download (Item View + WO Plan tabs); PDF via browser print (new tab)
+ * - Export: CSV download (ALL tabs — wo-plan, shortage-report, emergency, dispatch, item-view);
+ *   PDF via browser print (new tab)
  * - Email: frappe.ui.Dialog → To / CC / Subject / Report tab selector;
  *   Python send_dashboard_email() wraps inline-styled snapshot HTML in an email template
  *   with sender info, live dashboard link, and sent date; uses frappe.sendmail()
@@ -77,6 +78,31 @@
  *   from flat border-bottom list to card-list style (border + border-radius + shadow + margin gap);
  *   tab bar uses white bg + 2px bottom border + shadow for a clearer navigation layer;
  *   shortage/emergency/dispatch section headers explicitly use slate-50 tint
+ * - Session 12 additions:
+ *   Tab renamed: "Dispatch Risk" → "Dispatch Bottleneck" (HTML + data-tip updated)
+ *   Global Search: #wkp-global-search in cmd bar; _applyGlobalSearch() filters rows in active tab;
+ *     supports all tabs (wo-plan/shortage/emergency/dispatch/item-view); re-applies on tab switch;
+ *     CSS .wkp-search-active / .wkp-search-match / .wkp-search-no-match for visual feedback
+ *   Dispatch SO dedup: same Sales Order appearing multiple times in so_list (when SO has multiple
+ *     child rows for the same item_code) is now merged client-side by so_name; soCount reflects
+ *     true unique SO count; qty/pending/delivered/dn_qty summed; reserved_qty/pick_list_count maxed
+ *   Item View Last Cost/Unit: removed manual UOM dropdown selector; now auto-shows all UOM costs
+ *     stacked (stock UOM primary, secondary UOM derived, additional item_uoms from item_uoms list);
+ *     cost per secondary UOM = baseCost × secondary_factor; no JS change required after render
+ *   AI Decision Dashboard: #wkp-ai-dashboard-btn in AI right panel; _generateDecisionDashboard()
+ *     sends structured prompt asking for 5-section management report (priorities, critical WOs,
+ *     procurement, dispatch bottlenecks, actions); response shown as AI chat bubble
+ *   360° Cost Audit improvements:
+ *     - Horizontal scroll: .wkp-cost-section { overflow-x: auto } in CSS (was overflow: hidden)
+ *     - Batch-wise consumed: _get_wo_actual_cost() now groups by (item_code, batch_no, posting_date);
+ *       hasBatch flag shows/hides Batch + Date columns dynamically in actRows table
+ *     - Source annotation: sub-header bar under each section title explains which doctype/field
+ *       each value comes from (BOM: tabBOM Item × tabItem.valuation_rate; Actual: tabStock Entry Detail)
+ *   Table headers: --stone-* CSS variables are undefined in :root (only --slate-* defined);
+ *     session 12 CSS block adds !important overrides on all .wkp-*table thead th selectors
+ *   Modal width: .wkp-modal and .wkp-modal-wide both set to max-width: 70vw
+ *   Tooltip: uses innerHTML (not textContent) so HTML in data-tip renders correctly;
+ *     \n in data-tip values is converted to <br> before injection; background forced via !important
  *
  * ══════════════════════════════════════════════════════════════════════
  * 🔒 RESTRICTED — DO NOT CHANGE (these are load-bearing architectural choices)
@@ -107,6 +133,20 @@
  *
  * WKP-015/016: Sticky table headers REQUIRE flex layout on the pane + flex:1;overflow:auto
  *          on the scroll container child. Changing layout to block/grid will break sticky.
+ *
+ * WKP-027: Global search state is stateless — it reads #wkp-global-search.value on tab switch.
+ *          Do not cache search state per tab; always re-run _applyGlobalSearch() on switch.
+ *
+ * WKP-028: Dispatch SO dedup (soListDedup) is purely client-side — the server returns one row
+ *          per SO child table row. Do NOT remove the dedup logic; removing it re-introduces
+ *          inflated SO counts and duplicate SO rows in the expand view.
+ *
+ * WKP-029: Cost audit batch column (hasBatch) uses a colspan on tfoot. If you add/remove
+ *          columns from the actRows table, update actColSpan accordingly.
+ *
+ * WKP-030: Item View cost display no longer uses a <select> UOM selector.
+ *          The removal of wkp-iv-uom-sel / data-base-cost / data-base-factor is intentional.
+ *          Costs are now stacked (stock UOM primary, secondary, extras). Do not re-add the select.
  *
  * _dispatchData, _dispatchLoaded, _dispatchLoading: keyed state for dispatch tab caching.
  *   Change these only if you also update _fetchDispatchData() and _switchTab().
@@ -156,8 +196,9 @@
  *              → user messages → chat_with_planner(model)
  *   Item View tab → _fetchItemView() → get_item_wo_summary() → _renderItemView()
  *              merges this.rows (kit_status counts) with API data (SO + cost)
- *              UOM selector → client-side cost recalc per chosen UOM
- *   Export CSV → _exportCSV() → _downloadCSV() (Item View + WO Plan tabs)
+ *              all UOM costs stacked automatically (stock UOM + secondary + extras)
+ *   Export CSV → _exportCSV() → _downloadCSV() (all tabs: wo-plan, shortage-report,
+ *              emergency, dispatch, item-view)
  *   Export PDF → _exportPDF() → window.open() + print() (landscape, email-safe HTML)
  *   Email      → _showEmailDialog() (frappe.ui.Dialog) → _buildEmailSnapshot(tab)
  *              → send_dashboard_email() → frappe.sendmail() with inline-styled HTML
@@ -545,7 +586,10 @@ class WOKittingPlanner {
       if (!target) return;
       clearTimeout(this._tipTimer);
       this._tipTimer = setTimeout(() => {
-        this._tipEl.textContent = target.dataset.tip || "";
+        // innerHTML mode: convert newlines to <br>, allow safe HTML
+        // data-tip values are hardcoded in HTML — not user input, safe to inject
+        const raw = (target.dataset.tip || "").replace(/\n/g, "<br>");
+        this._tipEl.innerHTML = raw;
         this._tipEl.classList.add("wkp-tip-visible");
         this._tipEl.style.display = "block";
         this._positionTip(e);
@@ -781,6 +825,32 @@ class WOKittingPlanner {
     if (pdfBtn)   pdfBtn.addEventListener("click",   () => this._exportPDF());
     if (emailBtn) emailBtn.addEventListener("click", () => this._showEmailDialog());
 
+    // Global search
+    const searchInput = document.getElementById("wkp-global-search");
+    const searchClear = document.getElementById("wkp-search-clear");
+    if (searchInput) {
+      let searchTimer;
+      searchInput.addEventListener("input", () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => this._applyGlobalSearch(searchInput.value), 200);
+        if (searchClear) searchClear.style.display = searchInput.value ? "block" : "none";
+      });
+      searchInput.addEventListener("keydown", e => {
+        if (e.key === "Escape") {
+          searchInput.value = "";
+          this._applyGlobalSearch("");
+          if (searchClear) searchClear.style.display = "none";
+        }
+      });
+    }
+    if (searchClear) {
+      searchClear.addEventListener("click", () => {
+        if (searchInput) searchInput.value = "";
+        this._applyGlobalSearch("");
+        searchClear.style.display = "none";
+      });
+    }
+
     // Modal close buttons + backdrop click
     ["wkp-modal-close", "wkp-wo-close"].forEach(id => {
       const el = document.getElementById(id);
@@ -795,6 +865,68 @@ class WOKittingPlanner {
     });
     document.getElementById("wkp-wo-modal").addEventListener("click", e => {
       if (e.target.id === "wkp-wo-modal") this._closeModal("wkp-wo-modal");
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  GLOBAL SEARCH (cross-tab row filtering)
+  // ─────────────────────────────────────────────────────────────────────
+  //
+  //  Tab-aware: searches within whichever tab is currently active.
+  //  Matches against the textContent of each <tr> in the tab's table.
+  //  Rows that do not match get class wkp-search-no-match (CSS hides them).
+  //  Rows that match get wkp-search-match (CSS highlights them subtly).
+  //  The containing table gets wkp-search-active while a query is active.
+  //
+  //  Minimum 2 characters before filtering begins (single-char is noisy).
+  //
+  _applyGlobalSearch(query) {
+    const q = query.trim().toLowerCase();
+    const tab = this._activeTab;
+
+    // Map tab name to which tbody to search
+    const tabBodyMap = {
+      "wo-plan"        : "#wkp-tbody",
+      "shortage-report": ".wkp-short-table tbody",
+      "emergency"      : "#wkp-emerg-list .wkp-emerg-card",
+      "dispatch"       : ".wkp-dsp-table tbody",
+      "item-view"      : ".wkp-iv-table tbody",
+    };
+
+    const selector = tabBodyMap[tab];
+    if (!selector) return;  // AI tab — no rows to filter
+
+    if (tab === "emergency") {
+      // Emergency tab uses card layout instead of table rows
+      const cards = document.querySelectorAll(".wkp-emerg-card");
+      const active = q.length >= 2;
+      cards.forEach(card => {
+        const text = card.textContent.toLowerCase();
+        card.classList.remove("wkp-search-match", "wkp-search-no-match");
+        if (active) {
+          if (text.includes(q)) card.classList.add("wkp-search-match");
+          else card.classList.add("wkp-search-no-match");
+        }
+      });
+      const pane = document.getElementById("wkp-pane-emergency");
+      if (pane) pane.classList.toggle("wkp-search-active", active);
+      return;
+    }
+
+    const tbody = document.querySelector(selector);
+    if (!tbody) return;
+
+    const table = tbody.closest("table");
+    const active = q.length >= 2;
+    if (table) table.classList.toggle("wkp-search-active", active);
+
+    const rows = tbody.querySelectorAll("tr");
+    rows.forEach(tr => {
+      tr.classList.remove("wkp-search-match", "wkp-search-no-match");
+      if (!active) return;
+      const text = tr.textContent.toLowerCase();
+      if (text.includes(q)) tr.classList.add("wkp-search-match");
+      else tr.classList.add("wkp-search-no-match");
     });
   }
 
@@ -1350,6 +1482,12 @@ class WOKittingPlanner {
       } else if (!this._itemViewLoading) {
         this._fetchItemView();
       }
+    }
+
+    // Re-apply global search to the newly active tab (if a query is active)
+    const searchInput = document.getElementById("wkp-global-search");
+    if (searchInput && searchInput.value) {
+      this._applyGlobalSearch(searchInput.value);
     }
   }
 
@@ -2806,6 +2944,11 @@ ${decisionHtml}
     BOM Standard Cost Breakdown
     <span class="wkp-cost-section-note">BOM: ${_esc(a.bom_no || "\u2014")} &nbsp;|&nbsp; Batch size: ${fmt(a.bom_qty, 0)}&nbsp;${_esc(a.stock_uom)}</span>
   </div>
+  <div style="font-size:10px;color:var(--slate-500);padding:6px 12px;background:var(--slate-50);border-bottom:1px solid var(--slate-100)">
+    Source: <code>tabBOM Item</code> (stock_qty / bom_qty = qty per unit) \xd7
+    <code>tabItem.valuation_rate</code> (current Item master rate \u2014 not BOM snapshot).
+    Rate = live valuation rate; changes to Item master are reflected immediately.
+  </div>
   ${bomRows.length ? `
   <table class="wkp-cost-table">
     <thead><tr>
@@ -2823,37 +2966,69 @@ ${decisionHtml}
 </div>`;
 
     // ── Actual Consumed table ──────────────────────────────────────────
+    // Batch-aware: if batch_no is present, show it. Group visually by item.
+    // Data source: tabStock Entry (Manufacture) → tabStock Entry Detail
+    //   item_name: SED.item_name | uom: SED.stock_uom | avg_rate: valuation_rate at posting
+    //   batch_no: SED.batch_no (empty string when item is not batch-tracked)
+    //   total_amount: SED.amount (qty × valuation_rate at time of posting)
+    const hasBatch = (a.actual_consumed || []).some(c => c.batch_no);
     const actRows = (a.actual_consumed || []).map(c => {
       const varAmt = c.variance;
       const varCls = varAmt == null ? "" : (varAmt > 0 ? "wkp-cost-var-over" : (varAmt < 0 ? "wkp-cost-var-under" : ""));
+      const batchCell = hasBatch
+        ? `<td style="font-size:10px;color:var(--slate-500)">${c.batch_no
+            ? `<span style="background:var(--slate-100);border-radius:3px;padding:1px 5px;font-family:monospace">${_esc(c.batch_no)}</span>`
+            : "<span style='color:var(--slate-300)'>\u2014</span>"}</td>`
+        : "";
+      const dateCell = hasBatch
+        ? `<td style="font-size:10px;color:var(--slate-500)">${_esc(c.posting_date || "\u2014")}</td>`
+        : "";
       return `<tr>
-        <td>${_esc(c.item_name)}</td>
-        <td class="ta-r">${fmt(c.consumed_qty, 2)}</td>
-        <td class="ta-r">${c.std_qty != null ? fmt(c.std_qty, 2) : "\u2014"}</td>
-        <td>${_esc(c.uom)}</td>
-        <td class="ta-r">\u20B9${fmt(c.avg_rate, 2)}</td>
-        <td class="ta-r">\u20B9${fmt(c.total_amount, 0)}</td>
-        <td class="ta-r ${varCls}">${varAmt != null ? (varAmt >= 0 ? "+" : "") + "\u20B9" + _fmt_num(Math.abs(varAmt), 0) : "\u2014"}</td>
+        <td>
+          <span style="font-size:11px;font-weight:600">${_esc(c.item_name)}</span>
+          <span style="font-size:10px;color:var(--slate-400);display:block"
+                title="Source: tabStock Entry Detail.item_code">${_esc(c.item_code || "")}</span>
+        </td>
+        ${batchCell}${dateCell}
+        <td class="ta-r" title="Source: tabStock Entry Detail.qty">${fmt(c.consumed_qty, 2)}</td>
+        <td class="ta-r" title="Standard qty required for quantity produced so far">
+          ${c.std_qty != null ? fmt(c.std_qty, 2) : "\u2014"}
+        </td>
+        <td title="Source: tabStock Entry Detail.stock_uom">${_esc(c.uom)}</td>
+        <td class="ta-r" title="Source: tabStock Entry Detail.amount / qty (valuation_rate at posting)">\u20B9${fmt(c.avg_rate, 2)}</td>
+        <td class="ta-r" title="Source: tabStock Entry Detail.amount (qty \xd7 valuation_rate)">\u20B9${fmt(c.total_amount, 0)}</td>
+        <td class="ta-r ${varCls}"
+            title="Variance = Actual Cost \u2212 (Std Cost/Unit \xd7 Produced Qty)">
+          ${varAmt != null ? (varAmt >= 0 ? "+" : "") + "\u20B9" + _fmt_num(Math.abs(varAmt), 0) : "\u2014"}
+        </td>
       </tr>`;
     }).join("");
 
+    const actColSpan = hasBatch ? 7 : 5;
     const actHtml = `
 <div class="wkp-cost-section">
   <div class="wkp-cost-section-title">
     Actual Consumed (Stock Entry \u2192 Manufacture)
-    <span class="wkp-cost-section-note">${_fmt_num(a.produced_qty, 0)}&nbsp;${_esc(a.stock_uom)} produced so far</span>
+    <span class="wkp-cost-section-note">${_fmt_num(a.produced_qty, 0)}&nbsp;${_esc(a.stock_uom)} produced so far
+      ${hasBatch ? " &bull; Batch-wise breakdown" : ""}</span>
+  </div>
+  <div style="font-size:10px;color:var(--slate-500);padding:6px 12px;background:var(--slate-50);border-bottom:1px solid var(--slate-100)">
+    Source: <code>tabStock Entry</code> (purpose=Manufacture, docstatus=1) \u2192
+    <code>tabStock Entry Detail</code> (s_warehouse IS NOT NULL = consumed inputs).
+    Avg Rate = valuation_rate at time of posting (may differ from current Item master rate).
   </div>
   ${actRows.length ? `
   <table class="wkp-cost-table">
     <thead><tr>
       <th>Material</th>
+      ${hasBatch ? "<th>Batch</th><th>Date</th>" : ""}
       <th class="ta-r">Consumed</th><th class="ta-r">Std Qty</th><th>UOM</th>
       <th class="ta-r">Avg Rate</th><th class="ta-r">Actual Cost</th>
       <th class="ta-r">Variance</th>
     </tr></thead>
     <tbody>${actRows}</tbody>
     <tfoot><tr>
-      <td colspan="5"><strong>Total Actual Cost</strong></td>
+      <td colspan="${actColSpan}"><strong>Total Actual Cost</strong></td>
       <td class="ta-r"><strong>\u20B9${_fmt_num(a.total_actual_cost, 0)}</strong></td>
       <td class="ta-r ${vTotal != null && vTotal > 0 ? "wkp-cost-var-over" : "wkp-cost-var-under"}">
         ${vTotal != null ? (vTotal >= 0 ? "+" : "") + "\u20B9" + _fmt_num(Math.abs(vTotal), 0) : "\u2014"}
@@ -2861,7 +3036,7 @@ ${decisionHtml}
     </tr></tfoot>
   </table>` : `<div class="wkp-cost-empty">
     No Manufacture Stock Entries found yet.<br>
-    <span style="font-size:11px;color:var(--stone-400)">Standard cost shows BOM estimate. Actual cost will appear after materials are issued.</span>
+    <span style="font-size:11px;color:var(--slate-400)">Standard cost shows BOM estimate. Actual cost will appear after materials are issued.</span>
   </div>`}
 </div>`;
 
@@ -3227,6 +3402,109 @@ ${decisionHtml}
         this._aiSessionId = newId;
       });
     }
+
+    // Decision Dashboard button
+    const dashBtn = document.getElementById("wkp-ai-dashboard-btn");
+    if (dashBtn) {
+      dashBtn.addEventListener("click", () => this._generateDecisionDashboard());
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  AI DECISION DASHBOARD
+  //
+  //  Feeds all current simulation data to the AI and requests a
+  //  structured HTML management report covering:
+  //    - Production priorities (which WOs to release today)
+  //    - Critical Work Orders (blocked, overdue, high-SO-pressure)
+  //    - Procurement needs (top shortage items to buy)
+  //    - Dispatch bottlenecks (items that won't meet customer commitments)
+  //    - Recommended actions (numbered, actionable steps)
+  //
+  //  Output is rendered in a new modal window for easy reading/printing.
+  //  The AI is prompted to return full HTML (headings, tables, badges).
+  //
+  // ─────────────────────────────────────────────────────────────────────
+  _generateDecisionDashboard() {
+    if (this._aiTyping) {
+      frappe.show_alert({ message: "AI is busy. Please wait.", indicator: "orange" });
+      return;
+    }
+    if (!this._aiContext) {
+      frappe.show_alert({ message: "Simulation data not yet loaded. Refresh first.", indicator: "orange" });
+      return;
+    }
+
+    // Show busy state
+    const dashBtn = document.getElementById("wkp-ai-dashboard-btn");
+    if (dashBtn) {
+      dashBtn.disabled = true;
+      dashBtn.textContent = "\u23F3 Generating\u2026";
+    }
+
+    const dashPrompt = [
+      "Generate a DECISION DASHBOARD for a production manager. Use structured HTML output.",
+      "Based on the current simulation data, provide ALL of the following sections:",
+      "",
+      "1. PRODUCTION PRIORITIES (table: Work Order | Item | Qty Remaining | Kit Status | SO Pressure | Action)",
+      "   - List top 5-8 WOs to release or push hardest today",
+      "   - Use is_emergency, curr_month_so, kit_status to prioritise",
+      "",
+      "2. CRITICAL WORK ORDERS (table: WO | Item | Issue | Recommended Fix)",
+      "   - WOs that are Blocked or have high SO pressure but are Partial/Blocked",
+      "",
+      "3. PROCUREMENT NEEDS (table: Material | Shortage Qty | Est. Value | Affected WOs | Action)",
+      "   - Top 5 materials to purchase urgently",
+      "",
+      "4. DISPATCH BOTTLENECKS (table: Item | Customer Orders | Coverage | Gap | Risk)",
+      "   - Items where coverage < demand (gap > 0)",
+      "",
+      "5. RECOMMENDED ACTIONS (numbered list, 5-7 items, each one specific and actionable)",
+      "   - Reference actual WO names and item codes from the data",
+      "",
+      "Format rules:",
+      "- Use <h3> for section headings with a colored badge (green/amber/red based on urgency)",
+      "- Use <table> with compact headers for all tables",
+      "- Use inline color badges: <span style='color:red'>BLOCKED</span> etc.",
+      "- No preamble. Start directly with section 1.",
+      "- End with a one-sentence OVERALL STATUS summary.",
+    ].join("\n");
+
+    // Switch to AI tab to show the response
+    if (this._activeTab !== "ai-chat") this._switchTab("ai-chat");
+    this._appendChatBubble("user", "\uD83D\uDCCA Generate Decision Dashboard", false);
+    this._setAITyping(true);
+
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.chat_with_planner",
+      args: {
+        message     : dashPrompt,
+        session_id  : this._aiSessionId,
+        context_json: JSON.stringify(this._aiContext),
+        model       : this._aiModel || null,
+      },
+      callback: r => {
+        this._setAITyping(false);
+        if (dashBtn) {
+          dashBtn.disabled = false;
+          dashBtn.textContent = "\uD83D\uDCCA Generate Dashboard";
+        }
+        const data  = r.message || {};
+        const reply = data.reply || "<span class=\"wkp-ai-warn\">No dashboard returned.</span>";
+        this._appendChatBubble("ai", reply, !!(data.is_html), data.tools_used || []);
+      },
+      error: () => {
+        this._setAITyping(false);
+        if (dashBtn) {
+          dashBtn.disabled = false;
+          dashBtn.textContent = "\uD83D\uDCCA Generate Dashboard";
+        }
+        this._appendChatBubble("ai",
+          "<span class=\"wkp-ai-err\">Dashboard generation failed. Check server logs.</span>",
+          true, []
+        );
+      },
+    });
   }
 
   _compressContextAndFetchInsight() {
@@ -3513,21 +3791,31 @@ ${decisionHtml}
       if (kit.kitted)  kitBadges += `<span class="wkp-iv-kit-chip wkp-iv-kit-kitted">\u2713 ${kit.kitted} Kitted</span>`;
       if (!kitBadges)  kitBadges  = `<span class="wkp-iv-kit-chip wkp-iv-kit-none">\u2014 No WOs</span>`;
 
-      // UOM list for last cost display: build a select
-      const uoms = (item.item_uoms || []).filter(u => u.factor > 0);
-      const uomOptions = uoms.map(u =>
-        `<option value="${_esc(u.uom)}" data-factor="${u.factor}">${_esc(u.uom)}</option>`
-      ).join("");
-      const uomSel = uoms.length > 1
-        ? `<select class="wkp-iv-uom-sel" data-item="${_esc(item.item_code)}"
-                   data-base-cost="${item.last_cost_per_unit || 0}"
-                   data-base-factor="1"
-                   title="Change UOM to see cost per unit in that UOM">${uomOptions}</select>`
-        : `<span>${_esc(item.stock_uom)}</span>`;
+      // Last Cost/Unit — auto-show all UOM costs stacked (no manual dropdown needed)
+      // Primary cost is per stock_uom; secondary cost derived from secondary_factor.
+      // Additional UOMs from item_uoms are also stacked automatically.
+      const baseCost = item.last_cost_per_unit || 0;
 
-      const costPerUnit = item.last_cost_per_unit
-        ? `\u20B9${_fmt_num(item.last_cost_per_unit, 2)}`
-        : "\u2014";
+      // Build stacked UOM cost lines: stock UOM first, then secondary, then others
+      let stackedCosts = "";
+      if (baseCost) {
+        stackedCosts += `<div style="font-size:10px;font-weight:600;color:var(--slate-700)">`
+          + `\u20B9${_fmt_num(baseCost, 2)} / ${_esc(item.stock_uom)}</div>`;
+        if (secUom && sf > 1) {
+          const secCost = baseCost * sf;
+          stackedCosts += `<div style="font-size:10px;color:var(--slate-500)">`
+            + `\u20B9${_fmt_num(secCost, 2)} / ${_esc(secUom)}</div>`;
+        }
+        // Additional UOMs from item_uoms (excluding stock_uom and already-shown secondary)
+        const uoms = (item.item_uoms || []).filter(u =>
+          u.factor > 0 && u.uom !== item.stock_uom && u.uom !== secUom
+        );
+        uoms.forEach(u => {
+          const uomCost = baseCost * u.factor;
+          stackedCosts += `<div style="font-size:10px;color:var(--slate-400)">`
+            + `\u20B9${_fmt_num(uomCost, 2)} / ${_esc(u.uom)}</div>`;
+        });
+      }
 
       // WO list as comma-separated links
       const woLinks = (item.wo_list || []).slice(0, 5).map(wo =>
@@ -3567,18 +3855,20 @@ ${decisionHtml}
          ${secUom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(item.so_pending_qty / sf, 2)}\u00a0${_esc(secUom)}</div>` : ""}`
       : `<span style="color:var(--stone-400)">\u2014</span>`}
   </td>
-  <td class="ta-r">
-    <span class="wkp-iv-cost-val" data-item="${_esc(item.item_code)}">${costPerUnit}</span>
-    <div style="font-size:10px;margin-top:2px">${uomSel}</div>
-    ${item.last_cost_date ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(item.last_cost_date)}</div>` : ""}
+  <td class="ta-r"
+      data-tip="Last Cost/Unit: cost per unit from the most recently completed Work Order.&#10;Source: Stock Entry (Manufacture) \u2192 actual_cost / produced_qty.&#10;All UOM costs are auto-calculated from the stock UOM rate.">
+    ${stackedCosts || `<span style="color:var(--slate-400)">\u2014</span>`}
+    ${item.last_cost_date ? `<div style="font-size:10px;color:var(--slate-400);margin-top:3px">${_esc(item.last_cost_date)}</div>` : ""}
     ${item.last_cost_wo ? `<a href="/app/work-order/${_esc(item.last_cost_wo)}" target="_blank"
                              class="wkp-wo-link" style="font-size:10px">${_esc(item.last_cost_wo)}</a>` : ""}
   </td>
   <td>
-    <div style="font-size:11px;color:var(--stone-600)">
+    <div style="font-size:11px;color:var(--slate-600)">
       ${_esc(item.stock_uom)}${secUom ? ` / ${_esc(secUom)} (\xD71\u00f7${sf})` : ""}
     </div>
-    ${uoms.map(u => `<div style="font-size:10px;color:var(--stone-400)">${_esc(u.uom)} \u00d7${u.factor}</div>`).join("")}
+    ${(item.item_uoms || []).filter(u => u.factor > 0 && u.uom !== item.stock_uom).map(u =>
+      `<div style="font-size:10px;color:var(--slate-400)">${_esc(u.uom)} \u00d7${u.factor}</div>`
+    ).join("")}
   </td>
 </tr>`;
     }).join("");
@@ -3658,6 +3948,83 @@ ${decisionHtml}
 
       this._downloadCSV("wkp_wo_plan.csv", [headers.join(","), ...csvRows].join("\n"));
       return;
+    }
+
+    if (tab === "shortage-report" && this._shortageAggList && this._shortageAggList.length) {
+      const headers = [
+        "Item Code", "Item Name", "Item Group", "UOM",
+        "Total Required", "Total Available", "Total Shortage",
+        "Shortage Value (INR)", "PO Qty", "Received Qty", "MR Qty",
+        "MOQ", "Lead Time (Days)", "Affected WOs",
+      ];
+      const csvRows = this._shortageAggList.map(a => [
+        a.item_code, a.item_name, a.item_group, a.uom,
+        a.total_required, a.total_available, a.total_shortage,
+        a.total_value, a.po_qty, a.received_qty, a.mr_qty,
+        a.moq, a.lead_time_days,
+        (a.wo_list || []).join("; "),
+      ].map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","));
+
+      this._downloadCSV("wkp_shortages.csv", [headers.join(","), ...csvRows].join("\n"));
+      return;
+    }
+
+    if (tab === "emergency" && this.rows && this.rows.length) {
+      const emergRows = this.rows.filter(r =>
+        r.is_emergency || r.prev_month_so > 0 || r.curr_month_so > 0
+      );
+      if (emergRows.length) {
+        const headers = [
+          "Work Order", "Item Code", "Item Name", "UOM",
+          "Planned Qty", "Remaining Qty", "Kit Status",
+          "Last Month SO", "This Month SO", "Total Pending SO",
+          "Is Emergency", "ERP Status",
+        ];
+        const csvRows = emergRows.map(r => [
+          r.wo, r.item_code, r.item_name, r.uom,
+          r.planned_qty, r.remaining_qty, r.kit_status,
+          r.prev_month_so, r.curr_month_so, r.total_pending_so,
+          r.is_emergency ? "Yes" : "No", r.status,
+        ].map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","));
+
+        this._downloadCSV("wkp_emergencies.csv", [headers.join(","), ...csvRows].join("\n"));
+        return;
+      }
+    }
+
+    if (tab === "dispatch" && this._dispatchData) {
+      const dispItems = Object.values(this._dispatchData);
+      if (dispItems.length) {
+        const headers = [
+          "Item Code", "Item Name", "Item Group", "UOM",
+          "Customer Orders (Pending)", "FG In Stock", "Will Be Produced",
+          "Total Coverage", "Gap", "Status",
+          "SO Count", "Overdue SOs", "Pick List", "Reservation",
+        ];
+        const csvRows = dispItems.map(d => {
+          const soListDedup = Object.values(
+            (d.so_list || []).reduce((m, s) => {
+              if (!m[s.so_name]) m[s.so_name] = Object.assign({}, s);
+              else {
+                m[s.so_name].pending_qty = (m[s.so_name].pending_qty || 0) + (s.pending_qty || 0);
+              }
+              return m;
+            }, {})
+          );
+          return [
+            d.item_code, d.item_name, d.item_group, d.uom,
+            d.total_pending, d.fg_stock, d.will_produce,
+            d.total_coverage, d.gap, d.dsp_status,
+            soListDedup.length,
+            soListDedup.filter(s => s.is_overdue).length,
+            d.total_pick_list_count || 0,
+            d.total_reserved || 0,
+          ].map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(",");
+        });
+
+        this._downloadCSV("wkp_dispatch.csv", [headers.join(","), ...csvRows].join("\n"));
+        return;
+      }
     }
 
     frappe.show_alert({ message: "No data to export for the current tab.", indicator: "orange" });
@@ -4142,12 +4509,33 @@ ${decisionHtml}
         : `<span class="wkp-dsp-pill wkp-dsp-pill-none"
                  data-tip="No Stock Reservation entries exist for this item&apos;s open Sales Orders.">\u26AA No Reservation</span>`;
 
+      // Deduplicate SO list by so_name — same Sales Order may appear multiple times
+      // when the SO child table has more than one line for the same item_code.
+      // Fix: merge entries with the same so_name, summing qty/delivered/pending/dn_qty,
+      //      taking OR for is_overdue, and MAX for pick_list_count and reserved_qty.
+      const soMap = {};
+      (item.so_list || []).forEach(so => {
+        if (!soMap[so.so_name]) {
+          soMap[so.so_name] = Object.assign({}, so);  // shallow copy
+        } else {
+          const m = soMap[so.so_name];
+          m.qty           = (m.qty           || 0) + (so.qty           || 0);
+          m.delivered_qty = (m.delivered_qty || 0) + (so.delivered_qty || 0);
+          m.pending_qty   = (m.pending_qty   || 0) + (so.pending_qty   || 0);
+          m.dn_qty        = (m.dn_qty        || 0) + (so.dn_qty        || 0);
+          m.reserved_qty  = Math.max(m.reserved_qty  || 0, so.reserved_qty  || 0);
+          m.pick_list_count = Math.max(m.pick_list_count || 0, so.pick_list_count || 0);
+          m.is_overdue    = m.is_overdue || so.is_overdue;
+        }
+      });
+      const soListDedup = Object.values(soMap);
+
       // SO count
-      const soCount = item.so_list.length;
-      const overdueCount = item.so_list.filter(s => s.is_overdue).length;
+      const soCount = soListDedup.length;
+      const overdueCount = soListDedup.filter(s => s.is_overdue).length;
 
       // Expandable SO detail table (hidden by default)
-      const soRowsHtml = item.so_list.length ? item.so_list.map(so => {
+      const soRowsHtml = soListDedup.length ? soListDedup.map(so => {
         const isOverdue = so.is_overdue;
         const dueCls    = isOverdue ? "wkp-cell-red" : "";
         const dateStr   = so.delivery_date || "\u2014";
@@ -4206,7 +4594,7 @@ ${decisionHtml}
   <td>${resPill}</td>
   <td>${dnPill}</td>
 </tr>`;
-      }).join("") : `<tr><td colspan="9" style="color:var(--stone-400);font-style:italic;padding:12px">No open Sales Orders for this item.</td></tr>`;
+      }).join("") : `<tr><td colspan="9" style="color:var(--slate-400);font-style:italic;padding:12px">No open Sales Orders for this item.</td></tr>`;
 
       const soDetailId = "wkp-dsp-so-" + item.item_code.replace(/[^a-zA-Z0-9]/g, "_");
 

@@ -2491,20 +2491,32 @@ def _get_wo_actual_cost(wo_name):
     Rows where s_warehouse IS NOT NULL and t_warehouse IS NULL are consumed inputs.
     The produced finished good has t_warehouse set (and no s_warehouse) — excluded.
 
+    DATA SOURCE
+    -----------
+    tabStock Entry        — header (work_order, purpose, docstatus, posting_date)
+    tabStock Entry Detail — rows (item_code, qty, amount, batch_no, s_warehouse)
+
+    Batch-wise mode: if any batch_no is present in the Stock Entry Details, rows
+    are split by (item_code, batch_no) so each batch contribution shows separately.
+    This lets the cost audit reflect actual batch cost, not an averaged rate.
+
     Args:
         wo_name (str): Work Order name
 
     Returns:
-        list: [{item_code, item_name, uom, consumed_qty, avg_rate, total_amount}]
+        list: [{item_code, item_name, uom, consumed_qty, avg_rate, total_amount,
+                batch_no (str or ""), posting_date (str)}]
               Returns [] if no submitted Manufacture Stock Entries exist yet.
     """
     rows = frappe.db.sql("""
         SELECT sed.item_code,
                sed.item_name,
-               sed.stock_uom                                    AS uom,
-               SUM(sed.qty)                                     AS consumed_qty,
-               SUM(sed.amount)                                  AS total_amount,
-               (SUM(sed.amount) / NULLIF(SUM(sed.qty), 0))      AS avg_rate
+               sed.stock_uom                                      AS uom,
+               COALESCE(sed.batch_no, '')                         AS batch_no,
+               DATE(se.posting_date)                              AS posting_date,
+               SUM(sed.qty)                                       AS consumed_qty,
+               SUM(sed.amount)                                    AS total_amount,
+               (SUM(sed.amount) / NULLIF(SUM(sed.qty), 0))        AS avg_rate
         FROM   `tabStock Entry Detail` sed
         JOIN   `tabStock Entry` se ON se.name = sed.parent
         WHERE  se.work_order   = %(wo)s
@@ -2512,8 +2524,9 @@ def _get_wo_actual_cost(wo_name):
           AND  se.docstatus    = 1
           AND  sed.s_warehouse IS NOT NULL
           AND  (sed.t_warehouse IS NULL OR sed.t_warehouse = '')
-        GROUP BY sed.item_code, sed.item_name, sed.stock_uom
-        ORDER BY SUM(sed.amount) DESC
+        GROUP BY sed.item_code, sed.item_name, sed.stock_uom,
+                 COALESCE(sed.batch_no, ''), DATE(se.posting_date)
+        ORDER BY SUM(sed.amount) DESC, sed.item_code, batch_no
     """, {"wo": wo_name}, as_dict=True)
 
     return [
@@ -2521,6 +2534,8 @@ def _get_wo_actual_cost(wo_name):
             "item_code"   : r.item_code,
             "item_name"   : r.item_name or r.item_code,
             "uom"         : r.uom or "Nos",
+            "batch_no"    : r.batch_no or "",
+            "posting_date": str(r.posting_date or ""),
             "consumed_qty": round(flt(r.consumed_qty), 4),
             "avg_rate"    : round(flt(r.avg_rate), 4),
             "total_amount": round(flt(r.total_amount), 2),

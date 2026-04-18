@@ -2682,3 +2682,98 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 
 /* 7. Summary strip: tinted row background, cards remain white ────────────  */
 .wkp-summary { background: var(--slate-100); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SESSION 12 ADDITIONS (2026-04-17)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 8. Fix transparent table headers ─────────────────────────────────────
+   --stone-* CSS variables are NOT defined in :root (only --slate-* is).
+   Any rule using var(--stone-50 / --stone-100 / etc.) resolves to
+   the CSS initial value (transparent). Override all thead backgrounds
+   explicitly to ensure headers are always readable.                      */
+.wkp-table thead th,
+.wkp-modal-table thead th,
+.wkp-dsp-table thead th,
+.wkp-dsp-so-table thead th,
+.wkp-iv-table thead th,
+.wkp-cost-table thead th,
+.wkp-supply-table thead th {
+  background: var(--slate-100) !important;
+  border-bottom: 2px solid var(--slate-200) !important;
+  color: var(--slate-700) !important;
+}
+
+/* 9. Modal width 70% — consistent across base and wide modals ──────────
+   Previous values: base = 640px, wide = 900px.
+   70% of viewport gives appropriate width on 13-inch+ screens.          */
+.wkp-modal,
+.wkp-modal-wide {
+  max-width: 70vw;
+}
+
+/* 10. Cost audit section — allow horizontal scroll ─────────────────────
+   .wkp-cost-section had overflow: hidden which clipped the last columns.
+   overflow-x: auto overrides the x-axis portion of the shorthand,
+   giving a scroll track while keeping overflow-y: hidden.               */
+.wkp-cost-section {
+  overflow-x: auto;
+}
+
+/* 11. Global search input ───────────────────────────────────────────────
+   Lives in .wkp-cmd-right alongside the status filter and export group. */
+.wkp-search-group {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--slate-50); border: 1px solid var(--slate-200);
+  border-radius: var(--r-md); padding: 0 8px; height: 32px;
+  transition: border-color var(--tf), box-shadow var(--tf);
+}
+.wkp-search-group:focus-within {
+  border-color: var(--brand-400);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+}
+.wkp-search-icon {
+  font-size: 13px; color: var(--slate-400); flex-shrink: 0;
+}
+.wkp-search-input {
+  border: none; outline: none; background: transparent;
+  font-size: 12px; color: var(--slate-800); width: 180px;
+  font-family: var(--font-sans);
+}
+.wkp-search-input::placeholder { color: var(--slate-400); }
+.wkp-search-input::-webkit-search-cancel-button { display: none; }
+.wkp-search-clear {
+  background: none; border: none; cursor: pointer;
+  color: var(--slate-400); font-size: 15px; padding: 0;
+  line-height: 1; border-radius: var(--r-sm);
+  transition: color var(--tf);
+}
+.wkp-search-clear:hover { color: var(--err-text); }
+/* Active search: highlight row matches */
+.wkp-search-active tr.wkp-search-no-match { display: none; }
+.wkp-search-active tr.wkp-search-match td { background: rgba(245, 158, 11, 0.05); }
+
+/* 12. AI Decision Dashboard card ───────────────────────────────────────
+   Appears at top of AI right column; uses brand button for emphasis.    */
+.wkp-ai-dashboard-card {
+  border: 1px solid var(--brand-200);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.04), var(--bg-surface));
+}
+.wkp-ai-dashboard-btn {
+  width: 100%; margin-top: 2px; font-size: 12px;
+}
+
+/* 13. Tooltip: stronger background ensures text always readable ─────────
+   The tooltip CSS already specifies rgba(15,23,42,0.98) but apply
+   !important to guard against any reset/override from Frappe base CSS.  */
+#wkp-tooltip {
+  background: rgba(15, 23, 42, 0.97) !important;
+  color: #f1f5f9 !important;
+  max-width: 360px !important;
+  font-size: 12.5px !important;
+  white-space: normal !important;  /* HTML mode — use <br> for line breaks */
+}
+#wkp-tooltip a {
+  color: #93c5fd; text-decoration: underline;
+  pointer-events: auto;
+}

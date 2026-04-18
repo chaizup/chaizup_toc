@@ -2,7 +2,7 @@
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  wo_kitting_planner.html  --  WO Kitting Planner UI Template            ║
   ║  Part of chaizup_toc app  |  Page: wo-kitting-planner                   ║
-  ║  Last updated: 2026-04-17 (session 11)                                   ║
+  ║  Last updated: 2026-04-17 (session 12)                                   ║
   ╚══════════════════════════════════════════════════════════════════════════╝
 
   PURPOSE
@@ -39,6 +39,7 @@
      Command bar:       #wkp-root  #wkp-cmd  #wkp-seg-stock  #wkp-seg-calc
                         #wkp-multilevel-btn  #wkp-ml-dot
                         #wkp-status-filter   #wkp-refresh
+                        #wkp-global-search   #wkp-search-clear
 
      Context bar:       #wkp-hint-bar  #wkp-hint-mode  #wkp-hint-text
                         #wkp-hint-icon  #wkp-drag-hint
@@ -202,6 +203,17 @@
     </div>
 
     <div class="wkp-cmd-right">
+
+      <!-- Global Search -->
+      <div class="wkp-search-group">
+        <span class="wkp-search-icon">&#x1F50D;</span>
+        <input type="search" class="wkp-search-input" id="wkp-global-search"
+               placeholder="Search all tabs&hellip;"
+               data-tip="Global search: filter Work Orders, items, or Sales Orders across all tabs.&#10;Searches item code, item name, WO name, and customer. Min 2 characters.">
+        <button class="wkp-search-clear" id="wkp-search-clear" style="display:none"
+                data-tip="Clear search">&times;</button>
+      </div>
+
       <!-- Status filter -->
       <div class="wkp-filter-group">
         <label class="wkp-filter-label" for="wkp-status-filter">Show WOs:</label>
@@ -325,7 +337,7 @@
     <button class="wkp-tab-btn" data-tab="dispatch"
             data-tip="Dispatch Bottleneck: compare Customer Orders vs (FG In Stock + Will Produce from WOs).&#10;Find items where production output will not cover customer commitments.">
       <span class="wkp-tab-icon">&#x1F69A;</span>
-      <span class="wkp-tab-text">Dispatch Risk</span>
+      <span class="wkp-tab-text">Dispatch Bottleneck</span>
     </button>
     <button class="wkp-tab-btn wkp-tab-btn-ai" data-tab="ai-chat"
             data-tip="AI Advisor: Get a plain-language briefing of your production situation.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
@@ -590,6 +602,21 @@
 
       <!-- Right column: quick questions + guidance -->
       <div class="wkp-ai-right">
+
+        <!-- Decision Dashboard card -->
+        <div class="wkp-ai-guide-card wkp-ai-dashboard-card">
+          <div class="wkp-ai-guide-title">&#x1F4CA; Decision Dashboard</div>
+          <div class="wkp-ai-guide-sub">Full production manager briefing</div>
+          <p style="font-size:11px;color:var(--slate-500);margin:4px 0 8px">
+            AI analyses all current simulation data and returns a structured HTML report:
+            priorities, critical WOs, procurement needs, and dispatch risks.
+          </p>
+          <button class="wkp-btn wkp-btn-brand wkp-ai-dashboard-btn" id="wkp-ai-dashboard-btn"
+                  data-tip="Generate a structured Decision Dashboard from all current simulation data.&#10;Returns a formatted HTML report with production priorities, critical WOs, material procurement needs, and dispatch bottlenecks.&#10;Best used at the start of each shift.">
+            &#x1F4CA; Generate Dashboard
+          </button>
+        </div>
+
         <div class="wkp-ai-guide-card">
           <div class="wkp-ai-guide-title">&#x26A1; Quick Questions</div>
           <div class="wkp-ai-guide-sub">Click to ask instantly</div>
