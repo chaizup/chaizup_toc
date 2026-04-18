@@ -2,7 +2,7 @@
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  wo_kitting_planner.html  --  WO Kitting Planner UI Template            ║
   ║  Part of chaizup_toc app  |  Page: wo-kitting-planner                   ║
-  ║  Last updated: 2026-04-18 (session 14)                                   ║
+  ║  Last updated: 2026-04-18 (session 15)                                   ║
   ╚══════════════════════════════════════════════════════════════════════════╝
 
   PURPOSE
@@ -353,9 +353,9 @@
       <span class="wkp-tab-text">AI Advisor</span>
     </button>
     <button class="wkp-tab-btn" data-tab="item-view"
-            data-tip="FG Item View: All finished-good items with active Work Orders or pending Sales Orders.&#10;Summary by product code with cost audit history.">
+            data-tip="Item View: Finished goods items that have at least one open Work Order or open Sales Order.&#10;Summary by item code with cost audit history.">
       <span class="wkp-tab-icon"><i class="fa-solid fa-box-open"></i></span>
-      <span class="wkp-tab-text">Product View</span>
+      <span class="wkp-tab-text">Item View</span>
     </button>
     <button class="wkp-tab-btn wkp-tab-btn-pp" data-tab="purchase-priority"
             data-tip="Purchase Priority: Materials to buy for Work Orders backed by open Sales Orders (any status).&#10;Two-level discovery: direct BOM components + sub-assembly components.&#10;Ranked by SO delivery urgency. Heavy computation &mdash; loads on first click.">
@@ -832,6 +832,15 @@
           <span class="wkp-pp-guide-label">WHEN</span>
           <span class="wkp-pp-guide-text">Act on Overdue and Due-This-Week rows immediately. Plan This-Month rows before production begins.</span>
         </div>
+      </div>
+
+      <!-- Item group filter bar (populated by JS after render) -->
+      <div class="wkp-pp-filter-bar" id="wkp-pp-filter-bar" style="display:none">
+        <label for="wkp-pp-filter-group">Item Group</label>
+        <select id="wkp-pp-filter-group">
+          <option value="">All Groups</option>
+        </select>
+        <span class="wkp-fbar-count" id="wkp-pp-filter-count"></span>
       </div>
 
       <!-- Loading indicator (shown while API call is in flight) -->

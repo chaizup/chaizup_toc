@@ -1787,6 +1787,21 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   40%           { transform: scale(1);   opacity: 1; }
 }
 
+/* Model selector row (between messages + input — session 15 compact fix) ---- */
+/* No CSS existed for this; .wkp-select padding:8px was inflating the height.  */
+.wkp-ai-model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--stone-200);
+  flex-shrink: 0;
+  background: var(--stone-50);
+}
+.wkp-ai-model-label  { font-size: 11px; color: var(--slate-500); white-space: nowrap; flex-shrink: 0; }
+.wkp-ai-model-select { font-size: 11px; padding: 2px 4px; border: 1px solid var(--slate-300); border-radius: 4px; flex: 1; min-width: 0; background: white; cursor: pointer; }
+.wkp-ai-cost-hint    { font-size: 10px; color: var(--slate-400); white-space: nowrap; }
+
 /* Input row -------------------------------------------------------------- */
 .wkp-ai-input-row {
   display: flex;
@@ -1967,8 +1982,10 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   font-family: var(--font-display);
 }
 
-/* Responsive: hide right column on narrow screens */
-@media (max-width: 1100px) {
+/* Responsive: hide right column on narrow screens
+   Session 15: raised to 1300px — 13-inch laptops (1280px wide) now get
+   full-width chat column instead of cramped 220px guide sidebar */
+@media (max-width: 1300px) {
   .wkp-ai-right { display: none; }
 }
 @media (max-width: 700px) {
@@ -1984,8 +2001,9 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   .wkp-ai-card-header  { padding: 4px 10px; }
   .wkp-ai-messages     { padding: 6px 8px; gap: 5px; }
   .wkp-ai-input-row    { padding: 4px 8px; }
-  .wkp-ai-input-hint   { padding: 0 8px 3px; }
+  .wkp-ai-input-hint   { display: none; }   /* reclaim ~18px on short screens */
   .wkp-ai-chat-header  { padding: 4px 10px; }
+  .wkp-ai-model-row    { padding: 3px 8px; }
 }
 
 
@@ -2636,10 +2654,10 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 #wkp-pane-emergency { background: var(--slate-100); }
 #wkp-pane-dispatch  { background: var(--slate-100); }
 
-/* AI pane: padding creates visible gutter around the insight/chat cards */
+/* AI pane: minimal padding — reclaims vertical space on 13-inch laptops */
 .wkp-ai-pane {
   background: var(--slate-100);
-  padding: 10px 12px;   /* overrides the padding:0 from the base rule */
+  padding: 6px 8px;   /* session 15: reduced from 10px 12px — critical for 800px height */
 }
 /* AI cards pop off the slate-100 pane background */
 .wkp-ai-insight-card,
@@ -2788,11 +2806,12 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 .wkp-tab-btn-pp.active { border-bottom-color: #0d9488; color: #0f766e; }
 .wkp-tab-btn-pp:hover:not(.active) { color: #0d9488; }
 
-/* Pane layout */
+/* Pane layout — session 15: overflow:hidden so ONLY #wkp-pp-body scrolls;
+   header/legend/guide/filter-bar stay frozen (flex-shrink:0 on each) */
 .wkp-pp-pane {
   display: flex; flex-direction: column;
   background: var(--slate-100);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* Header bar */
@@ -2845,8 +2864,23 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   color: var(--slate-500); font-size: 13px;
 }
 
-/* Table wrapper — horizontal scroll for wide table */
-#wkp-pp-body { padding: 10px 12px; flex: 1; overflow-x: auto; }
+/* PP filter bar — item group filter (session 15) */
+.wkp-pp-filter-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--slate-200);
+  flex-shrink: 0;
+}
+.wkp-pp-filter-bar label { font-size: 11px; font-weight: 600; color: var(--slate-500); white-space: nowrap; }
+.wkp-pp-filter-bar select {
+  font-size: 12px; padding: 2px 6px; border: 1px solid var(--slate-300);
+  border-radius: 4px; background: white; color: var(--slate-700); cursor: pointer;
+}
+.wkp-pp-filter-bar .wkp-fbar-count { font-size: 11px; color: var(--slate-400); margin-left: 4px; }
+
+/* Table body wrapper — scrolls independently; header/filter-bar stay frozen */
+#wkp-pp-body { padding: 10px 12px; flex: 1; overflow: auto; }
 
 /* Urgency badges */
 .wkp-pp-badge {

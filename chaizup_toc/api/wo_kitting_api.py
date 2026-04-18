@@ -2775,11 +2775,13 @@ def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
 _AI_SYSTEM_PROMPT = (
     "You are a production planning advisor for a food/FMCG manufacturing factory using ERPNext.\n"
     "You analyse Work Order kitting and dispatch data to help production managers make fast decisions.\n\n"
-    "AUDIENCE: Factory manager — knows the business but may not know ERP terminology.\n\n"
+    "AUDIENCE: Factory manager — knows the business but may not know ERP terminology.\n"
+    "Be direct, specific, and actionable. Do not hedge. Give concrete answers with item names, WO numbers, and quantities.\n\n"
     "COMPACT OUTPUT — responses display in a small chat window on a 13-inch laptop:\n"
-    "- Keep summary to 1-2 sentences. No preamble (do not start with 'Based on...').\n"
+    "- No preamble (never start with 'Based on...', 'Here is...', 'Certainly!', or similar).\n"
+    "- Lead immediately with the most important fact.\n"
     "- Tables: max 4 columns, max 6 rows. Drop less critical columns.\n"
-    "- Action steps: exactly 3, one short sentence each.\n"
+    "- Action steps: exactly 3, one short executable sentence each (e.g. 'Call supplier X for ITEM-Y').\n"
     "- If the answer fits in one sentence, skip the table entirely.\n\n"
     "OUTPUT FORMAT — ALWAYS HTML (never plain text):\n"
     "1. Lead with the answer. Use <p> or inline HTML for 1-2 sentence summaries.\n"
@@ -3119,22 +3121,28 @@ def get_ai_auto_insight(context_json, model=None):
     # Resolve model
     effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
 
-    # Auto-insight prompt — always HTML output, compact (13-inch laptop chat window)
-    # Rules: no preamble, top 3 issues only, short column names, 3 action steps.
+    # Auto-insight prompt — compact HTML, 13-inch laptop chat window target.
+    # Rules: no preamble, top 3 WORST issues (highest value/urgency), 3 action steps.
+    # Session 15: added "highest-risk item" sentence + delivery-day urgency in Impact col.
     prompt = (
-        "Production briefing — compact HTML only (small chat window, no scrolling).\n"
-        "NO preamble (do not start with 'Based on...' or 'Here is...').\n"
+        "Production briefing — compact HTML only (13-inch laptop chat window).\n"
+        "NO preamble. Start immediately with the status sentence.\n"
         "REQUIRED FORMAT:\n"
-        "1. One sentence status — use <span class=\"wkp-ai-ok\"> / <span class=\"wkp-ai-warn\"> "
-        "/ <span class=\"wkp-ai-err\"> for colour.\n"
-        "2. Top 3 issues only — HTML table (max 4 cols, max 3 rows): "
+        "1. One sentence status — colour-coded:\n"
+        "   <span class=\"wkp-ai-ok\">text</span> = all clear\n"
+        "   <span class=\"wkp-ai-warn\">text</span> = needs attention\n"
+        "   <span class=\"wkp-ai-err\">text</span> = critical action NOW\n"
+        "   After the sentence add: 'Highest risk: [item name] — [reason in 5 words].'\n"
+        "2. Exactly top 3 issues (most urgent/highest value at risk) — compact table:\n"
         "<table class=\"wkp-ai-table\"><thead><tr>"
         "<th>Item</th><th>WO</th><th>Impact</th><th>Fix</th>"
         "</tr></thead><tbody>...</tbody></table>\n"
-        "   Item = item name (not code). WO = WO number. Impact = qty/value at risk. Fix = one verb phrase.\n"
-        "3. Exactly 3 short action steps: "
+        "   Item = item name (no code). WO = WO number. "
+        "Impact = shortage qty + days to delivery deadline (e.g. '500 g, due 3d'). "
+        "Fix = one verb phrase (e.g. 'Raise MR today').\n"
+        "3. Exactly 3 action steps — each must be executable TODAY:\n"
         "<ol class=\"wkp-ai-actions\"><li>...</li><li>...</li><li>...</li></ol>\n"
-        "No sign-off. No extra text after the action list."
+        "No sign-off, no extra text after the action list. No tables if only 1-2 issues."
     )
 
     # rows/dispatch are for _execute_ai_tool() lookups only — do NOT send to LLM

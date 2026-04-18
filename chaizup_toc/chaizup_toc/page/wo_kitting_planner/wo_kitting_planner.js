@@ -104,6 +104,27 @@
  *   Tooltip: uses innerHTML (not textContent) so HTML in data-tip renders correctly;
  *     \n in data-tip values is converted to <br> before injection; background forced via !important
  *
+ * - Session 15 additions (2026-04-18):
+ *   AI Advisor layout fix: .wkp-ai-model-row CSS added (previously missing — was using
+ *     full-height .wkp-select padding=8px, inflating chat section and pushing input off-screen
+ *     on 13-inch laptops). Model row now uses padding:4px 10px + font-size:11px.
+ *   AI right column breakpoint raised: 1100px → 1300px. On 13-inch (1280px wide), right guide
+ *     column (220px quick-questions) is now hidden, giving full width to the chat input area.
+ *   AI pane padding reduced: 10px/12px → 6px/8px. Reclaims 8px vertical on small screens.
+ *   @media (max-height:820px): .wkp-ai-input-hint hidden (saves 18px); model row compressed.
+ *   Quick questions improved: 8 action-oriented prompts specific to factory decision-making.
+ *   Auto-insight prompt (server): added "highest-risk item" sentence; Impact col now shows
+ *     qty + days to delivery; action steps must be executable TODAY.
+ *   System prompt (server): added "Be direct, specific, actionable" rule; no hedging.
+ *   "Product View" tab renamed to "Item View" (data-tip updated: WO open or SO open).
+ *   Purchase Priority heading frozen: .wkp-pp-pane overflow:hidden (was overflow-y:auto);
+ *     #wkp-pp-body now overflow:auto — only the table body scrolls, header/legend/guide frozen.
+ *   Purchase Priority item group filter: .wkp-pp-filter-bar above #wkp-pp-body;
+ *     JS: data-group on each TR, filter binds in _renderPurchasePriority() after render.
+ *     Filter bar shown only if >1 group in data; hides paired detail expand rows on filter.
+ *   WKP-033: PP item group filter uses data-group attribute on <tr>. Do NOT remove this
+ *     attribute or the filter binding in _renderPurchasePriority() will break silently.
+ *
  * - Session 14 additions (2026-04-18):
  *   Purchase Priority tab (§11): new lazy-loaded tab showing materials to buy for WOs backed
  *     by open Sales Orders (any docstatus 0=Draft, 1=Submitted, 1=To Bill).
@@ -198,6 +219,13 @@
  *          than the FG WO. Do NOT remove this distinction (CSV "Level" column preserves it).
  *          MR creation uses _openMRQtyDialog (same as Shortage tab) — items must have
  *          {item_code, item_name, uom, qty, moq, secondary_uom, secondary_factor} structure.
+ *
+ * WKP-033: PP item group filter uses `data-group` attribute on each main `<tr>` row in
+ *          #wkp-pp-table. The filter in _renderPurchasePriority() reads `tr.dataset.group`.
+ *          Do NOT remove the data-group attribute from the row template string.
+ *          Filter bar (#wkp-pp-filter-bar) is shown/hidden by JS after render (not HTML style).
+ *          Detail expand rows (class=wkp-sr-detail-row) are skipped by the filter loop.
+ *          Paired detail row ID = "wkp-pp-d-" + item_code.replace(/[^a-zA-Z0-9]/g, "_").
  *
  * WKP-031: Icons — always use Font Awesome 6 Free <i class="fa-solid fa-name"> elements.
  *          NEVER revert to Unicode emoji (textContent) for any icon that JS sets dynamically.
@@ -3456,14 +3484,14 @@ ${decisionHtml}
     const quickBtns = document.getElementById("wkp-ai-quick-btns");
     if (quickBtns) {
       const questions = [
-        "Which Work Orders are ready to start production right now?",
-        "List all blocked Work Orders and what is stopping them",
-        "Which customers have overdue orders that are already late?",
-        "Can we fulfil all customer orders this month?",
-        "What are the top 5 materials I need to buy most urgently?",
-        "What is the most expensive material shortage I should fix first?",
-        "Which items will miss their dispatch deadlines?",
-        "Summarise the top 3 production risks and recommended actions",
+        "Which Work Orders can start TODAY? List item names and ready quantities.",
+        "What is blocking the most urgent WOs? Name the top 3 blockers and fix each.",
+        "Which customer orders are overdue? Show days late and order value at risk.",
+        "Give me a procurement action list: item name, gap quantity, urgency tier.",
+        "Which WO has the biggest shortage value? Should I split or delay it?",
+        "Which Work Orders should I release first to clear the most customer backlog?",
+        "What will we FAIL to ship this month if we do nothing right now?",
+        "Give me a 3-point action plan I can execute in the next 8 hours.",
       ];
       quickBtns.innerHTML = questions.map(q =>
         `<button class="wkp-ai-quick-btn" data-q="${_esc(q)}">${_esc(q)}</button>`
@@ -4126,7 +4154,7 @@ ${decisionHtml}
         </tr>`;
       }).join("");
 
-      return `<tr data-item="${_esc(item.item_code)}" data-idx="${idx}">
+      return `<tr data-item="${_esc(item.item_code)}" data-idx="${idx}" data-group="${_esc(item.item_group)}">
   <td class="ta-c wkp-sr-chk-cell"><input type="checkbox" class="wkp-pp-chk" data-item="${_esc(item.item_code)}" data-idx="${idx}"></td>
   <td>
     <button class="wkp-sr-item-btn" data-item="${_esc(item.item_code)}"
@@ -4256,6 +4284,44 @@ ${decisionHtml}
           }));
         if (gapItems.length) this._openMRQtyDialog(gapItems, {}, "Create MR for All Gaps (Purchase Priority)");
       };
+    }
+
+    // ── Item group filter bar ─────────────────────────────────────────────
+    // Populated from render data; filters table rows + hides orphaned detail rows.
+    const filterBar    = document.getElementById("wkp-pp-filter-bar");
+    const filterSelect = document.getElementById("wkp-pp-filter-group");
+    const filterCount  = document.getElementById("wkp-pp-filter-count");
+    if (filterBar && filterSelect) {
+      const groups = [...new Set(data.map(d => d.item_group).filter(Boolean))].sort();
+      filterSelect.innerHTML = '<option value="">All Groups</option>' +
+        groups.map(g => `<option value="${_esc(g)}">${_esc(g)}</option>`).join("");
+      filterBar.style.display = groups.length > 1 ? "flex" : "none";
+
+      const _applyPPFilter = () => {
+        const sel = filterSelect.value;
+        const tbody = document.querySelector("#wkp-pp-table tbody");
+        if (!tbody) return;
+        let shown = 0, total = 0;
+        tbody.querySelectorAll("tr:not(.wkp-sr-detail-row)").forEach(tr => {
+          total++;
+          const match = !sel || (tr.dataset.group || "") === sel;
+          tr.style.display = match ? "" : "none";
+          if (match) shown++;
+          if (!match) {
+            // Collapse and hide the paired detail/expand row
+            const itemCode = tr.dataset.item || "";
+            if (itemCode) {
+              const dId = "wkp-pp-d-" + itemCode.replace(/[^a-zA-Z0-9]/g, "_");
+              const detailTr = document.getElementById(dId);
+              if (detailTr) detailTr.style.display = "none";
+              const toggleBtn = tr.querySelector("button[onclick]");
+              if (toggleBtn) toggleBtn.innerHTML = "\u25BC Details";
+            }
+          }
+        });
+        if (filterCount) filterCount.textContent = sel ? `${shown} of ${total}` : "";
+      };
+      filterSelect.addEventListener("change", _applyPPFilter);
     }
   }
 
