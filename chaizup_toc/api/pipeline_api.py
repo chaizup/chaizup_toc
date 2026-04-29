@@ -51,7 +51,7 @@ RETURN SCHEMA: nodes[]
     "status"            : "Submitted"         # current doc status
     "zone"              : "Red"               # TOC zone (Title Case)
     "bp_pct"            : 87.5               # Buffer Penetration %
-    "buffer_type"       : "RM"               # RM/PM/SFG/FG
+    "buffer_type"       : "Purchase"         # Manufacture/Purchase/Monitor (= mr_type)
     "mr_type"           : "Purchase"         # for Material Request nodes
     "item_code"         : "ITEM-001"
     "item_name"         : "Widget Base"
@@ -91,7 +91,7 @@ RETURN SCHEMA: tracks[]
   {
     "item_code": "ITEM-001",
     "item_name": "Widget Base",
-    "buffer_type": "RM",
+    "buffer_type": "Purchase",
     "zone": "Red",
     "bp_pct": 87.5,
     "on_hand": 50.0,
@@ -154,6 +154,17 @@ KNOWN GOTCHAS
 5. SLA thresholds (days before "overdue") are hardcoded per stage:
    MR→7d, RFQ→3d, SQ→2d, PO→14d, WO→5d
 
+UOM STANDARD
+────────────
+All quantity fields in node/track output represent stock_uom quantities:
+  - Work Order: qty and produced_qty are already in stock_uom (ERPNext validates)
+  - Stock Entry: sed.transfer_qty (stock_uom) used for produced_qty display,
+    NOT sed.qty (which is in document/transaction UOM)
+  - Purchase Order/Receipt: qty fields from ERPNext are in transaction UOM — these
+    are display-only in the pipeline UI, not used for stock calculations
+  - TOC buffer data (on_hand, order_qty, inventory_position) from calculate_all_buffers
+    are always in stock_uom
+
 ════════════════════════════════════════════════════════════════════════════════
 """
 
@@ -180,7 +191,7 @@ def get_pipeline_data(
 
     Args:
         item_code         : Exact item code filter (optional)
-        buffer_type       : "FG" | "SFG" | "RM" | "PM" | None
+        buffer_type       : "Manufacture" | "Purchase" | "Monitor" | None
         zone              : "Red" | "Yellow" | "Green" | "Black" | None
         days_back         : Documents created in the last N days (default 30)
         supplier          : Filter documents by supplier name (partial match)
@@ -269,10 +280,11 @@ def get_pipeline_data(
     ses = [d for d in ses if d.get("work_order")      in active_wo_names]
 
     # 6. Build nodes (enrich each with days_open, is_overdue, next_action)
+    # output_ics = items in Manufacture mode — these get an "output" node (SE/FG output stage)
     output_ics = {
         i["item_code"]
         for i in items
-        if toc_map.get(i["item_code"], {}).get("buffer_type") in ("FG", "SFG")
+        if toc_map.get(i["item_code"], {}).get("mr_type") == "Manufacture"
     }
 
     nodes, edges = _build_graph(
@@ -665,11 +677,13 @@ def _fetch_stock_entries(wo_names):
     if not wo_names:
         return []
     ph = _ph(wo_names)
+    # transfer_qty = qty in stock_uom (used for display progress).
+    # qty is in document/transaction UOM which may differ when conversion_factor != 1.
     return frappe.db.sql(f"""
         SELECT DISTINCT
             se.name, se.work_order, se.stock_entry_type, se.docstatus,
             se.posting_date, se.creation,
-            sed.item_code, sed.t_warehouse, sed.qty as produced_qty
+            sed.item_code, sed.t_warehouse, sed.transfer_qty as produced_qty
         FROM `tabStock Entry` se
         JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
         WHERE se.work_order IN ({ph})
@@ -918,11 +932,11 @@ def _compute_next_action(bt, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, ses):
     # ── Infer path for non-TOC items ──────────────────────────────────────────
     if not bt:
         if wos or pps:
-            bt = "FG"   # manufacture path
+            bt = "Manufacture"   # manufacture path inferred from WO/PP
         elif rfqs or pos or (mrs and mrs[0].get("material_request_type") == "Purchase"):
-            bt = "RM"   # purchase path
+            bt = "Purchase"      # purchase path inferred from RFQ/PO/Purchase MR
         elif mrs:
-            bt = "FG"   # default to manufacture when only MR present
+            bt = "Manufacture"   # only MR present — default to manufacture
         else:
             return "No active documents"
 
@@ -956,7 +970,7 @@ def _compute_next_action(bt, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, ses):
 
     pending_mrs = [m for m in mrs if m.get("status", "").lower() not in ("stopped", "cancelled")]
 
-    if bt in ("RM", "PM"):
+    if bt == "Purchase":
         # Purchase path
         if not rfqs:
             return "Create RFQ from open MRs"
@@ -977,7 +991,7 @@ def _compute_next_action(bt, mrs, rfqs, pps, sqs, wos, pos, jcs, prs, ses):
         return "Fully received — buffer replenished"
 
     else:
-        # Manufacture path (FG, SFG)
+        # Manufacture path
         if not pps and not wos:
             return "Create Production Plan from MR"
         if pps and not wos:

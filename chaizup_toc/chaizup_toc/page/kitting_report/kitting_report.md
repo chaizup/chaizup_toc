@@ -1,6 +1,21 @@
 # kitting_report — Full Kitting Report Page
 
-The production readiness dashboard. Answers the most critical manufacturing question: **"Can we produce today's required FG/SFG items, and if not, exactly which component is blocking us and what's its current procurement status?"**
+The production readiness dashboard. Answers the most critical manufacturing question: **"Can we produce today's required Manufacture-mode items, and if not, exactly which component is blocking us and what's its current procurement status?"**
+
+## UOM Standard
+
+**All quantities in this module are in STOCK UOM** (the item's canonical inventory unit, e.g. Gram, Nos, Kg).
+
+| Field | Source | UOM |
+|-------|--------|-----|
+| SO pending | `soi.stock_qty − delivered_qty × cf` | stock_uom |
+| Dispatched | `dni.stock_qty` | stock_uom |
+| Produced | `sed.transfer_qty` | stock_uom |
+| In Stock | `Bin.actual_qty` | stock_uom |
+| BOM required | `BOM Item.stock_qty` | stock_uom |
+| Create MR qty | Converted to `purchase_uom` via UOM Conversion Detail | purchase_uom on MR line |
+
+`create_purchase_requests()` converts stock_uom shortage qty → purchase_uom qty using `UOM Conversion Detail.conversion_factor` (same as `mr_generator._create_mr`). The MR line stores `qty = purchase_qty`, `stock_uom`, `conversion_factor` so ERPNext can compute stock impact correctly.
 
 Route: `/app/kitting-report`
 
@@ -61,18 +76,18 @@ For every FG and SFG item with pending demand this month:
 
 ## Main Table Columns
 
-| Column | Description | Calculation |
-|--------|-------------|-------------|
-| Type | FG / SFG badge | `Item.custom_toc_buffer_type` |
+| Column | Description | Calculation (all in stock_uom) |
+|--------|-------------|-------------------------------|
+| Mode | Manufacture badge (all rows) | `item.custom_toc_auto_manufacture = 1` |
 | Item | Item name + code (link to Item form) | — |
 | Total SO Pending | Total undelivered SO qty (prev + curr month) | `pending_prev_month + pending_curr_month` |
-| Prev Month Pending SO | SOs with delivery_date last month, not fully dispatched | `SO Item qty − delivered_qty WHERE delivery_date in prev month` |
+| Prev Month Pending SO | SOs with delivery_date last month, not fully dispatched | `soi.stock_qty − delivered_qty × conversion_factor WHERE delivery_date in prev month` |
 | Curr Month Pending SO | SOs with delivery_date this month, not fully dispatched | Same, current month |
-| Curr Dispatched | Delivery Note qty posted this calendar month | `DN Item.qty WHERE docstatus=1 AND posting_date in curr month` |
+| Curr Dispatched | Delivery Note qty posted this calendar month | `SUM(dni.stock_qty) WHERE docstatus=1 AND posting_date in curr month` |
 | Prev Dispatched | Delivery Note qty posted last calendar month | Same, previous month |
 | In Stock | Current on-hand stock | `SUM(Bin.actual_qty WHERE item_code=...)` |
 | Prod Required | Gross production needed | `Max(0, Total SO Pending − In Stock)` |
-| Actual Produced | Manufacture Stock Entries this month | `SE Detail.qty WHERE is_finished_item=1 AND type=Manufacture AND this month` |
+| Actual Produced | Manufacture Stock Entries this month | `SUM(sed.transfer_qty) WHERE is_finished_item=1 AND type=Manufacture AND this month` |
 | Should Produce | Net remaining production target | `Max(0, Prod Required − Actual Produced)` |
 | Kit Status | Can we produce Should Produce qty? | BOM walk — see Kit Status Logic |
 

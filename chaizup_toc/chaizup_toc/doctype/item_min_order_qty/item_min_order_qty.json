@@ -1,0 +1,89 @@
+{
+ "actions": [],
+ "creation": "2026-04-27 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "warehouse",
+  "uom",
+  "min_order_qty",
+  "stock_uom",
+  "conversion_factor",
+  "stock_uom_qty"
+ ],
+ "fields": [
+  {
+   "columns": 3,
+   "description": "Warehouse where this minimum order size applies. Matched by item + warehouse during MR / PP creation.",
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Unit of measurement for the minimum qty below. Must be configured in UOM Conversion Detail on this item (or equal to Stock UOM).",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "UOM",
+   "options": "UOM",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Minimum quantity to purchase or produce per replenishment cycle. If the calculated shortage is below this value, the MR / Production Plan qty is raised to this floor. Example: a supplier box of 24 units \u2192 enter 24 here with UOM = Box.",
+   "fieldname": "min_order_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Min Purchase / Production Qty",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Auto-populated from Item Stock UOM. Shows the base unit used in all inventory calculations.",
+   "fieldname": "stock_uom",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Stock UOM",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "description": "Auto-populated: 1 [UOM] = [this value] [Stock UOM]. Fetched from UOM Conversion Detail on the parent item. If UOM equals Stock UOM, this is 1.0.",
+   "fieldname": "conversion_factor",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Stock UOM Conversion",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "description": "Auto-calculated: Min Purchase / Production Qty \u00d7 conversion_factor. This is the effective minimum in Stock UOM \u2014 the actual value used by the MR and Production Plan automation.",
+   "fieldname": "stock_uom_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Stock UOM Qty",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 20,
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-27 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Chaizup Toc",
+ "name": "Item Min Order Qty",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,0 +1,66 @@
+{
+ "actions": [],
+ "creation": "2026-04-27 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "user_name",
+  "notify_on_component_mrs",
+  "notify_on_min_order_missing"
+ ],
+ "fields": [
+  {
+   "columns": 3,
+   "description": "Frappe/ERPNext user who receives TOC Engine operation alerts (component shortage MR summaries and daily min-order-qty warnings).",
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "user.full_name",
+   "fetch_if_empty": 1,
+   "fieldname": "user_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Full Name",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "description": "Send email summary after component shortage MRs are auto-created following Work Order generation from a Production Plan.",
+   "fieldname": "notify_on_component_mrs",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "On Component MRs"
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "description": "Receive daily alert (12 AM) listing items with no Min Order Qty or Min Manufacturing Qty configured.",
+   "fieldname": "notify_on_min_order_missing",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "On Missing Min Qty"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-27 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Chaizup Toc",
+ "name": "TOC Engine Notification User",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -11,10 +11,10 @@ frappe.query_reports["Production Priority Board"] = {
         },
         {
             fieldname: "buffer_type",
-            label: __("Buffer Type"),
+            label: __("Replenishment Mode"),
             fieldtype: "Select",
-            options: "\nFG\nSFG\nRM\nPM",
-            description: "FG=Finished | SFG=Semi-Finished | RM=Raw Material | PM=Packaging",
+            options: "\nManufacture\nPurchase\nMonitor",
+            description: "Manufacture=auto-WO | Purchase=auto-MR | Monitor=track only",
         },
         {
             fieldname: "warehouse",

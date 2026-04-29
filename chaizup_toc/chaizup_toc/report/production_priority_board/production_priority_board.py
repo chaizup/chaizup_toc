@@ -2,13 +2,14 @@
 Production Priority Board — Script Report
 ===========================================
 THE daily report. Every morning at 7:00 AM the supervisor opens this.
-Shows all items sorted by Buffer Penetration % — highest urgency first.
+Shows ALL TOC-enabled items sorted by Buffer Penetration % — highest urgency first.
+No item-type filter — every item is shown regardless of category.
 
 Formulas shown in every row:
   F2: IP = On-Hand + WIP − Backorders
   F3: BP% = (Target − IP) ÷ Target × 100
   F4: Order Qty = Target − IP
-  F5: T/CU for tie-breaking (shown for FG items)
+  F5: T/CU for tie-breaking (manufactured items)
 """
 
 import frappe
@@ -31,7 +32,9 @@ def get_columns():
         {"fieldname": "item_code", "label": _("Item Code"), "fieldtype": "Link",
          "options": "Item", "width": 140},
         {"fieldname": "item_name", "label": _("Item Name"), "fieldtype": "Data", "width": 180},
-        {"fieldname": "buffer_type", "label": _("Type"), "fieldtype": "Data", "width": 60},
+        {"fieldname": "stock_uom", "label": _("UOM"), "fieldtype": "Link",
+         "options": "UOM", "width": 60},
+        {"fieldname": "buffer_type", "label": _("Mode"), "fieldtype": "Data", "width": 90},
         {"fieldname": "warehouse", "label": _("Warehouse"), "fieldtype": "Link",
          "options": "Warehouse", "width": 140},
         {"fieldname": "target_buffer", "label": _("Target Buffer<br><small>F1: ADU×RLT×VF</small>"),
@@ -61,20 +64,17 @@ def get_data(filters):
 
     kwargs = {}
     if filters:
-        if filters.get("buffer_type"):
-            kwargs["buffer_type"] = filters["buffer_type"]
-        if filters.get("company"):
-            kwargs["company"] = filters["company"]
-        if filters.get("warehouse"):
-            kwargs["warehouse"] = filters["warehouse"]
-        if filters.get("item_code"):
-            kwargs["item_code"] = filters["item_code"]
+        for k in ("company", "warehouse", "item_code"):
+            if filters.get(k):
+                kwargs[k] = filters[k]
 
     buffers = calculate_all_buffers(**kwargs)
 
-    # Optional zone filter
     if filters and filters.get("zone"):
         buffers = [b for b in buffers if b["zone"] == filters["zone"]]
+
+    if filters and filters.get("buffer_type"):
+        buffers = [b for b in buffers if b.get("buffer_type") == filters["buffer_type"]]
 
     data = []
     for i, b in enumerate(buffers):
@@ -82,6 +82,7 @@ def get_data(filters):
             "rank": i + 1,
             "item_code": b["item_code"],
             "item_name": b["item_name"],
+            "stock_uom": b.get("stock_uom", ""),
             "buffer_type": b["buffer_type"],
             "warehouse": b["warehouse"],
             "target_buffer": b["target_buffer"],

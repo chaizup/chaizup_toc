@@ -1,11 +1,16 @@
 // Item Form — TOC Setting Tab
 // R1: Custom ADU toggle makes ADU field editable/read-only
 // R2: All config under "TOC Setting" tab
+// R3: Item Min Order Qty child table — auto-populate readonly fields, filter UOM list,
+//     guard against row creation before item is saved.
 
 frappe.ui.form.on("Item", {
     refresh(frm) {
         // R1: Make ADU field read-only unless Custom ADU is checked
         _toggle_adu(frm);
+
+        // R3: Disable "Add Row" in Min Order Qty table if item is not yet saved
+        _setup_min_order_qty_grid(frm);
 
         if (frm.doc.custom_toc_enabled) {
             // "View Buffer Status" button
@@ -72,6 +77,11 @@ frappe.ui.form.on("Item", {
         }
     },
 
+    after_save(frm) {
+        // Re-enable Min Order Qty grid after the item is saved for the first time
+        _setup_min_order_qty_grid(frm);
+    },
+
     // R1: Toggle ADU field editability
     custom_toc_custom_adu(frm) { _toggle_adu(frm); },
 
@@ -115,4 +125,89 @@ function _calc_tcu(frm) {
     let tvc = flt(frm.doc.custom_toc_tvc);
     let speed = flt(frm.doc.custom_toc_constraint_speed);
     if (p && speed > 0) frm.set_value("custom_toc_tcu", (p - tvc) * speed);
+}
+
+// ─── R3: Item Min Order Qty child table handlers ──────────────────────────────
+
+function _setup_min_order_qty_grid(frm) {
+    // Guard: disable Add Row if the item is not yet saved
+    let grid = frm.get_field("custom_min_order_qty") && frm.get_field("custom_min_order_qty").grid;
+    if (!grid) return;
+
+    if (frm.is_new()) {
+        grid.cannot_add_rows = true;
+        grid.wrapper.find(".grid-add-row, .grid-footer .btn-open-row").hide();
+        grid.wrapper.find(".grid-add-row-btn").hide();
+    } else {
+        grid.cannot_add_rows = false;
+        grid.wrapper.find(".grid-add-row, .grid-footer .btn-open-row").show();
+        grid.wrapper.find(".grid-add-row-btn").show();
+    }
+
+    // Filter UOM list to only UOMs in the item's "Units of Measure" section + stock_uom
+    frm.set_query("uom", "custom_min_order_qty", function() {
+        let configured_uoms = (frm.doc.uoms || []).map(r => r.uom).filter(Boolean);
+        if (frm.doc.stock_uom && !configured_uoms.includes(frm.doc.stock_uom)) {
+            configured_uoms.push(frm.doc.stock_uom);
+        }
+        if (!configured_uoms.length) return {};
+        return { filters: [["UOM", "name", "in", configured_uoms]] };
+    });
+}
+
+frappe.ui.form.on("Item Min Order Qty", {
+    // Guard: block row creation before item is saved
+    form_render(frm, cdt, cdn) {
+        if (frm.is_new()) {
+            frappe.model.delete_doc(cdt, cdn);
+            frappe.msgprint({
+                title: __("Save Required"),
+                message: __("Save the Item first before adding Min Order Qty rules."),
+                indicator: "orange",
+            });
+            return;
+        }
+        // Auto-populate stock_uom when the row is opened
+        let row = locals[cdt][cdn];
+        if (!row.stock_uom && frm.doc.stock_uom) {
+            frappe.model.set_value(cdt, cdn, "stock_uom", frm.doc.stock_uom);
+        }
+    },
+
+    // When UOM changes: fetch conversion_factor and recompute stock_uom_qty
+    uom(frm, cdt, cdn) {
+        let row = locals[cdt][cdn];
+        if (!row.uom) {
+            frappe.model.set_value(cdt, cdn, "conversion_factor", "");
+            frappe.model.set_value(cdt, cdn, "stock_uom_qty", "");
+            return;
+        }
+        // Always stamp stock_uom from the parent item
+        frappe.model.set_value(cdt, cdn, "stock_uom", frm.doc.stock_uom);
+
+        if (row.uom === frm.doc.stock_uom) {
+            frappe.model.set_value(cdt, cdn, "conversion_factor", 1.0);
+            _recompute_stock_uom_qty(cdt, cdn, row.min_order_qty, 1.0);
+            return;
+        }
+
+        // Read conversion_factor from frm.doc.uoms (already in memory — no API call needed)
+        let uom_row = (frm.doc.uoms || []).find(r => r.uom === row.uom);
+        let cf = uom_row ? flt(uom_row.conversion_factor) : 1.0;
+        if (!cf) cf = 1.0;
+        frappe.model.set_value(cdt, cdn, "conversion_factor", cf);
+        _recompute_stock_uom_qty(cdt, cdn, row.min_order_qty, cf);
+    },
+
+    // When min_order_qty changes: recompute stock_uom_qty client-side
+    min_order_qty(frm, cdt, cdn) {
+        let row = locals[cdt][cdn];
+        let cf = flt(row.conversion_factor) || 1.0;
+        _recompute_stock_uom_qty(cdt, cdn, row.min_order_qty, cf);
+    },
+});
+
+function _recompute_stock_uom_qty(cdt, cdn, min_order_qty, conversion_factor) {
+    let qty = flt(min_order_qty) * (flt(conversion_factor) || 1.0);
+    frappe.model.set_value(cdt, cdn, "stock_uom_qty", qty);
 }

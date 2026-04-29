@@ -67,17 +67,8 @@ def _install_custom_fields():
                  description="CHECK this to activate TOC for this item. When ON: item appears on Production Priority Board, MRs are auto-created at 7:00 AM based on Buffer Penetration %. The default ERPNext reorder level is IGNORED.",
                  module=M),
 
-            dict(fieldname="custom_toc_buffer_type", fieldtype="Select",
-                 label="Buffer Type [TOC App]",
-                 options="\nFG\nSFG\nRM\nPM",
-                 insert_after="custom_toc_enabled",
-                 read_only=1,
-                 hidden=1,
-                 description="Auto-resolved from TOC Settings → Item Group Rules. Not user-editable.",
-                 module=M),
-
             dict(fieldname="custom_toc_col_replenish", fieldtype="Column Break",
-                 insert_after="custom_toc_buffer_type", module=M),
+                 insert_after="custom_toc_enabled", module=M),
 
             # ── R6/R2: Auto Replenishment Mode ──
             dict(fieldname="custom_toc_auto_purchase", fieldtype="Check",
@@ -85,7 +76,7 @@ def _install_custom_fields():
                  insert_after="custom_toc_col_replenish",
                  depends_on="eval:doc.custom_toc_enabled",
                  default="0",
-                 description="CHECK if this item is PURCHASED from suppliers. System creates Purchase-type Material Request → becomes Purchase Order. Use for RM and PM items.",
+                 description="CHECK if this item is PURCHASED from suppliers. System creates a Purchase-type Material Request when buffer falls below threshold. Mutually exclusive with Auto Manufacturing.",
                  module=M),
 
             dict(fieldname="custom_toc_auto_manufacture", fieldtype="Check",
@@ -93,7 +84,7 @@ def _install_custom_fields():
                  insert_after="custom_toc_auto_purchase",
                  depends_on="eval:doc.custom_toc_enabled",
                  default="0",
-                 description="CHECK if this item is MANUFACTURED in-house. System creates Manufacture-type Material Request → becomes Work Order. Use for FG and SFG items. You can only choose ONE: Purchase OR Manufacturing.",
+                 description="CHECK if this item is MANUFACTURED in-house. System creates a Production Plan → Work Order when buffer falls below threshold. Mutually exclusive with Auto Purchase.",
                  module=M),
 
             # ══ SECTION 2: ADU — Average Daily Usage (R1, R4) ══
@@ -103,10 +94,9 @@ def _install_custom_fields():
                  depends_on="eval:doc.custom_toc_enabled",
                  description=(
                      "ADU = Average Daily Usage. It is the FIRST input to Formula F1: Target Buffer = ADU × RLT × VF.\n\n"
-                     "HOW IT WORKS: Every day at 6:30 AM, the TOC scheduler automatically calculates ADU by:\n"
-                     "• For FG items: counting total qty shipped in Delivery Notes over the selected period, then dividing by number of days.\n"
-                     "• For RM/PM items: counting total qty consumed in Stock Entries (Material Issue / Manufacture) over the selected period.\n"
-                     "• For SFG items: counting total qty consumed from Stock Entries where this SFG was used.\n\n"
+                     "HOW IT WORKS: Every day at 6:30 AM, the TOC scheduler automatically calculates ADU by reading ALL stock "
+                     "outflows from the Stock Ledger for this item (actual_qty < 0) over the selected period, then dividing by "
+                     "the number of days. This captures sales, production consumption, transfers — every way the item leaves stock.\n\n"
                      "OR: Check 'Custom ADU' below to enter your own value manually — the scheduler will SKIP this item."
                  ),
                  module=M),
@@ -147,13 +137,13 @@ def _install_custom_fields():
                  description="When was ADU last auto-calculated by the scheduler? If this timestamp is old, check Scheduled Job Log for errors. Shows 'Manual' if Custom ADU is checked.",
                  module=M),
 
-            # ══ SECTION 3: T/CU — Tie-Breaker (FG only) ══
+            # ══ SECTION 3: T/CU — Tie-Breaker (manufactured items) ══
             dict(fieldname="custom_toc_sec_tcu", fieldtype="Section Break",
-                 label="3. Throughput per Constraint Unit — T/CU (Formula F5, FG only)",
+                 label="3. Throughput per Constraint Unit — T/CU (Formula F5)",
                  insert_after="custom_toc_adu_last_updated",
-                 depends_on="eval:doc.custom_toc_buffer_type=='FG'",
+                 depends_on="eval:doc.custom_toc_enabled && doc.custom_toc_auto_manufacture",
                  collapsible=1,
-                 description="F5 tie-breaker: When two FG items have EQUAL Buffer Penetration %, which should the VFFS run first? The one with higher T/CU (more ₹ earned per minute of bottleneck time). T = Price − (RM+PM cost). T/CU = T × Speed.",
+                 description="F5 tie-breaker: When two manufactured items have EQUAL Buffer Penetration %, which should the bottleneck run first? The one with higher T/CU earns more per constraint minute. T = Price − TVC. T/CU = T × Speed.",
                  module=M),
 
             dict(fieldname="custom_toc_selling_price", fieldtype="Currency",
@@ -176,16 +166,17 @@ def _install_custom_fields():
                  read_only=1,
                  description="Auto-calculated: F5 = (Price − TVC) × Speed. Higher = earns more per constraint minute.", module=M),
 
-            # ══ SECTION 4: BOM / SFG Link (R3) ══
+            # ══ SECTION 4: BOM Link (R3) ══
             dict(fieldname="custom_toc_sec_bom", fieldtype="Section Break",
-                 label="4. BOM & SFG Dependency (R3)",
+                 label="4. BOM & Component Dependency (R3)",
                  insert_after="custom_toc_tcu",
-                 depends_on="eval:doc.custom_toc_enabled && (doc.custom_toc_buffer_type=='FG' || doc.custom_toc_buffer_type=='SFG')",
+                 depends_on="eval:doc.custom_toc_enabled",
                  collapsible=1,
                  description=(
-                     "For FG/SFG items: The system reads the ERPNext BOM (Bill of Materials) to check SFG and material availability BEFORE recommending production.\n\n"
-                     "Multi-level: One FG BOM can have multiple SFGs + raw materials. One SFG BOM can also have sub-SFGs + materials. The system walks the full BOM tree.\n\n"
-                     "If you link a BOM here, the Production Priority Board will show SFG availability status and flag shortfalls."
+                     "Optional: Link an ERPNext BOM to enable component availability checking.\n\n"
+                     "If linked, the system walks the full BOM tree (up to 5 levels) and checks "
+                     "whether all components have sufficient stock before recommending production.\n\n"
+                     "Works for any item regardless of category — not restricted to FG or SFG."
                  ),
                  module=M),
 
@@ -193,8 +184,8 @@ def _install_custom_fields():
                  label="Default BOM for TOC [TOC App]",
                  options="BOM",
                  insert_after="custom_toc_sec_bom",
-                 depends_on="eval:doc.custom_toc_buffer_type=='FG' || doc.custom_toc_buffer_type=='SFG'",
-                 description="Link the active BOM for this item. TOC uses this to check if all SFGs and raw materials are available before scheduling production. Leave blank to skip BOM checking.",
+                 depends_on="eval:doc.custom_toc_enabled",
+                 description="Link the active BOM for this item. TOC uses this to check if all components are available before scheduling production. Leave blank to skip BOM checking.",
                  module=M),
 
             dict(fieldname="custom_toc_check_bom_availability", fieldtype="Check",
@@ -299,6 +290,29 @@ def _install_custom_fields():
                  label="Buffer Penetration % [TOC App]",
                  insert_after="custom_toc_zone", read_only=1,
                  description="F3: BP% at WO creation. Higher BP% = higher priority on VFFS.",
+                 module=M),
+
+            # ── Projection Automation fields (added 2026-04-18) ──
+            # custom_projection_parent_wo: Link to the FG parent WO when this WO
+            # was auto-created as a sub-assembly by projection_engine.py.
+            # Appears in Frappe Connections tab of the parent WO automatically
+            # (any Link field pointing to a DocType shows in that DocType's Connections).
+            dict(fieldname="custom_projection_parent_wo", fieldtype="Link",
+                 label="Parent Work Order [Projection]",
+                 options="Work Order",
+                 insert_after="custom_toc_bp_pct",
+                 read_only=1,
+                 in_list_view=0, in_standard_filter=1,
+                 description="Set automatically when this Work Order was created as a sub-assembly by the Sales Projection Automation engine. Links to the parent FG Work Order. Open the parent WO and check its Connections tab to see all child Work Orders created for this BOM tree.",
+                 module=M),
+
+            # custom_toc_creation_reason: Explains WHY the system created this WO.
+            # Written by projection_engine._create_work_order() with full formula breakdown.
+            dict(fieldname="custom_toc_creation_reason", fieldtype="Long Text",
+                 label="WO Creation Reason [TOC]",
+                 insert_after="custom_projection_parent_wo",
+                 read_only=1,
+                 description="Auto-filled by the TOC system when a Work Order is created automatically (by Sales Projection Automation or TOC buffer logic). Explains the calculation behind the WO quantity so any user can understand why this WO was created.",
                  module=M),
         ],
     }

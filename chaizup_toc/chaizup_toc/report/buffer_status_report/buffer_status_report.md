@@ -66,10 +66,10 @@ This distinction matters:
 | Item | `item_code` | — | Link to Item |
 | Item Name | `item_name` | — | Fetched via LEFT JOIN on Item |
 | Warehouse | `warehouse` | — | Link to Warehouse |
-| Type | `buffer_type` | — | FG/SFG/RM/PM |
+| Type | `buffer_type` | — | Manufacture / Purchase / Monitor |
 | Target (F1) | `target_buffer` | ADU × RLT × VF | At snapshot time |
 | On-Hand | `on_hand_qty` | — | `Bin.actual_qty` at snapshot time |
-| WIP | `wip_qty` | — | WIP qty (FG/SFG) or On-Order qty (RM/PM) |
+| WIP | `wip_qty` | — | WIP qty (Manufacture) or On-Order qty (Purchase) |
 | IP (F2) | `inventory_position` | OH + WIP − BO | Combined inventory position |
 | BP% (F3) | `buffer_penetration_pct` | (T − IP) / T × 100 | Urgency % |
 | Zone | `zone` | — | Green / Yellow / Red / Black |

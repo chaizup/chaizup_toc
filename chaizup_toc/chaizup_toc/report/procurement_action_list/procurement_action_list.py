@@ -1,4 +1,4 @@
-"""Procurement Action List — RM/PM focused. Same engine, RM/PM filter."""
+"""Procurement Action List — Purchase-mode items only (auto_purchase=1)."""
 import frappe
 from frappe import _
 
@@ -8,9 +8,8 @@ def execute(filters=None):
     if filters:
         for k in ("company","warehouse","item_code"):
             if filters.get(k): kwargs[k] = filters[k]
-    rm = calculate_all_buffers(buffer_type="RM", **kwargs)
-    pm = calculate_all_buffers(buffer_type="PM", **kwargs)
-    buffers = sorted(rm + pm, key=lambda x: -x["bp_pct"])
+    all_buffers = calculate_all_buffers(**kwargs)
+    buffers = sorted([b for b in all_buffers if b["mr_type"] == "Purchase"], key=lambda x: -x["bp_pct"])
     if filters and filters.get("zone"):
         buffers = [b for b in buffers if b["zone"] == filters["zone"]]
 
@@ -18,7 +17,8 @@ def execute(filters=None):
         {"fieldname":"rank","label":"#","fieldtype":"Int","width":50},
         {"fieldname":"item_code","label":"Material","fieldtype":"Link","options":"Item","width":140},
         {"fieldname":"item_name","label":"Name","fieldtype":"Data","width":170},
-        {"fieldname":"buffer_type","label":"Type","fieldtype":"Data","width":50},
+        {"fieldname":"stock_uom","label":"UOM","fieldtype":"Link","options":"UOM","width":60},
+        {"fieldname":"buffer_type","label":"Mode","fieldtype":"Data","width":90},
         {"fieldname":"target_buffer","label":"Target (F1)","fieldtype":"Float","width":90},
         {"fieldname":"on_hand","label":"On-Hand","fieldtype":"Float","width":80},
         {"fieldname":"on_order","label":"On-Order","fieldtype":"Float","width":80},
@@ -34,7 +34,7 @@ def execute(filters=None):
     for i, b in enumerate(buffers):
         freight = {"Green":"N/A","Yellow":"Standard","Red":"Express/Air","Black":"EMERGENCY"}
         data.append({"rank":i+1,"item_code":b["item_code"],"item_name":b["item_name"],
-            "buffer_type":b["buffer_type"],"target_buffer":b["target_buffer"],
+            "stock_uom":b.get("stock_uom",""),"buffer_type":b["buffer_type"],"target_buffer":b["target_buffer"],
             "on_hand":b["on_hand"],"on_order":b.get("wip_or_on_order",0),
             "committed":b.get("backorders_or_committed",0),"ip":b["inventory_position"],
             "bp_pct":b["bp_pct"],"zone":b["zone"],"po_qty":b["order_qty"],

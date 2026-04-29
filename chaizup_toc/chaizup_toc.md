@@ -53,7 +53,8 @@ chaizup_toc/
 ├── toc_engine/                     ← Core TOC business logic (pure Python, no Frappe UI)
 │   ├── buffer_calculator.py        ← F1-F5 + F6 + zone + BOM check + real-time alerts
 │   ├── dbm_engine.py               ← F7 TMR / F8 TMG auto-adjustment (runs weekly)
-│   └── mr_generator.py             ← Create Material Requests from buffer data
+│   ├── mr_generator.py             ← Create Material Requests from buffer data; min order qty floor
+│   └── component_mr_generator.py  ← Post-WO: BOM component shortage → Purchase MR creation
 │
 ├── overrides/                      ← Hooks into ERPNext DocType lifecycle events
 │   ├── item.py                     ← Item validate: ADU calc, T/CU, BOM check, mutual exclusion
@@ -89,7 +90,7 @@ chaizup_toc/
 │       └── toc_logo.png            ← App icon for Apps home screen
 │
 └── chaizup_toc/                    ← Frappe module folder (migrated artifacts)
-    ├── doctype/                    ← TOC Buffer Log, TOC Item Buffer, TOC Settings + child tables
+    ├── doctype/                    ← TOC Buffer Log, TOC Item Buffer, TOC Settings, Item Min Order Qty + child tables
     ├── page/                       ← toc-dashboard, kitting-report
     ├── report/                     ← 4 Script Reports
     └── workspace/                  ← TOC Buffer Management workspace
@@ -261,7 +262,25 @@ api/kitting_api.py (@whitelist endpoints)
 
 ---
 
-## Bug Inventory — All Known Bugs (17 Total, All Fixed)
+## Frappe HTML Template Critical Rule
+
+All pages use `frappe.render_template("page_name", {})` which caches the HTML inside a
+single-quoted JS string:
+```
+frappe.templates["page_name"] = '...HTML...'
+```
+**Any raw single quote `'` inside an onclick/oninput attribute causes SyntaxError.**
+This crashed the entire `toc-item-settings` page on 2026-04-26.
+
+Rule: always use `&quot;` for string arguments in HTML event handlers:
+- ✅ `onclick="tisApp.switchTab(&quot;enable&quot;, this)"`
+- ❌ `onclick="tisApp.switchTab('enable', this)"`
+
+After any `.html` template change: `redis-cli -h redis-cache -p 6379 FLUSHALL`
+
+---
+
+## Bug Inventory — All Known Bugs (18 Total, All Fixed)
 
 | ID | Severity | Location | Description |
 |----|----------|----------|-------------|
@@ -280,8 +299,10 @@ api/kitting_api.py (@whitelist endpoints)
 | BUG-013 | Medium | `api/kitting_api.py` — `_component_stage` + `_open_mrs_for_item` | Both MR queries used `mr.docstatus = 1` (Submitted). All TOC auto-MRs are Draft (docstatus=0) — they were invisible in kitting stage and drill-down. **Fixed**: changed to `mr.docstatus < 2` in both functions. |
 | BUG-014 | Medium | `tasks/daily_tasks.py` — `daily_buffer_snapshot` | Inner exception handler had a bare `pass` — any per-item snapshot failure (e.g. missing warehouse field) was silently swallowed with no Error Log entry. **Fixed**: replaced with `frappe.log_error(...)`. |
 | BUG-015 | Medium | `api/toc_api.py` — `apply_global_daf` | Used `frappe.db.set_value("TOC Settings", "TOC Settings", {...})` to update the Singleton — this is incorrect API for Singleton DocTypes and does not update `singles` table correctly. **Fixed**: replaced with `frappe.db.set_single_value()` calls. |
-| BUG-016 | Medium | `toc_engine/buffer_calculator.py` — `_calculate_single` | BOM availability check gated on `btype == "FG"` only — SFG items with a linked BOM never populated `sfg_status` in the priority board output. **Fixed**: condition changed to `btype in ("FG", "SFG")`. |
+| BUG-016 | Medium | `toc_engine/buffer_calculator.py` — `_calculate_single` 
+|
 | BUG-017 | Low | `hooks.py` — `scheduler_events` | `daily_buffer_snapshot` (08:00 AM daily) and `weekly_dbm_check` (08:00 AM Sunday) fired simultaneously on Sundays. DBM reads from today's Buffer Log — if snapshot hadn't fully committed, DBM could miss entries. **Fixed**: DBM cron moved to `"0 9 * * 0"` (09:00 AM Sunday). |
+| BUG-018 | **CRITICAL** | `toc_item_settings.html` — modal tab buttons | Raw single quotes in `onclick="tisApp.switchTab('enable', this)"` broke Frappe template caching. Frappe wraps HTML templates in a single-quoted JS string — any `'` inside the attribute value terminates the string, causing `SyntaxError: Unexpected identifier 'enable'`. **Fixed** 2026-04-26: replaced all `'value'` with `&quot;value&quot;` in onclick handlers. Same rule applied to `toc_user_guide.html` nav links. |
 
 ---
 
@@ -294,9 +315,8 @@ New site setup order:
 2. bench --site site install-app chaizup_toc      # triggers after_install
 3. Open TOC Settings → configure:
      a. Warehouse Rules (Inventory/WIP/Excluded)
-     b. Item Group Rules (FG/SFG/RM/PM)
-     c. Zone Thresholds (default 67/33 is fine)
-     d. MR Generation settings
+     b. Zone Thresholds (default 67/33 is fine)
+     c. MR Generation settings
 4. Enable custom_toc_enabled=1 on 2-3 test items
 5. Set ADU/RLT/VF on their TOC Item Buffer rules
 6. Run: bench --site site execute chaizup_toc.tasks.daily_tasks.daily_adu_update
@@ -305,4 +325,84 @@ New site setup order:
 9. Verify Material Requests were created for Red/Black/Yellow items
 10. Enable remaining items after verification
 11. Wait 30 days, then enable DBM (enable_dbm = 1 in TOC Settings)
+12. Configure Min Order Qty (optional): on each purchased item → TOC tab → "Min Order Qty Rules"
+    → add rows per warehouse with warehouse, uom, min_order_qty
+    → stock_uom / conversion_factor / stock_uom_qty auto-populate on save
+```
+
+---
+
+## Sync Block — Session 2026-04-27 (Component Shortage MRs + Min Order Qty)
+
+### New: `Item Min Order Qty` Child Table
+
+**DocType**: `Item Min Order Qty` (istable=1, module=Chaizup Toc)
+**Location**: `chaizup_toc/doctype/item_min_order_qty/`
+**Custom field on Item**: `custom_min_order_qty` (Table), insert after `custom_toc_buffer_rules`
+
+| Field | User Input | Auto-populated |
+|---|---|---|
+| `warehouse` | Yes | No |
+| `uom` | Yes | No |
+| `min_order_qty` | Yes | No |
+| `stock_uom` | No | From Item.stock_uom |
+| `conversion_factor` | No | From UOM Conversion Detail |
+| `stock_uom_qty` | No | `min_order_qty × conversion_factor` |
+
+**Min order floor rule** (applied in two places):
+```
+order_qty = max(shortage_in_stock_uom, min_order_qty_in_stock_uom)
+```
+
+### New: `component_mr_generator.py`
+
+**Location**: `chaizup_toc/toc_engine/component_mr_generator.py`
+**Called as**: Step 7 in `production_plan_engine._submit_pp_and_create_work_orders()`
+**Controlled by**: `TOC Settings.auto_create_component_mrs` (default ON)
+
+**Flow**: After WOs are created from a PP:
+1. Aggregate all WO Item net_required across all BOM levels (all WOs of the PP)
+2. Filter to `custom_toc_auto_purchase = 1` items
+3. Compare against Bin.actual_qty to find shortages
+4. Apply min order qty floor from `Item Min Order Qty`
+5. Dedup: skip if open Purchase MR exists for item+warehouse
+6. Create one Purchase MR per item+warehouse (in purchase_uom with conversion)
+
+### Min Order Qty Floor Applied to Buffer MRs
+
+`mr_generator.generate_material_requests()` now calls `build_min_order_map()` for all purchase-mode actionable items and applies `order_qty = max(buffer_order_qty, min_order_qty)` before calling `_create_mr()`.
+
+### TOC Settings New Field
+
+`auto_create_component_mrs` (Check, default ON) — controls Step 7.
+
+### Fixtures
+
+`custom_field.json` now has 53 fields (added `custom_min_order_qty_section` + `custom_min_order_qty` on Item).
+
+### Deployment Note
+
+After deploy, if custom fields are not created by `bench migrate`:
+```python
+# bench console
+doc1 = frappe.get_doc({
+    "doctype": "Custom Field", "dt": "Item",
+    "fieldname": "custom_min_order_qty_section",
+    "fieldtype": "Section Break",
+    "insert_after": "custom_toc_buffer_rules",
+    "label": "6. Min Order Qty (Purchase / Production)",
+    "module": "Chaizup Toc"
+})
+doc1.insert(ignore_permissions=True)
+doc2 = frappe.get_doc({
+    "doctype": "Custom Field", "dt": "Item",
+    "fieldname": "custom_min_order_qty",
+    "fieldtype": "Table",
+    "insert_after": "custom_min_order_qty_section",
+    "label": "Min Order Qty Rules [TOC App]",
+    "module": "Chaizup Toc",
+    "options": "Item Min Order Qty"
+})
+doc2.insert(ignore_permissions=True)
+frappe.db.commit()
 ```

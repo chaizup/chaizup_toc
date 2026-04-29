@@ -35,7 +35,7 @@ toc_dashboard/
 ┌──────────────────────────────────────────────────────────────────┐
 │ [Header: "TOC Dashboard"] [Refresh] [Menu: Settings/Reports]     │
 ├──────────────────────────────────────────────────────────────────┤
-│ [Filters: Buffer Type | Zone | Company]                          │
+│ [Filters: Replenishment Mode | Zone | Company]                   │
 ├────────────────────────────────────┬─────────────────────────────┤
 │ Summary Cards:                     │ Donut Chart (SVG)            │
 │ 🔴 Red: 3  🟡 Yellow: 5           │ [Red | Yellow | Green | Black]│
@@ -102,12 +102,12 @@ Client-side filtering — no server call on filter change:
 
 ```javascript
 applyFilter() {
-    const type = this.page.fields_dict.buffer_type.get_value();
-    const zone = this.page.fields_dict.zone.get_value();
+    const bt = this.page.fields_dict.buffer_type.get_value();  // fieldname stays "buffer_type"
+    const zf = this.page.fields_dict.zone_filter.get_value();
     
     this.filteredData = this.allData.filter(r =>
-        (!type || r.buffer_type === type) &&
-        (!zone || r.zone === zone)
+        (!bt || bt === "All" || r.mr_type === bt) &&   // compares against r.mr_type
+        (!zf || zf === "All" || r.zone === zf)
     );
     
     this._renderPriorityTable(this.filteredData);
@@ -115,7 +115,9 @@ applyFilter() {
 }
 ```
 
-Company filter triggers `this.load()` (new API call) while buffer_type/zone filter only calls `applyFilter()` (client-side).
+Filter field label: "Replenishment Mode". Options: All / Manufacture / Purchase / Monitor.
+The fieldname stays `buffer_type` (internal key for `page.fields_dict`).
+Company filter triggers `this.load()` (new API call); mode/zone filter only calls `applyFilter()` (client-side).
 
 ### `_renderPriorityTable(data)`
 
@@ -139,32 +141,35 @@ Renders `<tbody id="toc-tbody">` rows. Key columns:
 ```javascript
 const canTrigger = frappe.user.has_role(["System Manager", "Stock Manager", "TOC Manager"]);
 
-if (canTrigger && ["Red", "Black"].includes(r.zone)) {
+if (canTrigger) {
     actionHtml = `<button onclick="dash._openMR('${r.item_code}', '${r.warehouse}', 
-                   '${r.buffer_type}', ${r.order_qty})">Action Now</button>`;
+                   '${r.mr_type||"Purchase"}', ${r.order_qty})">Action Now</button>`;
 } else {
-    actionHtml = `<span class="toc-zone-${r.zone.toLowerCase()}">${r.zone_action}</span>`;
+    actionHtml = `<span style="color:#9ca3af">${r.zone_action}</span>`;
 }
 ```
 
 Users without `Stock Manager`/`TOC Manager`/`System Manager` see the action text — not the button.
+The argument passed is `r.mr_type` ("Manufacture" | "Purchase") — NOT `r.buffer_type`.
 
-### `_openMR(itemCode, warehouse, bufferType, qty)`
+### `_openMR(itemCode, warehouse, mrType, qty)`
 
-Creates Material Requests for **all** Red/Yellow items of the given buffer type — NOT just the clicked item.
+Runs replenishment for **all** Red/Yellow items of the given mode — NOT just the clicked item.
 
 ```javascript
-_openMR(itemCode, warehouse, bufferType, qty) {
+_openMR(itemCode, warehouse, mrType, qty) {
+    // mrType = "Manufacture" | "Purchase" — from r.mr_type in the data row
+    const modeLabel = mrType === "Manufacture" ? "Production Plans" : "Material Requests";
     frappe.confirm(
-        `This will generate MRs for <b>ALL</b> Red/Yellow <b>${bufferType}</b> items —
-         not just ${itemCode}. The system generates one MR per item automatically.
-         Continue?`,
+        `Run ${mrType} replenishment for all Red/Black/Yellow ${mrType}-mode items?
+         Triggered by: ${itemCode} (Deficit: ${qty})
+         Creates ${modeLabel} for ALL Red/Black/Yellow ${mrType}-mode items — not just this one.`,
         () => {
             frappe.call({
                 method: "chaizup_toc.api.toc_api.trigger_manual_run",
-                args: { buffer_type: bufferType, zone_filter: JSON.stringify(["Red", "Black", "Yellow"]) },
+                args: { zone_filter: JSON.stringify(["Red", "Black", "Yellow"]) },
                 callback(r) {
-                    frappe.show_alert(`${r.message.created} Material Requests created`);
+                    frappe.show_alert(`${r.message.created} replenishment document(s) created`);
                 }
             });
         }
@@ -172,7 +177,7 @@ _openMR(itemCode, warehouse, bufferType, qty) {
 }
 ```
 
-The confirm dialog explicitly states the scope — prevents user confusion about what gets created.
+`buffer_type` arg removed from `trigger_manual_run` call — routing is now determined per-item by `auto_manufacture`/`auto_purchase` flags, not by a mode filter passed at runtime.
 
 ### `_renderZoneChart(data)`
 
@@ -259,3 +264,8 @@ Dialog said "Create MR for [item]" but actually created MRs for ALL Red/Yellow i
 
 ### BUG-003: "On Hand" Column Showed IP (Inventory Position)
 Column header said "On-Hand" but value was `inventory_position` (the F2 result, which includes WIP and subtracts backorders). **Fixed**: column now reads `r.on_hand` (raw physical stock from Bin.actual_qty). Header updated to "On-Hand".
+
+### BUG-004: `TypeError: calculate_all_buffers() got an unexpected keyword argument 'buffer_type'`
+`toc_api.get_priority_board` was passing `buffer_type=buffer_type` to `calculate_all_buffers()` after the buffer_type refactor (2026-04-27) removed that parameter. Also: dashboard JS "Buffer Type" filter had options FG/RM/PM/SFG which never matched data (data now returns "Manufacture"/"Purchase"/"Monitor"). **Fixed (2026-04-27)**:
+- `toc_api.py`: removed `buffer_type=` from `calculate_all_buffers()` call in `get_priority_board`.
+- `toc_dashboard.js`: filter label → "Replenishment Mode", options → All/Manufacture/Purchase/Monitor. `applyFilter()` now compares `r.mr_type`. `_openMR()` arg changed from `r.buffer_type||"FG"` → `r.mr_type||"Purchase"`. `isFG` logic replaced with direct mrType usage.

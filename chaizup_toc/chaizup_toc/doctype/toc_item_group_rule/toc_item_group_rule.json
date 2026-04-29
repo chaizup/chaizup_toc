@@ -21,13 +21,13 @@
     {
       "fieldname": "buffer_type",
       "fieldtype": "Select",
-      "label": "Buffer Type",
-      "options": "\nFG\nSFG\nRM\nPM",
+      "label": "Replenishment Mode (Legacy)",
+      "options": "\nManufacture\nPurchase\nMonitor",
       "reqd": 1,
       "in_list_view": 1,
       "columns": 2,
       "bold": 1,
-      "description": "FG = Finished Goods (manufactured, sold). SFG = Semi-Finished Goods (intermediates). RM = Raw Materials (purchased). PM = Packaging Materials (purchased)."
+      "description": "LEGACY: This DocType is no longer used for buffer routing. Routing is now derived from Item.custom_toc_auto_manufacture / custom_toc_auto_purchase flags. Manufacture = produce via Work Order. Purchase = buy from supplier. Monitor = tracked only."
     },
     {
       "fieldname": "include_sub_groups",

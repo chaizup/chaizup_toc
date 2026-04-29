@@ -8,15 +8,18 @@
   "section_break_njr7",
   "amended_from",
   "projection_month",
+  "source_warehouse",
   "column_break_cnfa",
   "projection_year",
+  "last_auto_run",
   "projected_item_stable_section",
   "table_mibv"
  ],
  "fields": [
   {
    "fieldname": "section_break_njr7",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Projection Details"
   },
   {
    "fieldname": "amended_from",
@@ -29,35 +32,62 @@
    "search_index": 1
   },
   {
+   "description": "Select the calendar month this projection applies to. Only one projection is allowed per month + year + warehouse combination.",
    "fieldname": "projection_month",
    "fieldtype": "Select",
-   "label": "Projection Month"
+   "in_list_view": 1,
+   "label": "Projection Month",
+   "options": "January\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember",
+   "reqd": 1
   },
   {
    "fieldname": "column_break_cnfa",
    "fieldtype": "Column Break"
   },
   {
+   "description": "Enter the 4-digit year this projection applies to (e.g., 2026). Only one projection is allowed per month + year + warehouse combination.",
    "fieldname": "projection_year",
    "fieldtype": "Int",
-   "label": "Projection Year"
+   "in_list_view": 1,
+   "label": "Projection Year",
+   "reqd": 1
+  },
+  {
+   "description": "Timestamp of the last time the Projection Automation engine ran for this document (daily 02:00 AM job or manual trigger). If blank, the engine has not yet run for this projection.",
+   "fieldname": "last_auto_run",
+   "fieldtype": "Datetime",
+   "label": "Last Automation Run",
+   "read_only": 1
   },
   {
    "fieldname": "projected_item_stable_section",
    "fieldtype": "Section Break",
-   "label": "Projected Item sTable"
+   "label": "Projected Items"
   },
   {
+   "description": "Add each item the production team should target for this month. Duplicate items are not allowed. Each item\u2019s projected quantity is expressed in both the selected UOM and the item\u2019s base stock UOM.",
    "fieldname": "table_mibv",
    "fieldtype": "Table",
-   "options": "Sales Projected Items"
+   "label": "Projected Items",
+   "options": "Sales Projected Items",
+   "reqd": 1
+  },
+  {
+   "description": "Warehouse this projection is scoped to. Combined with month + year, this must be unique — the same warehouse cannot have two non-cancelled projections for the same period. The Production Plan Automation also uses this as the target warehouse when creating Production Plans.",
+   "fieldname": "source_warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Source Warehouse",
+   "options": "Warehouse",
+   "reqd": 1,
+   "search_index": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-04-16 10:32:10.460264",
+ "modified": "2026-04-22 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Chaizup Toc",
  "name": "Sales Projection",

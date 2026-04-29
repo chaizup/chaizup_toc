@@ -1,3 +1,27 @@
+// =============================================================================
+// CONTEXT: TOC Dashboard — live buffer priority board. Auto-refreshes every 5 min.
+//   Two API calls on load: get_buffer_summary (zone counts) + get_priority_board
+//   (full sorted buffer list). Filtering is client-side (no extra API call).
+// MEMORY: app_chaizup_toc.md § TOC Item Settings Page | toc_dashboard.md
+// INSTRUCTIONS:
+//   - load(): fires both API calls in parallel. Company filter triggers reload.
+//   - applyFilter(): client-side only. Filters by r.mr_type (Manufacture/Purchase/Monitor)
+//     and r.zone. Never passes filter values to the API.
+//   - _openMR(): runs trigger_manual_run for ALL items in zone — not just clicked one.
+//     mrType arg = r.mr_type ("Manufacture" | "Purchase") from buffer_calculator result.
+// DANGER ZONE:
+//   - Filter fieldname must stay "buffer_type" — Frappe page.fields_dict keyed by it.
+//     Label shows "Replenishment Mode" to users but code still references fields_dict.buffer_type.
+//   - applyFilter uses r.mr_type (not r.buffer_type) for matching — both equal in the
+//     data dict but mr_type is the canonical name post-refactor.
+//   - _openMR() confirm dialog scope warning is intentional — do not narrow it to single item.
+// RESTRICT:
+//   - Do NOT change fieldname "buffer_type" to "replenishment_mode" — page.fields_dict
+//     key must match the registered fieldname.
+//   - Do NOT pass buffer_type to get_priority_board API — calculate_all_buffers() no
+//     longer accepts that param (TypeError). Filter is client-side only.
+// =============================================================================
+
 /**
  * toc_dashboard.js — Frappe Desk Page Controller
  * Modern Minimalist Design · Frappe Native Patterns
@@ -21,6 +45,8 @@ frappe.pages["toc-dashboard"].on_page_load = function (wrapper) {
     frappe.set_route("kitting-report"));
   page.add_menu_item(__("TOC Settings"), () =>
     frappe.set_route("Form", "TOC Settings", "TOC Settings"));
+  page.add_menu_item(__("Bulk Item Settings"), () =>
+    frappe.set_route("toc-item-settings"));
   page.add_menu_item(__("Production Priority Board"), () =>
     frappe.set_route("query-report", "Production Priority Board"));
   page.add_menu_item(__("Procurement Action List"), () =>
@@ -93,8 +119,8 @@ frappe.pages["toc-dashboard"].on_page_load = function (wrapper) {
 
   // ── Filter bar ──
   page.add_field({
-    label: __("Buffer Type"), fieldname: "buffer_type", fieldtype: "Select",
-    options: ["All", "FG", "RM", "PM", "SFG"].join("\n"), default: "All",
+    label: __("Replenishment Mode"), fieldname: "buffer_type", fieldtype: "Select",
+    options: ["All", "Manufacture", "Purchase", "Monitor"].join("\n"), default: "All",
     change() { dash.applyFilter(); },
   });
   page.add_field({
@@ -164,7 +190,7 @@ class TOCDashboard {
     const zf = this.page.fields_dict.zone_filter.get_value();
 
     this.filteredData = this.allData.filter((r) => {
-      const btOk = !bt || bt === "All" || r.buffer_type === bt;
+      const btOk = !bt || bt === "All" || r.mr_type === bt;
       const zOk  = !zf || zf === "All" || r.zone === zf;
       return btOk && zOk;
     });
@@ -215,7 +241,7 @@ class TOCDashboard {
 
       const actionBtn = canTrigger
         ? `<button class="toc-btn-mr ${isRed?"toc-btn-urgent":""}"
-            onclick="dash._openMR('${r.item_code}','${r.warehouse||""}','${r.buffer_type||"FG"}',${Math.max(0,(r.target_buffer||0)-(r.inventory_position||0))})">
+            onclick="dash._openMR('${r.item_code}','${r.warehouse||""}','${r.mr_type||"Purchase"}',${Math.max(0,(r.target_buffer||0)-(r.inventory_position||0))})">
             ${isRed ? "Action Now" : "Plan"}
           </button>`
         : `<span style="color:#9ca3af;font-size:11px">${isRed ? "🔴 Urgent" : zone}</span>`;
@@ -224,7 +250,7 @@ class TOCDashboard {
         <td><span style="color:#9ca3af;font-size:12px;font-weight:600">${i+1}</span></td>
         <td>
           <a href="/app/item/${encodeURIComponent(r.item_code)}" class="toc-item-link">${r.item_name || r.item_code}</a>
-          <div class="toc-item-sub">${r.item_code} · ${r.warehouse||""} · ${r.buffer_type||""}</div>
+          <div class="toc-item-sub">${r.item_code} · ${r.warehouse||""} · ${r.mr_type||""}</div>
         </td>
         <td class="toc-num">${tgt}</td>
         <td class="toc-num" style="font-weight:600">${oh}</td>
@@ -286,25 +312,24 @@ class TOCDashboard {
       </div>`;
   }
 
-  _openMR(itemCode, warehouse, bufferType, qty) {
-    const isFG = bufferType === "FG" || bufferType === "SFG";
-    const mrType = isFG ? "Manufacture" : "Purchase";
+  _openMR(itemCode, warehouse, mrType, qty) {
+    // mrType is "Manufacture" | "Purchase" | "Monitor" — passed from r.mr_type
+    const modeLabel = mrType === "Manufacture" ? "Production Plans" : "Material Requests";
 
     frappe.confirm(
-      `Run <b>${mrType}</b> Material Request generation for all <b>${bufferType}</b> items?<br><br>
+      `Run <b>${mrType}</b> replenishment for all Red/Black/Yellow <b>${mrType}</b>-mode items?<br><br>
        <span style="color:#6b7280;font-size:13px">Triggered by:</span> <b>${itemCode}</b>
        (Deficit: ${this._fmt(qty)})<br>
-       <span style="color:#6b7280;font-size:13px">Note:</span>
-       <span style="color:#6b7280;font-size:12px">This generates MRs for <b>all</b>
-       Red/Black/Yellow ${bufferType} items — not just this one.</span>`,
+       <span style="color:#6b7280;font-size:12px;color:#6b7280">Creates ${modeLabel} for <b>all</b>
+       Red/Black/Yellow ${mrType}-mode items — not just this one.</span>`,
       () => {
         frappe.call({
           method: "chaizup_toc.api.toc_api.trigger_manual_run",
-          args: { buffer_type: bufferType, zone_filter: JSON.stringify(["Red","Black","Yellow"]) },
+          args: { zone_filter: JSON.stringify(["Red","Black","Yellow"]) },
           callback(r) {
             if (r.message && r.message.status === "success") {
               frappe.show_alert({
-                message: `Created ${r.message.created} Material Request(s)`,
+                message: `Created ${r.message.created} replenishment document(s)`,
                 indicator: "green",
               });
               dash.load();

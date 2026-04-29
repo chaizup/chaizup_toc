@@ -1,11 +1,31 @@
 # page/ — Frappe Desk Pages
 
-Two custom Frappe Desk Pages that provide interactive operational interfaces beyond what Script Reports can offer.
+Six custom Frappe Desk Pages providing interactive operational interfaces beyond what Script Reports offer.
 
 ```
 page/
-├── toc_dashboard/     ← Live buffer priority dashboard (auto-refreshing)
-└── kitting_report/    ← Full kitting readiness board (demand + supply + BOM)
+├── toc_dashboard/        ← Live buffer priority dashboard (auto-refreshing)
+├── toc_item_settings/    ← Bulk TOC configuration per item (added 2026-04-26)
+├── toc_user_guide/       ← Self-contained tutorial — all formulas, logic, triggers (added 2026-04-26)
+├── kitting_report/       ← Full kitting readiness board (demand + supply + BOM)
+├── supply_chain_tracker/ ← 7-stage supply chain Kanban pipeline
+└── wo_kitting_planner/   ← Work Order kitting planner (7 tabs, WKP-001..033)
+```
+
+## Critical HTML Template Rule (affects ALL pages)
+
+Frappe caches HTML templates inside a single-quoted JS string:
+```javascript
+frappe.templates["page_name"] = '...your HTML...'
+```
+**Any raw single quote `'` inside an onclick/oninput attribute value WILL BREAK THE PAGE**
+with `SyntaxError: Unexpected identifier`. Always use `&quot;` for string arguments in event handlers:
+- ✅ `onclick="fn(&quot;value&quot;)"`
+- ❌ `onclick="fn('value')"` — breaks Frappe template caching
+
+This caused the 2026-04-26 `toc-item-settings` outage. After any `.html` change:
+```
+redis-cli -h redis-cache -p 6379 FLUSHALL
 ```
 
 ---
@@ -47,6 +67,30 @@ Route: `/app/toc-dashboard`
 **Who uses it**: Anyone who needs a live status view — production floor screen, management dashboard, operations meeting.
 
 Full documentation: `toc_dashboard/toc_dashboard.md`
+
+---
+
+### toc_item_settings — Bulk TOC Configuration
+
+Route: `/app/toc-item-settings` · Added: 2026-04-26
+
+**Purpose**: Bulk item configuration dashboard. Filter items by TOC status, buffer type, and item group. Click any row → modal with all TOC fields (5 tabs: Enable/Mode, ADU, T/CU, BOM, Buffer Rules) + rich help panel with formula explanations and importance levels. Replaces editing each item individually in Item Master.
+
+**Key UX**: Modal is scoped to one item at a time. Save fires `on_item_validate` via `item.save()` — auto-resolves buffer_type, validates mutual exclusion.
+
+Full documentation: `toc_item_settings/toc_item_settings.md`
+
+---
+
+### toc_user_guide — User Guide
+
+Route: `/app/toc-user-guide` · Added: 2026-04-26
+
+**Purpose**: Self-contained HTML+CSS+JS tutorial covering all 13 topics: Overview, Quick Start, Formulas F1–F8 (with live calculators), Buffer Types, Zone System, Daily Schedule, Sales Projection Automation, DBM, Real-Time Alerts, TOC Settings Reference, Item Fields Reference, Trigger Map, Troubleshooting.
+
+**Design**: Static page — zero API calls. All content inline. Navigation sidebar with scroll-spy. Sticky layout with search filter. Intended as always-open reference during configuration.
+
+Full documentation: `toc_user_guide/toc_user_guide.md`
 
 ---
 

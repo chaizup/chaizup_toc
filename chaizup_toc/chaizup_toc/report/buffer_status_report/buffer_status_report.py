@@ -23,8 +23,9 @@ def get_columns():
         {"fieldname": "log_date", "label": _("Date"), "fieldtype": "Date", "width": 100},
         {"fieldname": "item_code", "label": _("Item"), "fieldtype": "Link", "options": "Item", "width": 140},
         {"fieldname": "item_name", "label": _("Item Name"), "fieldtype": "Data", "width": 160},
+        {"fieldname": "stock_uom", "label": _("UOM"), "fieldtype": "Link", "options": "UOM", "width": 60},
         {"fieldname": "warehouse", "label": _("Warehouse"), "fieldtype": "Link", "options": "Warehouse", "width": 140},
-        {"fieldname": "buffer_type", "label": _("Type"), "fieldtype": "Data", "width": 60},
+        {"fieldname": "buffer_type", "label": _("Mode"), "fieldtype": "Data", "width": 90},
         {"fieldname": "target_buffer", "label": _("Target<br><small>F1</small>"), "fieldtype": "Float", "width": 90},
         {"fieldname": "on_hand_qty", "label": _("On-Hand"), "fieldtype": "Float", "width": 80},
         {"fieldname": "wip_qty", "label": _("WIP"), "fieldtype": "Float", "width": 80},
@@ -59,7 +60,7 @@ def get_data(filters):
 
     return frappe.db.sql(f"""
         SELECT tbl.log_date, tbl.item_code,
-            i.item_name,
+            i.item_name, i.stock_uom,
             tbl.warehouse, tbl.buffer_type, tbl.target_buffer,
             tbl.on_hand_qty, tbl.wip_qty, tbl.inventory_position,
             tbl.buffer_penetration_pct, tbl.zone,

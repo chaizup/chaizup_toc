@@ -1,0 +1,85 @@
+{
+ "actions": [],
+ "creation": "2026-04-23 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_code",
+  "item_name",
+  "warehouse",
+  "min_manufacturing_qty",
+  "uom"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "description": "Item this minimum manufacturing rule applies to. The automation uses this to look up the per-item per-warehouse floor quantity.",
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "label": "Item Code",
+   "not_nullable": 1,
+   "options": "Item",
+   "reqd": 1,
+   "sticky": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "item_code.item_name",
+   "fetch_if_empty": 1,
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "description": "Warehouse whose stock is checked. Automation creates a Production Plan when stock in this warehouse falls below the projected threshold.",
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "description": "If the calculated shortage is less than this value, the Production Plan qty is raised to this minimum to avoid under-utilising production machines.",
+   "fieldname": "min_manufacturing_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Min Manufacturing Qty",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "description": "UOM for Min Manufacturing Qty. The automation converts this to the item's Stock UOM before comparing with the shortage quantity.",
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "UOM",
+   "options": "UOM",
+   "reqd": 1
+  }
+ ],
+ "grid_page_length": 20,
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-23 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Chaizup Toc",
+ "name": "SP Minimum Manufacture",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

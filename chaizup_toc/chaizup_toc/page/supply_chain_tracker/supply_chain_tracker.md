@@ -83,7 +83,7 @@ TOC buffer breakdown (F1, F2, F3, F4 formulas).
 **Improved visual feedback**: Selected cards have a subtle brand glow.
 
 ### Filter Bar
-- **Buffer Type** (All / FG / SFG / RM / PM): Re-fetches from API with
+- **Replenishment Mode** (All / Manufacture / Purchase / Monitor): Re-fetches from API with
   `buffer_type` parameter. Triggers a full reload.
 - **Zone** (All / Red / Yellow / Green / Black): In-memory filter.
   Shows only item nodes matching the zone and all documents reachable from them.
@@ -109,7 +109,7 @@ chaizup_toc.api.pipeline_api.get_pipeline_data
 
 **Arguments:**
 - `item_code`  — filter to one item (optional)
-- `buffer_type` — "FG" | "SFG" | "RM" | "PM" | None
+- `buffer_type` — "Manufacture" | "Purchase" | "Monitor" | None
 - `zone`       — "Red" | "Yellow" | "Green" | "Black" | None
 - `days_back`  — how many days back to look (default 30)
 

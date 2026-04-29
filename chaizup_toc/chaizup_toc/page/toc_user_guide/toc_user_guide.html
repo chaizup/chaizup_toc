@@ -1,0 +1,1529 @@
+<!-- =============================================================================
+  CONTEXT: TOC User Guide — Frappe HTML template fragment.
+    Mounted by toc_user_guide.js via frappe.render_template("toc_user_guide", {}).
+    Self-contained: all CSS and JS are inline. No external API calls.
+    This file IS the user-facing tutorial for the entire chaizup_toc application.
+
+  MEMORY:
+    Tiger Theme: DM Sans body, Oswald headers, Geist Mono code, slate tokens.
+    Zone colors: Red=#ef4444, Yellow=#f59e0b, Green=#10b981, Black=#475569.
+    Formulas: F1 Target=ADU×RLT×VF, F2a IP=OnHand+WIP-Backorders,
+              F2b IP=OnHand+OnOrder-Committed, F3 BP%=(Target-IP)/Target×100,
+              F4 OrderQty=Target-IP, F5 T/CU=(Price-TVC)×Speed,
+              F6 Adjusted=Target×DAF, F7 TMR=Target×(1+adj%), F8 TMG=Target×(1-adj%).
+
+  INSTRUCTIONS:
+    When any chaizup_toc logic changes (formula, schedule, DocType, trigger):
+      1. Find the relevant section in this file.
+      2. Update the content AND the inline calculator if applicable.
+      3. Update the Trigger Map table (section #s12) if doc_events or scheduler changed.
+    Sections are identified by id="s00" through id="s13".
+    Calculators use inputs with class "tug-calc-in" — keep input IDs stable.
+
+  DANGER:
+    - Do NOT add frappe.call() — this page is 100% static.
+    - Do NOT add <!DOCTYPE>, <html>, <head>, or <body> tags — Frappe template fragment.
+    - Do NOT use single quotes inside any HTML attribute string values — Frappe wraps
+      templates in JS single-quoted strings; a raw apostrophe causes SyntaxError.
+      Use &apos; for possessives and double-quote attribute values always.
+    - NEVER write CSS like width:40%} — the %} sequence is the Frappe microtemplate
+      end-of-block marker. Always write width:40%;} (trailing semicolon before }).
+      Any CSS percentage value directly followed by } breaks template compilation.
+
+  RESTRICT:
+    - Section IDs s00–s13 are used by nav links — do not rename without updating nav.
+    - Calculator input IDs (tug-f1-adu, tug-f1-rlt, etc.) must remain stable.
+    - Font stack uses Frappe-loaded fonts — do not add @import for external fonts.
+    - Color variables --tug-* are local to this file; do not reference --tis-* from
+      toc_item_settings unless those variables happen to be on the same page.
+============================================================================= -->
+
+<style>
+/* ── Reset & Tokens ─────────────────────────────────────────────── */
+.tug-root *{box-sizing:border-box;margin:0;padding:0}
+.tug-root{
+  --tug-bg: var(--bg-color, #f8fafc);
+  --tug-surface: var(--card-bg, #ffffff);
+  --tug-border: var(--border-color, #e2e8f0);
+  --tug-text: var(--text-color, #1e293b);
+  --tug-muted: var(--text-muted, #64748b);
+  --tug-accent: var(--primary-color, #2563eb);
+  --tug-red: #ef4444;
+  --tug-yellow: #f59e0b;
+  --tug-green: #10b981;
+  --tug-black: #475569;
+  --tug-navy: var(--heading-color, #1e3a5f);
+  --tug-radius: 8px;
+  --tug-shadow: var(--card-shadow, 0 1px 3px rgba(0,0,0,0.08));
+  --tug-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --tug-nav-bg: var(--control-bg, #f0f6ff);
+  
+  font-family: var(--font-stack);
+  font-size: var(--text-md, 14px);
+  color: var(--tug-text);
+  background: var(--tug-bg);
+  display: flex;
+  min-height: calc(100vh - 60px);
+  padding: 20px;
+  gap: 24px;
+}
+
+/* ── Mobile Sidebar Toggle ───────────────────────────────────────── */
+.tug-mobile-toggle{
+  display: none;
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1001;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: var(--tug-accent);
+  color: #fff;
+  border: none;
+  box-shadow: var(--tug-shadow-md);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.tug-sidebar{
+  width: 260px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 20px;
+  align-self: flex-start;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  background: var(--tug-surface);
+  border: 1px solid var(--tug-border);
+  border-radius: var(--tug-radius);
+  padding: 12px 0;
+  box-shadow: var(--tug-shadow);
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  z-index: 1000;
+}
+.tug-content{flex:1;min-width:0;display:flex;flex-direction:column;gap:32px}
+
+/* ── Sidebar nav ────────────────────────────────────────────────── */
+.tug-nav-label{
+  font-size: 11px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--tug-muted);
+  padding: 12px 16px 6px; margin-top: 4px;
+}
+.tug-nav-item{
+  display: block; padding: 10px 16px; font-size: 13px;
+  color: var(--tug-text); cursor: pointer; border-left: 3px solid transparent;
+  text-decoration: none; transition: all .2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tug-nav-item:hover{color: var(--tug-accent); background: var(--tug-nav-bg)}
+.tug-nav-item.active{color: var(--tug-accent); border-left-color: var(--tug-accent); background: var(--tug-nav-bg); font-weight: 600}
+.tug-search-wrap{padding: 8px 12px 12px; border-bottom: 1px solid var(--tug-border); margin-bottom: 8px;}
+.tug-search{
+  width: 100%; padding: 8px 12px; border: 1px solid var(--tug-border);
+  border-radius: 6px; font-size: 13px; outline: none; background: var(--tug-bg); color: var(--tug-text);
+}
+.tug-search:focus{border-color: var(--tug-accent); box-shadow: 0 0 0 2px var(--tug-nav-bg)}
+
+/* ── Section cards ──────────────────────────────────────────────── */
+.tug-section{
+  background: var(--tug-surface); border: 1px solid var(--tug-border);
+  border-radius: var(--tug-radius); padding: 32px; box-shadow: var(--tug-shadow);
+  scroll-margin-top: 20px;
+}
+.tug-section-head{
+  display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
+  padding-bottom: 16px; border-bottom: 1px solid var(--tug-border);
+}
+.tug-section-icon{font-size: 24px; line-height: 1}
+.tug-section-title{
+  font-size: 20px; font-weight: 700; color: var(--tug-navy); letter-spacing: -0.01em;
+}
+.tug-section-num{
+  margin-left: auto; font-size: 11px; font-weight: 700; color: var(--tug-muted);
+  background: var(--tug-bg); padding: 2px 10px; border-radius: 20px; border: 1px solid var(--tug-border);
+}
+.tug-root p{margin-bottom: 16px; line-height: 1.6; color: var(--tug-text)}
+.tug-root p:last-child{margin-bottom: 0}
+
+/* ── Use Case Cards ─────────────────────────────────────────────── */
+.tug-usecase-grid{display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0;}
+.tug-usecase-card{
+  padding: 20px; border: 1px solid var(--tug-border); border-radius: 8px; background: var(--tug-bg);
+  text-align: center; transition: all 0.2s; cursor: pointer;
+}
+.tug-usecase-card:hover{border-color: var(--tug-accent); background: var(--tug-surface); transform: translateY(-3px);}
+.tug-usecase-icon{font-size: 32px; margin-bottom: 12px; display: block;}
+.tug-usecase-title{font-weight: 700; color: var(--tug-navy); margin-bottom: 8px; font-size: 15px;}
+.tug-usecase-desc{font-size: 12px; color: var(--tug-muted); line-height: 1.5;}
+
+/* ── Decision Tree ──────────────────────────────────────────────── */
+.tug-decision-box{
+  background: var(--tug-nav-bg); border-left: 4px solid var(--tug-accent);
+  padding: 20px; border-radius: 0 8px 8px 0; margin: 20px 0;
+}
+.tug-decision-item{display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px;}
+.tug-decision-q{font-weight: 700; color: var(--tug-navy); min-width: 100px;}
+.tug-decision-a{color: var(--tug-text);}
+
+/* ── Zone badges ────────────────────────────────────────────────── */
+.tug-zone{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid transparent}
+.tug-zone-red{background:#fef2f2;color:var(--tug-red);border-color:#fecaca}
+.tug-zone-yellow{background:#fffbeb;color:#b45309;border-color:#fde68a}
+.tug-zone-green{background:#f0fdf4;color:#065f46;border-color:#a7f3d0}
+.tug-zone-black{background:var(--tug-bg);color:var(--tug-black);border-color:var(--tug-border)}
+
+/* ── Info/warning boxes ─────────────────────────────────────────── */
+.tug-callout{display:flex;gap:12px;padding:16px;border-radius:8px;margin:16px 0;font-size:13px;line-height:1.6}
+.tug-callout-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+.tug-callout-info{background:var(--tug-nav-bg);border:1px solid var(--tug-border);color:var(--tug-accent)}
+.tug-callout-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+.tug-callout-danger{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+.tug-callout-tip{background:#f0fdf4;border:1px solid #bbf7d0;color:#065f46}
+
+/* ── Formula cards ──────────────────────────────────────────────── */
+.tug-formula-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:20px 0}
+.tug-formula-card{
+  background:var(--tug-bg);border:1px solid var(--tug-border);border-radius:8px;
+  padding:20px;position:relative;overflow:hidden;transition: transform 0.2s, box-shadow 0.2s;
+}
+.tug-formula-card:hover{transform: translateY(-2px); box-shadow: var(--tug-shadow-md);}
+.tug-formula-card::before{
+  content:"";position:absolute;top:0;left:0;width:4px;height:100%;
+  background:var(--tug-accent);
+}
+.tug-formula-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--tug-muted);margin-bottom:8px}
+.tug-formula-expr{
+  font-family: var(--font-mono);
+  font-size:13px;color:var(--tug-navy);font-weight:600;margin-bottom:10px;word-break:break-all;
+}
+.tug-formula-desc{font-size:13px;color:var(--tug-muted);line-height:1.55}
+.tug-formula-card.f-red::before{background:var(--tug-red)}
+.tug-formula-card.f-yellow::before{background:var(--tug-yellow)}
+.tug-formula-card.f-green::before{background:var(--tug-green)}
+.tug-formula-card.f-purple::before{background:#8b5cf6}
+.tug-formula-card.f-cyan::before{background:#06b6d4}
+
+/* ── Inline calculator ──────────────────────────────────────────── */
+.tug-calc-box{
+  background: var(--tug-bg); border:1px solid var(--tug-border); border-radius:8px;
+  padding:20px 24px;margin:20px 0;
+}
+.tug-calc-title{font-size:12px;font-weight:700;color:var(--tug-accent);margin-bottom:16px;text-transform:uppercase;letter-spacing:.06em}
+.tug-calc-fields{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.tug-calc-field{display:flex;flex-direction:column;gap:6px}
+.tug-calc-field label{font-size:11px;font-weight:600;color:var(--tug-muted)}
+.tug-calc-in{
+  width:100px;padding:8px 12px;border:1px solid var(--tug-border);border-radius:6px;
+  font-size:13px;font-family: var(--font-mono);
+  background: var(--tug-surface); color: var(--tug-text); outline:none;
+}
+.tug-calc-in:focus{border-color:var(--tug-accent); box-shadow: 0 0 0 2px var(--tug-nav-bg)}
+.tug-calc-result{
+  padding:8px 16px;background: var(--tug-accent);
+  border-radius:6px;font-size:16px;font-weight:700;color:#ffffff;
+  font-family: var(--font-mono);min-width:110px;text-align:center;
+}
+.tug-calc-sep{font-size:20px;color:var(--tug-muted);padding-bottom:6px}
+
+/* ── Tables ─────────────────────────────────────────────────────── */
+.tug-table-wrap{overflow-x:auto;margin:20px 0;border-radius:8px;border:1px solid var(--tug-border)}
+table.tug-table{width:100%;border-collapse:collapse;font-size:13px}
+table.tug-table th{
+  background: var(--tug-bg); font-size:11px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--tug-muted);padding:12px 16px;
+  border-bottom:1px solid var(--tug-border);text-align:left;white-space:nowrap;
+}
+table.tug-table td{padding:12px 16px;border-bottom:1px solid var(--tug-border);vertical-align:top;line-height:1.6; color: var(--tug-text)}
+table.tug-table tr:last-child td{border-bottom:none}
+table.tug-table tr:hover td{background: var(--tug-bg)}
+code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tug-bg); padding:2px 6px;border-radius:4px;color: var(--tug-accent); border: 1px solid var(--tug-border)}
+
+/* ── Step list ──────────────────────────────────────────────────── */
+.tug-steps{list-style:none;display:flex;flex-direction:column;gap:12px;margin:20px 0}
+.tug-step{display:flex;gap:16px;align-items:flex-start}
+.tug-step-num{
+  flex-shrink:0;width:32px;height:32px;border-radius:50%;
+  background:var(--tug-accent);color:#fff;font-size:14px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+}
+.tug-step-body{flex:1;padding-top:6px}
+.tug-step-title{font-weight:700;color:var(--tug-navy);margin-bottom:4px; font-size: 15px}
+.tug-step-desc{font-size:13px;color:var(--tug-muted);line-height:1.6}
+
+/* ── Timeline ───────────────────────────────────────────────────── */
+.tug-timeline{position:relative;padding-left:32px;margin:24px 0}
+.tug-timeline::before{content:"";position:absolute;left:11px;top:0;bottom:0;width:2px;background:var(--tug-border)}
+.tug-tl-item{position:relative;margin-bottom:24px}
+.tug-tl-item::before{
+  content:"";position:absolute;left:-26px;top:4px;
+  width:14px;height:14px;border-radius:50%;border:2px solid var(--tug-border);
+  background:var(--tug-surface);z-index: 1;
+}
+.tug-tl-item.tl-red::before{border-color:var(--tug-red);background:var(--tug-red)}
+.tug-tl-item.tl-blue::before{border-color:var(--tug-accent);background:var(--tug-accent)}
+.tug-tl-item.tl-green::before{border-color:var(--tug-green);background:var(--tug-green)}
+.tug-tl-item.tl-purple::before{border-color:#8b5cf6;background:#8b5cf6}
+.tug-tl-time{font-size:11px;font-weight:700;color:var(--tug-muted);font-family: var(--font-mono); margin-bottom: 4px; display: block;}
+.tug-tl-title{font-weight:700;color:var(--tug-navy);margin:4px 0; font-size: 14px}
+.tug-tl-desc{font-size:13px;color:var(--tug-muted);line-height:1.5}
+
+/* ── Buffer type pills ──────────────────────────────────────────── */
+.tug-bt{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.04em}
+
+/* ── Collapsible details ────────────────────────────────────────── */
+.tug-details{margin:12px 0; border: 1px solid var(--tug-border); border-radius: 6px; overflow: hidden;}
+.tug-details summary{
+  cursor:pointer;font-weight:600;color:var(--tug-text);font-size:13px;
+  padding:12px 16px;background: var(--tug-bg);
+  list-style:none;display:flex;align-items:center;gap:10px;
+  user-select:none;transition: background 0.2s;
+}
+.tug-details summary:hover{background: var(--tug-nav-bg)}
+.tug-details summary::before{content:"▶";font-size:10px;transition:transform .2s; color: var(--tug-muted)}
+.tug-details[open] summary{border-bottom: 1px solid var(--tug-border)}
+.tug-details[open] summary::before{transform:rotate(90deg)}
+.tug-details-body{padding:16px;background: var(--tug-surface);font-size:13px; color: var(--tug-text)}
+
+/* ── Highlight search results ───────────────────────────────────── */
+.tug-hidden{display:none!important}
+
+/* ── Worked example box ─────────────────────────────────────────── */
+.tug-example{
+  background: var(--tug-bg); border:1px solid var(--tug-border); border-radius:8px;
+  padding:24px;margin:20px 0;
+}
+.tug-example-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--tug-muted);margin-bottom:16px}
+.tug-example table{width:100%;border-collapse:collapse;font-size:13px}
+.tug-example td{padding:8px 12px;border-bottom:1px solid var(--tug-border)}
+.tug-example tr:last-child td{border-bottom:none}
+.tug-example td:first-child{color:var(--tug-muted);width:45%;}
+.tug-example td:last-child{font-family: var(--font-mono);font-weight:700;color:var(--tug-navy); text-align: right;}
+
+/* ── Header hero ────────────────────────────────────────────────── */
+.tug-hero{
+  background: linear-gradient(135deg, var(--tug-navy) 0%, var(--tug-accent) 100%);
+  border-radius: var(--tug-radius); padding: 40px; color: #ffffff;
+  display: flex; align-items: flex-start; gap: 24px; box-shadow: var(--tug-shadow-md);
+  position: relative; overflow: hidden;
+}
+.tug-hero::after{
+  content: ""; position: absolute; top: -50%; right: -20%; width: 300px; height: 300px;
+  background: rgba(255,255,255,0.05); border-radius: 50%; pointer-events: none;
+}
+.tug-hero-icon{font-size: 48px; line-height: 1; opacity: .9}
+.tug-hero h1{font-size: 28px; font-weight: 800; margin-bottom: 8px; letter-spacing: -0.02em; color: #ffffff;}
+.tug-hero p{font-size: 15px; opacity: .9; line-height: 1.6; max-width: 680px; margin: 0; color: #ffffff;}
+.tug-hero-badges{display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px}
+.tug-hero-badge{background: rgba(255,255,255,.15); padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; border: 1px solid rgba(255,255,255,0.2)}
+
+/* ── Responsive Overrides ────────────────────────────────────────── */
+@media (max-width: 992px) {
+  .tug-sidebar {
+    position: fixed;
+    left: 20px;
+    top: 80px;
+    bottom: 80px;
+    transform: translateX(-120%);
+    opacity: 0;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  }
+  .tug-sidebar.active {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  .tug-mobile-toggle {
+    display: flex;
+  }
+}
+
+@media (max-width: 768px) {
+  .tug-root { padding: 12px; gap: 16px; }
+  .tug-hero { padding: 24px; flex-direction: column; align-items: center; text-align: center; }
+  .tug-hero-icon { font-size: 40px; }
+  .tug-section { padding: 20px; }
+  .tug-calc-fields { flex-direction: column; align-items: stretch; }
+  .tug-calc-sep { text-align: center; padding: 0; margin-top: -8px; }
+  .tug-calc-result { width: 100%; }
+}
+</style>
+
+<div class="tug-root">
+
+<button class="tug-mobile-toggle" onclick="tugToggleSidebar()">☰</button>
+
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<nav class="tug-sidebar" id="tug-sidebar">
+  <div class="tug-search-wrap">
+    <input type="text" class="tug-search" id="tug-search" placeholder="Search guide…" oninput="tugSearch(this.value)">
+  </div>
+  <div class="tug-nav-label">Getting Started</div>
+  <a class="tug-nav-item active" onclick="tugScrollTo(&quot;s00&quot;)">00 · Where to Start?</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s01&quot;)">01 · Overview</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s02&quot;)">02 · Quick Start</a>
+  <div class="tug-nav-label">Core Concepts</div>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s03&quot;)">03 · Formulas F1–F8</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s04&quot;)">04 · Replenishment Modes</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s05&quot;)">05 · Zone System</a>
+  <div class="tug-nav-label">Daily Operations</div>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s06&quot;)">06 · Daily Schedule</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s07&quot;)">07 · Sales Projection</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s08&quot;)">08 · Dynamic Buffers</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s09&quot;)">09 · Real-Time Alerts</a>
+  <div class="tug-nav-label">Reference</div>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s10&quot;)">10 · TOC Settings Ref</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s11&quot;)">11 · Item Fields Ref</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s12&quot;)">12 · Trigger Map</a>
+  <a class="tug-nav-item" onclick="tugScrollTo(&quot;s13&quot;)">13 · Troubleshooting</a>
+</nav>
+
+<!-- ══════════════ MAIN CONTENT ══════════════ -->
+<div class="tug-content">
+
+<!-- ── HERO ──────────────────────────────────────────────────────── -->
+<div class="tug-hero">
+  <div class="tug-hero-icon">🏭</div>
+  <div>
+    <h1>TOC Buffer Management — User Guide</h1>
+    <p>Complete reference for the Theory of Constraints replenishment engine built on ERPNext.
+    Covers every formula, schedule, configuration field, doc event, and use case.
+    Keep this page open while configuring items or investigating buffer behaviour.</p>
+    <div class="tug-hero-badges">
+      <span class="tug-hero-badge">chaizup_toc</span>
+      <span class="tug-hero-badge">ERPNext v15/v16</span>
+      <span class="tug-hero-badge">Frappe v15</span>
+      <span class="tug-hero-badge">F1–F8 Formulas</span>
+      <span class="tug-hero-badge">DBM Auto-Adjust</span>
+      <span class="tug-hero-badge">Sales Projection Automation</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── S00 Where to Start ─────────────────────────────────────────── -->
+<div class="tug-section" id="s00">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🏁</span>
+    <span class="tug-section-title">Where to Start? — User Use Cases</span>
+    <span class="tug-section-num">00</span>
+  </div>
+
+  <p>If you are new to TOC (Theory of Constraints) Buffer Management, start here. 
+  Identify your role or goal below to find the relevant section.</p>
+
+  <div class="tug-usecase-grid">
+    <div class="tug-usecase-card" onclick="tugScrollTo(&quot;s02&quot;)">
+      <span class="tug-usecase-icon">⚙️</span>
+      <div class="tug-usecase-title">I am setting up a new site</div>
+      <div class="tug-usecase-desc">Follow the 6-step Quick Start guide to configure warehouses and enable items.</div>
+    </div>
+    <div class="tug-usecase-card" onclick="tugScrollTo(&quot;s04&quot;)">
+      <span class="tug-usecase-icon">🛒</span>
+      <div class="tug-usecase-title">I manage Raw Materials</div>
+      <div class="tug-usecase-desc">Focus on <strong>Purchase Mode</strong> and how the system auto-creates Material Requests.</div>
+    </div>
+    <div class="tug-usecase-card" onclick="tugScrollTo(&quot;s07&quot;)">
+      <span class="tug-usecase-icon">🔨</span>
+      <div class="tug-usecase-title">I manage Production</div>
+      <div class="tug-usecase-desc">Learn about <strong>Manufacture Mode</strong> and Sales Projection automation.</div>
+    </div>
+    <div class="tug-usecase-card" onclick="tugScrollTo(&quot;s03&quot;)">
+      <span class="tug-usecase-icon">📏</span>
+      <div class="tug-usecase-title">I want to retune my stock</div>
+      <div class="tug-usecase-desc">Explore the <strong>F1 Target Buffer</strong> calculator and Zone System.</div>
+    </div>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">When does each Formula work?</h3>
+  <p>The system uses different formulas based on what the item is (Purchase vs Manufacture) and 
+  what day of the week it is.</p>
+
+  <div class="tug-decision-box">
+    <div class="tug-decision-item">
+      <div class="tug-decision-q">F1</div>
+      <div class="tug-decision-a"><strong>Always.</strong> It defines your "Safe Stock Level" (Target).</div>
+    </div>
+    <div class="tug-decision-item">
+      <div class="tug-decision-q">F2a/b</div>
+      <div class="tug-decision-a"><strong>Always.</strong> It checks your "Current Reality" (Inventory Position).</div>
+    </div>
+    <div class="tug-decision-item">
+      <div class="tug-decision-q">F3</div>
+      <div class="tug-decision-a"><strong>Always.</strong> It converts Reality vs Safety into a Red/Yellow/Green signal.</div>
+    </div>
+    <div class="tug-decision-item">
+      <div class="tug-decision-q">F7/F8</div>
+      <div class="tug-decision-a"><strong>Sundays Only.</strong> It adjusts your Target if you were "Too Red" or "Too Green" all week.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── S01 Overview ───────────────────────────────────────────────── -->
+<div class="tug-section" id="s01">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🧭</span>
+    <span class="tug-section-title">Overview &amp; Architecture</span>
+    <span class="tug-section-num">01</span>
+  </div>
+
+  <p><strong>What it replaces:</strong> ERPNext ships with an "Auto Material Request" feature that fires
+  when stock drops below a fixed reorder level. That model breaks for manufactured items, seasonal
+  demand, and multi-warehouse operations. <strong>chaizup_toc</strong> replaces it entirely with
+  Buffer Penetration % (BP%) — a dynamic signal that accounts for consumption rate, replenishment
+  lead time, and demand variability.</p>
+
+  <p><strong>Core idea:</strong> Every TOC-enabled item has a <em>Target Buffer</em> — the ideal stock
+  level. The system continuously compares your <em>Inventory Position</em> against that target and
+  colours the item Red / Yellow / Green. Red means order now; Green means you are well-covered.</p>
+
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">💡</span>
+    <div><strong>One number to watch:</strong> BP% (Buffer Penetration %). When BP% &gt; 67% the item
+    is Red — replenishment is urgent. When BP% &lt; 33% it is Green — buffer is healthy.
+    Everything in this system flows from that single percentage.</div>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Application Structure</h3>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Module / File</th><th>Responsibility</th></tr>
+      <tr><td><code class="tug-code">toc_engine/buffer_calculator.py</code></td><td>F1–F5 core: computes Target, IP, BP%, Order Qty, T/CU for every item</td></tr>
+      <tr><td><code class="tug-code">toc_engine/mr_generator.py</code></td><td>Creates Material Requests for Red/Yellow items; routes Manufacture-mode items → Work Orders, Purchase-mode → Purchase MRs</td></tr>
+      <tr><td><code class="tug-code">toc_engine/dbm_engine.py</code></td><td>F7 (TMR) and F8 (TMG): weekly buffer size auto-adjustment</td></tr>
+      <tr><td><code class="tug-code">toc_engine/projection_engine.py</code></td><td>Sales Projection → Production Plan → Work Orders automation</td></tr>
+      <tr><td><code class="tug-code">api/toc_api.py</code></td><td>Whitelisted endpoints consumed by the dashboard and item settings pages</td></tr>
+      <tr><td><code class="tug-code">overrides/item.py</code></td><td>Item.validate hook: validates auto_purchase XOR auto_manufacture, computes T/CU (F5), validates BOM ownership</td></tr>
+      <tr><td><code class="tug-code">overrides/reorder_override.py</code></td><td>Intercepts ERPNext automatic reorder so TOC-managed items do not get duplicate MRs</td></tr>
+      <tr><td><code class="tug-code">tasks/daily_tasks.py</code></td><td>All 5 scheduled job functions called by hooks.py</td></tr>
+      <tr><td><code class="tug-code">setup/install.py</code></td><td>after_install: adds all <code class="tug-code">custom_toc_*</code> fields to Item, MR, and Work Order</td></tr>
+      <tr><td><code class="tug-code">page/toc_dashboard/</code></td><td>Live buffer priority board — the main operations screen</td></tr>
+      <tr><td><code class="tug-code">page/toc_item_settings/</code></td><td>Bulk TOC configuration per item with inline help tooltips</td></tr>
+      <tr><td><code class="tug-code">page/supply_chain_tracker/</code></td><td>7-stage Kanban view of open supply chain documents</td></tr>
+      <tr><td><code class="tug-code">page/wo_kitting_planner/</code></td><td>Work Order kitting planner across 7 tabs (WKP-001 to WKP-033)</td></tr>
+    </table>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Data Flow</h3>
+  <p>ERPNext data (Bin stock, Work Orders, Sales Orders, Delivery Notes) feeds into
+  <code class="tug-code">buffer_calculator.py</code> every morning. The calculator produces BP% for
+  every enabled item. <code class="tug-code">mr_generator.py</code> then creates replenishment
+  documents for anything above Yellow. At the end of the week the DBM engine checks long-run patterns
+  and grows or shrinks target buffers automatically.</p>
+</div>
+
+<!-- ── S02 Quick Start ────────────────────────────────────────────── -->
+<div class="tug-section" id="s02">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🚀</span>
+    <span class="tug-section-title">Quick Start — First-Time Setup</span>
+    <span class="tug-section-num">02</span>
+  </div>
+
+  <div class="tug-callout tug-callout-warn">
+    <span class="tug-callout-icon">⚠️</span>
+    <div>Follow this order exactly. Enabling items before warehouse rules are configured will produce inaccurate IP calculations — the system needs warehouse classification to know what counts as On-Hand vs WIP.</div>
+  </div>
+
+  <ul class="tug-steps">
+    <li class="tug-step">
+      <span class="tug-step-num">1</span>
+      <div class="tug-step-body">
+        <div class="tug-step-title">Classify your warehouses</div>
+        <div class="tug-step-desc">In <strong>TOC Settings → Warehouse Rules</strong>, tag each warehouse
+        as <em>Inventory</em> (counts as on-hand stock), <em>WIP</em> (counts as work-in-progress for IP),
+        or <em>Excluded</em> (ignored entirely). Without this classification every item falls back to
+        summing all warehouses — usually wrong.</div>
+      </div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num">2</span>
+      <div class="tug-step-body">
+        <div class="tug-step-title">Set replenishment mode per item</div>
+        <div class="tug-step-desc">On each item in <strong>TOC Item Settings</strong>, set
+        <em>Auto Manufacture</em> (creates Work Orders) or <em>Auto Purchase</em> (creates Purchase MRs),
+        or leave both off for Monitor-only mode. You can bulk-apply mode using the multi-select
+        Bulk Configure button.</div>
+      </div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num">3</span>
+      <div class="tug-step-body">
+        <div class="tug-step-title">Verify zone thresholds</div>
+        <div class="tug-step-desc">The defaults (Yellow start 33%, Red start 67%) are good for most
+        companies. Adjust in <strong>TOC Settings → Zone Thresholds</strong> only if your lead times
+        are highly predictable (tighten) or highly variable (loosen).</div>
+      </div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num">4</span>
+      <div class="tug-step-body">
+        <div class="tug-step-title">Configure MR generation</div>
+        <div class="tug-step-desc">In <strong>TOC Settings → MR Generation</strong>, set which zones
+        trigger automatic Material Requests (default: Red + Yellow). Confirm the manufacture and
+        purchase target warehouses. Enable <em>auto_manufacture</em> on items you want the system
+        to automatically create Manufacture-type MRs for.</div>
+      </div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num">5</span>
+      <div class="tug-step-body">
+        <div class="tug-step-title">Enable items</div>
+        <div class="tug-step-desc">Open <strong>TOC Item Settings</strong> (bulk page) and filter
+        <em>TOC Not Active</em>. Click each priority item, fill in RLT and VF per warehouse, save.
+        The first ADU auto-calculation runs next morning; you can also enter a custom ADU
+        immediately to get an instant first buffer.</div>
+      </div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num">6</span>
+      <div class="tug-step-body">
+        <div class="tug-step-title">Enable DBM after the first month</div>
+        <div class="tug-step-desc">Dynamic Buffer Management needs historical data to make sensible
+        adjustments. Turn on <strong>TOC Settings → Enable DBM</strong> only after items have been
+        active for at least one full Replenishment Lead Time cycle (usually 30 days).</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<!-- ── S03 Formulas F1–F8 ─────────────────────────────────────────── -->
+<div class="tug-section" id="s03">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">📐</span>
+    <span class="tug-section-title">Formulas F1 – F8</span>
+    <span class="tug-section-num">03</span>
+  </div>
+
+  <div class="tug-formula-grid">
+    <div class="tug-formula-card">
+      <div class="tug-formula-label">F1 — Target Buffer</div>
+      <div class="tug-formula-expr">Target = ADU × RLT × VF</div>
+      <div class="tug-formula-desc">How much stock you need to hold to survive one full replenishment
+      cycle under normal demand variability. This is your ideal stock level.</div>
+    </div>
+    <div class="tug-formula-card f-purple">
+      <div class="tug-formula-label">F2a — Inventory Position (Manufacture mode)</div>
+      <div class="tug-formula-expr">IP = On-Hand + WIP − Backorders</div>
+      <div class="tug-formula-desc">WIP = open Work Orders not yet received. Backorders = reserved_qty
+      in Bin. For manufactured items we add pending production to available stock.</div>
+    </div>
+    <div class="tug-formula-card f-cyan">
+      <div class="tug-formula-label">F2b — Inventory Position (Purchase mode)</div>
+      <div class="tug-formula-expr">IP = On-Hand + On-Order − Committed</div>
+      <div class="tug-formula-desc">On-Order = ordered_qty in Bin (open POs). Committed = WO Item
+      unconsumed qty. For purchased items we add pending POs to available stock.</div>
+    </div>
+    <div class="tug-formula-card f-yellow">
+      <div class="tug-formula-label">F3 — Buffer Penetration %</div>
+      <div class="tug-formula-expr">BP% = (Target − IP) / Target × 100</div>
+      <div class="tug-formula-desc">The main action signal. Negative BP% means you have more stock
+      than target (very healthy). Above 100% means you are in stockout territory.</div>
+    </div>
+    <div class="tug-formula-card f-green">
+      <div class="tug-formula-label">F4 — Order Quantity</div>
+      <div class="tug-formula-expr">Order Qty = Target − IP</div>
+      <div class="tug-formula-desc">How much to order or manufacture. Used as the qty on the Material
+      Request. Zero or negative means no action needed.</div>
+    </div>
+    <div class="tug-formula-card f-purple">
+      <div class="tug-formula-label">F5 — Throughput / Constraint Unit (Manufacture mode)</div>
+      <div class="tug-formula-expr">T/CU = (Price − TVC) × Speed</div>
+      <div class="tug-formula-desc">Tie-breaker for the production priority board. Higher T/CU = more
+      value per minute of constraint time. Automatically recalculated on Item save.</div>
+    </div>
+    <div class="tug-formula-card f-cyan">
+      <div class="tug-formula-label">F6 — DAF Seasonal Adjustment</div>
+      <div class="tug-formula-expr">Adjusted = Target × DAF</div>
+      <div class="tug-formula-desc">Demand Adjustment Factor. 1.0 = no change. 1.3 = 30% extra buffer
+      during peak season. Set per warehouse rule in the Item buffer rules table.</div>
+    </div>
+    <div class="tug-formula-card f-red">
+      <div class="tug-formula-label">F7 / F8 — Dynamic Buffer Management</div>
+      <div class="tug-formula-expr">TMR: Target × (1 + adj%)<br>TMG: Target × (1 − adj%)</div>
+      <div class="tug-formula-desc">F7 grows the buffer when an item is Too Much Red (supply cannot keep up).
+      F8 shrinks it when the item is Too Much Green (buffer is oversized). Runs every Sunday.</div>
+    </div>
+  </div>
+
+  <!-- F1 Calculator -->
+  <div class="tug-calc-box">
+    <div class="tug-calc-title">🧮 F1 Target Buffer Calculator</div>
+    <div class="tug-calc-fields">
+      <div class="tug-calc-field">
+        <label>ADU (units/day)</label>
+        <input class="tug-calc-in" id="tug-f1-adu" type="number" value="50" oninput="tugCalcF1()">
+      </div>
+      <div class="tug-calc-sep">×</div>
+      <div class="tug-calc-field">
+        <label>RLT (days)</label>
+        <input class="tug-calc-in" id="tug-f1-rlt" type="number" value="7" oninput="tugCalcF1()">
+      </div>
+      <div class="tug-calc-sep">×</div>
+      <div class="tug-calc-field">
+        <label>VF (variability)</label>
+        <input class="tug-calc-in" id="tug-f1-vf" type="number" step="0.1" value="1.5" oninput="tugCalcF1()">
+      </div>
+      <div class="tug-calc-sep">=</div>
+      <div class="tug-calc-field">
+        <label>Target Buffer</label>
+        <div class="tug-calc-result" id="tug-f1-result">525</div>
+      </div>
+    </div>
+    <p style="margin-top:10px;font-size:12px;color:var(--tug-muted)">
+      <strong>VF guide:</strong> 1.0 = zero variability (rare) · 1.3 = low variability · 1.5 = medium (default) · 2.0 = high variability · 2.5+ = very unpredictable demand
+    </p>
+  </div>
+
+  <!-- F3 Calculator -->
+  <div class="tug-calc-box">
+    <div class="tug-calc-title">🧮 F3 Buffer Penetration % Calculator</div>
+    <div class="tug-calc-fields">
+      <div class="tug-calc-field">
+        <label>Target Buffer</label>
+        <input class="tug-calc-in" id="tug-f3-target" type="number" value="525" oninput="tugCalcF3()">
+      </div>
+      <div class="tug-calc-sep">−</div>
+      <div class="tug-calc-field">
+        <label>Inventory Position</label>
+        <input class="tug-calc-in" id="tug-f3-ip" type="number" value="200" oninput="tugCalcF3()">
+      </div>
+      <div class="tug-calc-sep">÷</div>
+      <div class="tug-calc-field">
+        <label>Target Buffer</label>
+        <input class="tug-calc-in" id="tug-f3-target2" type="number" value="525" oninput="tugCalcF3b()">
+      </div>
+      <div class="tug-calc-sep">×100 =</div>
+      <div class="tug-calc-field">
+        <label>BP%</label>
+        <div class="tug-calc-result" id="tug-f3-result" style="color:var(--tug-red)">61.9%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- F2 IP breakdown -->
+  <div class="tug-calc-box">
+    <div class="tug-calc-title">🧮 F2 Inventory Position Calculator (Purchase mode)</div>
+    <div class="tug-calc-fields">
+      <div class="tug-calc-field">
+        <label>On-Hand</label>
+        <input class="tug-calc-in" id="tug-f2-oh" type="number" value="300" oninput="tugCalcF2()">
+      </div>
+      <div class="tug-calc-sep">+</div>
+      <div class="tug-calc-field">
+        <label>On-Order (PO)</label>
+        <input class="tug-calc-in" id="tug-f2-oo" type="number" value="100" oninput="tugCalcF2()">
+      </div>
+      <div class="tug-calc-sep">−</div>
+      <div class="tug-calc-field">
+        <label>Committed (WO)</label>
+        <input class="tug-calc-in" id="tug-f2-cm" type="number" value="200" oninput="tugCalcF2()">
+      </div>
+      <div class="tug-calc-sep">=</div>
+      <div class="tug-calc-field">
+        <label>IP (Purchase mode)</label>
+        <div class="tug-calc-result" id="tug-f2-result">200</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worked Example -->
+  <div class="tug-example">
+    <div class="tug-example-title">📋 Worked Example — Item: Black Tea 500g Box (Manufacture mode)</div>
+    <table>
+      <tr><td>ADU (30-day avg from Delivery Notes)</td><td>80 boxes/day</td></tr>
+      <tr><td>RLT (production lead time)</td><td>5 days</td></tr>
+      <tr><td>VF (medium variability)</td><td>1.5</td></tr>
+      <tr><td>F1 Target Buffer</td><td>80 × 5 × 1.5 = <strong>600 boxes</strong></td></tr>
+      <tr><td>On-Hand (Inventory warehouse)</td><td>150 boxes</td></tr>
+      <tr><td>WIP (open Work Orders)</td><td>80 boxes</td></tr>
+      <tr><td>Backorders (reserved_qty)</td><td>0 boxes</td></tr>
+      <tr><td>F2a Inventory Position</td><td>150 + 80 − 0 = <strong>230 boxes</strong></td></tr>
+      <tr><td>F3 Buffer Penetration %</td><td>(600−230)/600×100 = <strong>61.7% → Yellow zone</strong></td></tr>
+      <tr><td>F4 Order Qty (MR)</td><td>600 − 230 = <strong>370 boxes</strong></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ── S04 Replenishment Modes ─────────────────────────────────────── -->
+<div class="tug-section" id="s04">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">📦</span>
+    <span class="tug-section-title">Replenishment Modes — Manufacture / Purchase / Monitor</span>
+    <span class="tug-section-num">04</span>
+  </div>
+
+  <p>Each TOC-enabled item has exactly one replenishment mode, determined by two checkboxes on the item:
+  <code class="tug-code">custom_toc_auto_manufacture</code> and <code class="tug-code">custom_toc_auto_purchase</code>.
+  These are mutually exclusive — enabling both raises a validation error.</p>
+
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr>
+        <th>Mode</th><th>How set</th><th>IP Formula (F2 — universal)</th><th>ADU Source</th><th>Action at 07:00</th>
+      </tr>
+      <tr>
+        <td><strong>Manufacture</strong></td>
+        <td><code class="tug-code">auto_manufacture = 1</code></td>
+        <td rowspan="3" style="vertical-align:middle;text-align:center">
+          <code class="tug-code">OnHand + WIP + OnOrder − Backorders − Committed</code><br>
+          <small style="color:var(--tug-muted)">All 5 components queried for every item regardless of mode.
+          Unused sources return 0.</small>
+        </td>
+        <td>All negative Stock Ledger Entries (outflows)</td>
+        <td>Creates Manufacture MR → routes to Production Plan</td>
+      </tr>
+      <tr>
+        <td><strong>Purchase</strong></td>
+        <td><code class="tug-code">auto_purchase = 1</code></td>
+        <td>All negative Stock Ledger Entries (outflows)</td>
+        <td>Creates Purchase MR for the item (qty in purchase_uom)</td>
+      </tr>
+      <tr>
+        <td><strong>Monitor</strong></td>
+        <td>Both = 0</td>
+        <td>All negative Stock Ledger Entries (outflows)</td>
+        <td>No MR created — item tracked on dashboard only</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="tug-callout tug-callout-tip">
+    <span class="tug-callout-icon">✅</span>
+    <div><strong>Industry-neutral:</strong> There is no FMCG-specific classification (FG/SFG/RM/PM).
+    Any item can be Manufacture or Purchase mode regardless of item group or category.
+    The IP formula is <strong>always universal</strong> — an item that is both occasionally purchased and
+    manufactured will correctly reflect both WIP supply and OnOrder supply simultaneously.
+    Use <strong>Bulk Configure</strong> in TOC Item Settings to apply mode to many items at once.</div>
+  </div>
+
+  <div class="tug-callout tug-callout-tip">
+    <span class="tug-callout-icon">📐</span>
+    <div><strong>UOM Standard:</strong> All IP components are in <code class="tug-code">stock_uom</code>
+    (the item&apos;s canonical inventory unit from Item master). When creating a Purchase MR, the system
+    automatically converts the shortage qty from stock_uom to purchase_uom using
+    <code class="tug-code">UOM Conversion Detail.conversion_factor</code>. For example:
+    stock_uom=Gram, purchase_uom=KG, cf=1000 → 5000 Gram order becomes 5 KG on the MR line.</div>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">ADU Calculation</h3>
+  <p>ADU is computed universally from Stock Ledger Entries with <code class="tug-code">actual_qty &lt; 0</code>
+  (any outflow from stock) over the configured period. This captures Delivery Notes, Stock Entries,
+  Manufacturing consumption, and any other document that reduces stock — regardless of item category.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Warehouse-Aware Mode vs Fallback</h3>
+  <p>If an item has buffer rules with explicit warehouse assignments, the calculator runs in
+  <strong>warehouse-aware mode</strong> — it queries Bin data filtered to those warehouses, using
+  your Inventory/WIP/Excluded classification. If no rules exist with warehouses, it falls back to
+  summing all Bin rows for that item (useful during initial setup, not recommended long-term).</p>
+</div>
+
+<!-- ── S05 Zone System ────────────────────────────────────────────── -->
+<div class="tug-section" id="s05">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🚦</span>
+    <span class="tug-section-title">Zone System — Green / Yellow / Red / Black</span>
+    <span class="tug-section-num">05</span>
+  </div>
+
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Zone</th><th>BP% Range</th><th>Meaning</th><th>Action</th></tr>
+      <tr>
+        <td><span class="tug-zone tug-zone-green">● Green</span></td>
+        <td>Below 33%</td>
+        <td>Buffer is healthy. Stock covers well beyond one RLT cycle.</td>
+        <td>No action. Monitor for Too Much Green (DBM).</td>
+      </tr>
+      <tr>
+        <td><span class="tug-zone tug-zone-yellow">● Yellow</span></td>
+        <td>33% – 67%</td>
+        <td>Buffer is being consumed. Plan replenishment now.</td>
+        <td>MR generated automatically at 07:00. Confirm and action.</td>
+      </tr>
+      <tr>
+        <td><span class="tug-zone tug-zone-red">● Red</span></td>
+        <td>67% – 100%</td>
+        <td>Buffer critically low. Stock may run out before next replenishment.</td>
+        <td>Expedite. MR auto-generated. Use &quot;Action Now&quot; button on dashboard.</td>
+      </tr>
+      <tr>
+        <td><span class="tug-zone tug-zone-black">● Black</span></td>
+        <td>Above 100%</td>
+        <td>Stockout or near-stockout. IP is below zero buffer territory.</td>
+        <td>Emergency. Stop production if no stock to consume. Escalate immediately.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="tug-callout tug-callout-danger">
+    <span class="tug-callout-icon">🔴</span>
+    <div><strong>Black zone means the buffer has fully penetrated.</strong> BP% &gt; 100% means
+    (Target − IP) &gt; Target, which means IP is negative — you have promised more stock than
+    you have or will have soon. Check the item immediately.</div>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Configurable Thresholds</h3>
+  <p>The 33% and 67% thresholds are defaults in TOC Settings. For items with very short, predictable
+  lead times (e.g., a 1-day local supplier) you might tighten them to 20% / 50%.
+  For highly variable imported materials you might loosen them to 40% / 75%.</p>
+</div>
+
+<!-- ── S06 Daily Schedule ─────────────────────────────────────────── -->
+<div class="tug-section" id="s06">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">⏰</span>
+    <span class="tug-section-title">Daily Operating Rhythm</span>
+    <span class="tug-section-num">06</span>
+  </div>
+
+  <p>All jobs run automatically. The schedule below assumes Asia/Kolkata timezone (UTC+5:30) —
+  adjust server cron offsets if your ERPNext timezone differs.</p>
+
+  <div class="tug-timeline">
+    <div class="tug-tl-item tl-purple">
+      <div class="tug-tl-time">06:00 daily</div>
+      <div class="tug-tl-title">Sales Projection Automation</div>
+      <div class="tug-tl-desc">Finds the current calendar month&apos;s submitted Sales Projection.
+      For each item line: computes net demand using Calc 1 or Calc 2, creates a Draft Work Order
+      if production_capacity &gt; 0 and an active BOM exists. Emails notifications to configured users.</div>
+    </div>
+    <div class="tug-tl-item tl-blue">
+      <div class="tug-tl-time">06:30 daily</div>
+      <div class="tug-tl-title">ADU Auto-Calculation</div>
+      <div class="tug-tl-desc">Recalculates Average Daily Usage for every enabled item where
+      <em>custom_adu = 0</em> (auto mode). Reads all Stock Ledger Entries with negative qty (outflows)
+      over the configured period (30/90/180/365 days). Updates adu_value on each buffer rule row.</div>
+    </div>
+    <div class="tug-tl-item tl-red">
+      <div class="tug-tl-time">07:00 daily</div>
+      <div class="tug-tl-title">MR Generation</div>
+      <div class="tug-tl-desc">Runs the full buffer calculator on all enabled items. Creates Material
+      Requests for every item in Red or Yellow zone. Manufacture-mode items get Manufacture-type MRs
+      routed to Production Plan. Purchase-mode items get Purchase MRs. Deduplication skips items that
+      already have an open MR for the same warehouse.</div>
+    </div>
+    <div class="tug-tl-item tl-blue">
+      <div class="tug-tl-time">07:30 daily</div>
+      <div class="tug-tl-title">Procurement Monitor</div>
+      <div class="tug-tl-desc">Scans all Purchase-mode items in Red or Black zone and logs a warning to
+      ERPNext Error Log. This is a <em>monitor only</em> — it does NOT create additional MRs.
+      Use it to identify items where the 07:00 MR was created but supply has not responded.</div>
+    </div>
+    <div class="tug-tl-item tl-green">
+      <div class="tug-tl-time">08:00 daily</div>
+      <div class="tug-tl-title">Buffer Snapshot (TOC Buffer Log)</div>
+      <div class="tug-tl-desc">Archives the current zone, BP%, IP, and target_buffer for every
+      enabled item into <strong>TOC Buffer Log</strong> DocType. This historical data is used by
+      the DBM engine to detect TMR and TMG patterns over time.</div>
+    </div>
+    <div class="tug-tl-item tl-purple">
+      <div class="tug-tl-time">08:00 every Sunday</div>
+      <div class="tug-tl-title">DBM Auto-Adjust (F7 / F8)</div>
+      <div class="tug-tl-desc">Reads the TOC Buffer Log archive. Applies TMR (F7) if an item has
+      spent too many days in Red/Black zone over the past RLT period. Applies TMG (F8) if an item
+      has been Green for multiple full RLT cycles. Updates target_buffer and logs the change with
+      reason.</div>
+    </div>
+  </div>
+
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">💡</span>
+    <div><strong>Manual trigger:</strong> On the TOC Dashboard, click <em>Action Now</em> or <em>Plan</em>
+    buttons to trigger MR generation for a specific replenishment mode without waiting for the 07:00 schedule.
+    The button runs <code class="tug-code">trigger_manual_run</code> for all Red/Black/Yellow items of
+    that type — not just the item you clicked.</div>
+  </div>
+</div>
+
+<!-- ── S07 Sales Projection Automation ───────────────────────────── -->
+<div class="tug-section" id="s07">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">📊</span>
+    <span class="tug-section-title">Sales Projection Automation</span>
+    <span class="tug-section-num">07</span>
+  </div>
+
+  <p>When a Sales Projection is submitted for the current calendar month, the engine
+  automatically translates forecast lines into Draft Work Orders — bridging forecast
+  → production planning without manual Production Plan creation.</p>
+
+  <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Net Demand Formula</h3>
+  <div class="tug-formula-card" style="margin-bottom:16px">
+    <div class="tug-formula-label">Net Required</div>
+    <div class="tug-formula-expr">
+      Net = (projected_qty + prev_month_pending_SO)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;− curr_month_pending_SO<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;− (current_stock + open_WO_remaining)
+    </div>
+    <div class="tug-formula-desc">All SO filtering uses delivery_date (not transaction_date).
+    WO qty = min(net_required, production_capacity). If net ≤ 0 or production_capacity = 0, skip.</div>
+  </div>
+
+  <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">SO Eligibility — Two Paths</h3>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Path</th><th>Condition</th><th>Use case</th></tr>
+      <tr>
+        <td><strong>PATH A</strong></td>
+        <td><code class="tug-code">docstatus = 0</code> AND status IN configured workflow states</td>
+        <td>Draft SOs that are approved but not yet submitted. Useful for companies that keep SOs in draft pending credit checks.</td>
+      </tr>
+      <tr>
+        <td><strong>PATH B</strong></td>
+        <td><code class="tug-code">docstatus = 1</code> AND per_delivered_qty status IN configured pending statuses</td>
+        <td>Submitted SOs that are not yet fully delivered. Default: &quot;To Deliver and Bill&quot;, &quot;To Deliver&quot;, &quot;On Hold&quot;.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="tug-callout tug-callout-warn">
+    <span class="tug-callout-icon">⚠️</span>
+    <div>Configure <strong>projection_pending_so_statuses</strong> in TOC Settings → Sales Projection Automation.
+    If this field is empty the SQL <code class="tug-code">IN ()</code> clause crashes MariaDB.
+    The engine has a guard for this but always keep at least one status configured.</div>
+  </div>
+
+  <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Post-PP 5-Step Flow (after WO creation)</h3>
+  <ul class="tug-steps" style="gap:8px">
+    <li class="tug-step">
+      <span class="tug-step-num" style="width:22px;height:22px;font-size:11px">1</span>
+      <div class="tug-step-body"><div class="tug-step-desc">Recursive BOM walk to find all sub-assemblies (max depth 10). Creates child WOs with <code class="tug-code">custom_projection_parent_wo</code> link.</div></div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num" style="width:22px;height:22px;font-size:11px">2</span>
+      <div class="tug-step-body"><div class="tug-step-desc">Identifies purchased components from BOM. Checks if those components have existing open MRs (dedup).</div></div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num" style="width:22px;height:22px;font-size:11px">3</span>
+      <div class="tug-step-body"><div class="tug-step-desc">Saves all Work Orders (docstatus=0, Draft). Stamping <code class="tug-code">custom_toc_creation_reason</code> with the formula breakdown.</div></div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num" style="width:22px;height:22px;font-size:11px">4</span>
+      <div class="tug-step-body"><div class="tug-step-desc">Updates <code class="tug-code">wo_status</code> and <code class="tug-code">wo_name</code> on the Sales Projected Items child table row.</div></div>
+    </li>
+    <li class="tug-step">
+      <span class="tug-step-num" style="width:22px;height:22px;font-size:11px">5</span>
+      <div class="tug-step-body"><div class="tug-step-desc">Stamps <code class="tug-code">last_auto_run</code> on the Sales Projection parent document. Sends notifications to configured users.</div></div>
+    </li>
+  </ul>
+
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">💡</span>
+    <div><strong>Manual run:</strong> On a submitted Sales Projection for the current month, a
+    <em>Run Projection Automation</em> button appears in the document toolbar.
+    This calls <code class="tug-code">run_projection_automation</code> with your user as triggered_by.
+    Only TOC Manager and System Manager roles can use it.</div>
+  </div>
+</div>
+
+<!-- ── S08 Dynamic Buffer Management ─────────────────────────────── -->
+<div class="tug-section" id="s08">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🔄</span>
+    <span class="tug-section-title">Dynamic Buffer Management (DBM)</span>
+    <span class="tug-section-num">08</span>
+  </div>
+
+  <p>Demand and lead times change over time. A buffer set in January may be too small in Diwali
+  season and too large in February. DBM automatically grows and shrinks target buffers based on
+  observed replenishment signals, so you do not need to manually retune every item.</p>
+
+  <div class="tug-formula-grid" style="grid-template-columns:1fr 1fr">
+    <div class="tug-formula-card f-red">
+      <div class="tug-formula-label">F7 — TMR "Too Much Red"</div>
+      <div class="tug-formula-expr">Target × (1 + adj%)</div>
+      <div class="tug-formula-desc"><strong>Trigger:</strong> The item spent more than 20% of its
+      last RLT window in Red or Black zone. Buffer is too small — demand or lead time increased.
+      <br><strong>Effect:</strong> Grows target buffer by adj% (default 33%). Recorded in tmr_count.</div>
+    </div>
+    <div class="tug-formula-card f-green">
+      <div class="tug-formula-label">F8 — TMG "Too Much Green"</div>
+      <div class="tug-formula-expr">Target × (1 − adj%)</div>
+      <div class="tug-formula-desc"><strong>Trigger:</strong> The item stayed Green for 3 consecutive
+      full RLT cycles. Buffer is oversized — tying up capital. Tracked via tmg_green_days.
+      <br><strong>Effect:</strong> Shrinks target buffer by adj% (default 33%). Never below 1-day ADU.</div>
+    </div>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">DBM Safeguards</h3>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Safeguard</th><th>Why it exists</th></tr>
+      <tr><td>Minimum buffer = 1 × ADU</td><td>Prevents shrinking to zero during a slow sales month</td></tr>
+      <tr><td>Adjustment capped at 33% per run</td><td>Prevents violent oscillation from a single outlier week</td></tr>
+      <tr><td>DBM disabled by default</td><td>New items need at least one RLT cycle of history before auto-adjust is meaningful</td></tr>
+      <tr><td>last_dbm_date tracked per item</td><td>Prevents double-adjustment if Sunday job runs more than once due to server issues</td></tr>
+    </table>
+  </div>
+
+  <div class="tug-callout tug-callout-warn">
+    <span class="tug-callout-icon">⚠️</span>
+    <div><strong>Enable DBM only after 30+ days of data.</strong> If you turn it on day one, the
+    engine will see that everything is Green (no demand history yet) and shrink all your buffers
+    down to minimum — the exact opposite of what you want for a new item launch.</div>
+  </div>
+</div>
+
+<!-- ── S09 Real-Time Alerts ───────────────────────────────────────── -->
+<div class="tug-section" id="s09">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🔔</span>
+    <span class="tug-section-title">Real-Time Buffer Alerts</span>
+    <span class="tug-section-num">09</span>
+  </div>
+
+  <p>In addition to the morning scheduled job, the system sends instant alerts when a stock movement
+  pushes a TOC-managed item into Red or Black zone.</p>
+
+  <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Trigger Chain</h3>
+  <div class="tug-timeline">
+    <div class="tug-tl-item tl-blue">
+      <div class="tug-tl-title">Stock Ledger Entry — after_insert</div>
+      <div class="tug-tl-desc">Any stock movement (Delivery Note, Stock Entry, Purchase Receipt) creates
+      a Stock Ledger Entry row. The <code class="tug-code">after_insert</code> hook checks if the affected
+      item is TOC-enabled.</div>
+    </div>
+    <div class="tug-tl-item tl-blue">
+      <div class="tug-tl-title">frappe.enqueue (enqueue_after_commit=True)</div>
+      <div class="tug-tl-desc">The hook enqueues <code class="tug-code">check_realtime_alert</code> with
+      <code class="tug-code">enqueue_after_commit=True</code> — this ensures the alert runs only after
+      the database transaction commits, so Bin.actual_qty is already updated when the alert fires.</div>
+    </div>
+    <div class="tug-tl-item tl-red">
+      <div class="tug-tl-title">check_realtime_alert (background job)</div>
+      <div class="tug-tl-desc">Re-calculates BP% for the item using the latest Bin data.
+      If BP% &gt;= the Red threshold, calls <code class="tug-code">frappe.publish_realtime</code>
+      with event name <code class="tug-code">toc_buffer_alert</code> and item details.</div>
+    </div>
+    <div class="tug-tl-item tl-green">
+      <div class="tug-tl-title">Browser — frappe.realtime (socket.io)</div>
+      <div class="tug-tl-desc">Any open Frappe session subscribed to the event receives a toast
+      notification. The TOC Dashboard auto-refreshes its data when a <code class="tug-code">toc_buffer_alert</code>
+      event arrives.</div>
+    </div>
+  </div>
+
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">💡</span>
+    <div><strong>Why enqueue_after_commit?</strong> Without it, the background job might read
+    Bin.actual_qty before the Delivery Note transaction commits — it would see stale stock data
+    and miss the alert entirely.</div>
+  </div>
+</div>
+
+<!-- ── S10 TOC Settings Reference ────────────────────────────────── -->
+<div class="tug-section" id="s10">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">⚙️</span>
+    <span class="tug-section-title">TOC Settings — Field Reference</span>
+    <span class="tug-section-num">10</span>
+  </div>
+
+  <details class="tug-details">
+    <summary>Zone Thresholds</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>Default</th><th>Effect</th></tr>
+          <tr><td>yellow_zone_start</td><td>33%</td><td>BP% above this → Yellow zone. Items transition from Green to Yellow.</td></tr>
+          <tr><td>red_zone_start</td><td>67%</td><td>BP% above this → Red zone. MRs generated automatically.</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Warehouse Rules (child table)</summary>
+    <div class="tug-details-body">
+      <p>Each row: <strong>warehouse</strong> (Link) + <strong>warehouse_type</strong> (Select).</p>
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Type</th><th>Used in IP formula as</th></tr>
+          <tr><td>Inventory</td><td>On-Hand stock (actual_qty from Bin)</td></tr>
+          <tr><td>WIP</td><td>Work-in-Progress — added to IP for Manufacture-mode items</td></tr>
+          <tr><td>Excluded</td><td>Completely ignored in all buffer calculations</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Item Group Rules (child table)</summary>
+    <div class="tug-details-body">
+      <p>Legacy configuration table — no longer used for buffer type classification.
+      Replenishment mode is now set directly per item via <code class="tug-code">auto_manufacture</code> /
+      <code class="tug-code">auto_purchase</code> flags. This table may be removed in a future version.</p>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>MR Generation</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>Default</th><th>Effect</th></tr>
+          <tr><td>generate_mr_for_zones</td><td>Red, Yellow</td><td>Which zones trigger automatic MR creation at 07:00</td></tr>
+          <tr><td>fg_target_warehouse</td><td>(blank)</td><td>Warehouse to replenish for Manufacture-mode MRs</td></tr>
+          <tr><td>rm_target_warehouse</td><td>(blank)</td><td>Warehouse to replenish for Purchase-mode MRs</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>DBM (Dynamic Buffer Management)</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>Default</th><th>Effect</th></tr>
+          <tr><td>enable_dbm</td><td>0 (off)</td><td>Master switch. Off = no F7/F8 auto-adjustments</td></tr>
+          <tr><td>dbm_adjustment_pct</td><td>33</td><td>% to grow (TMR) or shrink (TMG) target buffer per run</td></tr>
+          <tr><td>tmr_red_days_threshold</td><td>20%</td><td>Fraction of RLT days in Red before TMR triggers</td></tr>
+          <tr><td>tmg_green_cycles</td><td>3</td><td>Consecutive full-RLT Green cycles before TMG triggers</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Sales Projection Automation</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>Default</th><th>Effect</th></tr>
+          <tr><td>enable_projection_automation</td><td>0</td><td>Enables 06:00 projection → WO job</td></tr>
+          <tr><td>projection_pending_so_statuses</td><td>Draft / To Deliver and Bill / To Deliver / On Hold</td><td>Which SO statuses count as &quot;pending demand&quot; in Net Required formula</td></tr>
+          <tr><td>projection_notification_users</td><td>(blank)</td><td>Child table: users to email when automation runs, on edit, or on submit</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+</div>
+
+<!-- ── S11 Item Fields Reference ─────────────────────────────────── -->
+<div class="tug-section" id="s11">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🏷️</span>
+    <span class="tug-section-title">Item Custom Fields Reference</span>
+    <span class="tug-section-num">11</span>
+  </div>
+
+  <p>All fields are added by <code class="tug-code">setup/install.py</code> during app installation.
+  They appear in the <strong>TOC Buffer Management</strong> tab on the Item DocType.
+  You can edit them one-by-one via the modal in <strong>TOC Item Settings</strong>, or use
+  <strong>Bulk Configure</strong> to update a common set of fields across many items at once.</p>
+
+  <div class="tug-callout tug-callout-tip" style="margin-bottom:20px">
+    <strong>Bulk Configure workflow:</strong>
+    Select items using the checkbox column in TOC Item Settings &rarr; the bulk action bar appears
+    &rarr; click <strong>&#9881; Bulk Configure</strong> &rarr; check <strong>Apply</strong> next
+    to each field you want to update &rarr; set the value &rarr; click <strong>Apply to Items</strong>.
+    Only checked fields are changed; unchecked fields are left as-is.
+    Fields available in bulk: TOC Enable, Replenishment Mode (Purchase / Manufacture / Monitor),
+    ADU Period, Custom ADU Override, Check BOM Availability.
+  </div>
+
+  <details class="tug-details">
+    <summary>Section 1 — Enable &amp; Mode</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>Type</th><th>What it does</th></tr>
+          <tr><td>custom_toc_enabled</td><td>Check</td><td>Master switch. Off = item is ignored by all TOC engines. Safe to toggle on/off at any time.</td></tr>
+          <tr><td>custom_toc_auto_purchase</td><td>Check</td><td>System creates Purchase MRs automatically at 07:00. Mutually exclusive with auto_manufacture.</td></tr>
+          <tr><td>custom_toc_auto_manufacture</td><td>Check</td><td>System creates Manufacture MRs automatically. Mutually exclusive with auto_purchase.</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Section 2 — ADU Settings</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>Default</th><th>What it does</th></tr>
+          <tr><td>custom_toc_custom_adu</td><td>0 (auto)</td><td>If checked, ADU auto-calculation skips this item. Use custom_adu_value instead.</td></tr>
+          <tr><td>custom_toc_adu_period</td><td>30 days</td><td>Rolling window for auto-ADU calculation. Options: 30/90/180/365 days.</td></tr>
+          <tr><td>custom_toc_adu_value</td><td>0</td><td>Auto-populated by 06:30 job, or manually entered if custom_adu is checked. Units/day.</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Section 3 — T/CU (Manufacture mode)</summary>
+    <div class="tug-details-body">
+      <p>Only relevant for Manufacture-mode items. Used for production priority tie-breaking when two items compete for the same bottleneck.</p>
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>What it does</th></tr>
+          <tr><td>custom_toc_selling_price</td><td>Selling price per unit. Used in F5 calculation.</td></tr>
+          <tr><td>custom_toc_tvc</td><td>Totally Variable Cost per unit (materials only, NOT labour or overhead).</td></tr>
+          <tr><td>custom_toc_constraint_speed</td><td>Units produced per constraint-minute. E.g., 2.5 = 2.5 boxes per minute on the bottleneck machine.</td></tr>
+          <tr><td>custom_toc_tcu</td><td>Auto-calculated: (selling_price − TVC) × constraint_speed. Higher = more valuable per constraint time.</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Section 4 — BOM (all manufactured items)</summary>
+    <div class="tug-details-body">
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>What it does</th></tr>
+          <tr><td>custom_toc_default_bom</td><td>The BOM to use for Manufacture MRs and Production Plans. Must be owned by this item.</td></tr>
+          <tr><td>custom_toc_check_bom_availability</td><td>If checked, the buffer calculator runs a recursive BOM walk (max 5 levels) and flags component shortages in the dashboard. Useful for pre-production readiness checks.</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Section 5 — Buffer Rules (child table)</summary>
+    <div class="tug-details-body">
+      <p>One row per warehouse. This is the core configuration that drives F1 calculation.</p>
+      <div class="tug-table-wrap" style="margin:0">
+        <table class="tug-table">
+          <tr><th>Field</th><th>What it does</th></tr>
+          <tr><td>warehouse</td><td>Target warehouse for this buffer rule. Leave blank to apply to all warehouses (fallback mode).</td></tr>
+          <tr><td>adu</td><td>Average Daily Usage — auto-filled by 06:30 job unless custom_adu is on.</td></tr>
+          <tr><td>rlt</td><td>Replenishment Lead Time in days. Include ALL lead time: supplier lead time + internal processing + transit.</td></tr>
+          <tr><td>variability_factor</td><td>VF. 1.0 = zero variability. 1.5 = typical. 2.0 = high. This is the most important buffer sizing lever.</td></tr>
+          <tr><td>daf</td><td>Demand Adjustment Factor. Normally 1.0. Set &gt;1.0 before a known demand spike (festival, promotion).</td></tr>
+          <tr><td>target_buffer</td><td>Read-only. Auto-computed: ADU × RLT × VF. Updated on save.</td></tr>
+          <tr><td>adjusted_buffer</td><td>Read-only. target_buffer × DAF. Active target when DAF ≠ 1.0.</td></tr>
+          <tr><td>red_zone_qty</td><td>Read-only. Quantity at which item enters Red zone. = target_buffer × red_zone_start%.</td></tr>
+          <tr><td>yellow_zone_qty</td><td>Read-only. Quantity at which item enters Yellow zone.</td></tr>
+          <tr><td>enabled</td><td>Row-level toggle. Uncheck to disable a specific warehouse rule without deleting it.</td></tr>
+        </table>
+      </div>
+    </div>
+  </details>
+</div>
+
+<!-- ── S12 Trigger Map ────────────────────────────────────────────── -->
+<div class="tug-section" id="s12">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">⚡</span>
+    <span class="tug-section-title">Trigger Map — Doc Events &amp; Scheduler</span>
+    <span class="tug-section-num">12</span>
+  </div>
+
+  <h3 style="font-weight:700;margin:0 0 12px;color:var(--tug-navy)">Scheduler Events (hooks.py)</h3>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Cron / Freq</th><th>Function</th><th>What it does</th></tr>
+      <tr>
+        <td><code class="tug-code">cron: 0 6 * * *</code></td>
+        <td><code class="tug-code">tasks.daily_tasks.daily_projection_automation</code></td>
+        <td>06:00 — Sales Projection → Work Orders</td>
+      </tr>
+      <tr>
+        <td><code class="tug-code">cron: 30 6 * * *</code></td>
+        <td><code class="tug-code">tasks.daily_tasks.auto_calculate_adu</code></td>
+        <td>06:30 — ADU recalculation for all auto-ADU items</td>
+      </tr>
+      <tr>
+        <td><code class="tug-code">cron: 0 7 * * *</code></td>
+        <td><code class="tug-code">tasks.daily_tasks.auto_generate_mrs</code></td>
+        <td>07:00 — Material Request creation for Red/Yellow items</td>
+      </tr>
+      <tr>
+        <td><code class="tug-code">cron: 30 7 * * *</code></td>
+        <td><code class="tug-code">tasks.daily_tasks.monitor_procurement</code></td>
+        <td>07:30 — Purchase-mode Red/Black monitor (log only)</td>
+      </tr>
+      <tr>
+        <td><code class="tug-code">cron: 0 8 * * *</code></td>
+        <td><code class="tug-code">tasks.daily_tasks.archive_buffer_snapshot</code></td>
+        <td>08:00 — Writes TOC Buffer Log rows for DBM history</td>
+      </tr>
+      <tr>
+        <td><code class="tug-code">cron: 0 8 * * 0</code></td>
+        <td><code class="tug-code">tasks.daily_tasks.run_dbm</code></td>
+        <td>Sunday 08:00 — F7/F8 buffer size auto-adjustment</td>
+      </tr>
+    </table>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 12px;color:var(--tug-navy)">Doc Events (hooks.py)</h3>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>DocType</th><th>Event</th><th>Handler</th><th>What it does</th></tr>
+      <tr>
+        <td>Item</td>
+        <td>validate</td>
+        <td><code class="tug-code">overrides.item.on_item_validate</code></td>
+        <td>Validates auto_purchase XOR auto_manufacture (mutually exclusive); validates BOM ownership;
+        computes T/CU (F5) for Manufacture-mode items</td>
+      </tr>
+      <tr>
+        <td>Stock Ledger Entry</td>
+        <td>after_insert</td>
+        <td><code class="tug-code">api.toc_api.on_sle_after_insert</code></td>
+        <td>If item is TOC-enabled: enqueue check_realtime_alert (enqueue_after_commit=True)
+        → publishes toc_buffer_alert socket event if zone is Red/Black</td>
+      </tr>
+      <tr>
+        <td>Material Request</td>
+        <td>after_insert</td>
+        <td><code class="tug-code">overrides.reorder_override.skip_if_toc_managed</code></td>
+        <td>Intercepts ERPNext automatic reorder; cancels and deletes the ERPNext-generated MR
+        if the item is already managed by TOC (prevents duplicate MRs)</td>
+      </tr>
+      <tr>
+        <td>Sales Projection</td>
+        <td>on_update</td>
+        <td><code class="tug-code">toc_engine.projection_engine.on_sales_projection_update</code></td>
+        <td>Sends edit notification to configured users — only if docstatus == 0
+        (prevents double-notify on submit)</td>
+      </tr>
+      <tr>
+        <td>Sales Projection</td>
+        <td>on_submit</td>
+        <td><code class="tug-code">toc_engine.projection_engine.on_sales_projection_submit</code></td>
+        <td>Sends submit notification to configured users</td>
+      </tr>
+    </table>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 12px;color:var(--tug-navy)">Whitelisted API Endpoints</h3>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Method</th><th>Called by</th><th>Role required</th></tr>
+      <tr><td><code class="tug-code">api.toc_api.get_buffer_summary</code></td><td>Dashboard on load</td><td>Any TOC role</td></tr>
+      <tr><td><code class="tug-code">api.toc_api.get_priority_board</code></td><td>Dashboard on load</td><td>Any TOC role</td></tr>
+      <tr><td><code class="tug-code">api.toc_api.trigger_manual_run</code></td><td>Dashboard Action Now button</td><td>System Manager / Stock Manager / TOC Manager</td></tr>
+      <tr><td><code class="tug-code">api.toc_api.recalculate_item_buffers</code></td><td>TOC Settings save</td><td>System Manager / TOC Manager</td></tr>
+      <tr><td><code class="tug-code">api.toc_api.apply_global_daf</code></td><td>TOC Settings</td><td>System Manager / TOC Manager</td></tr>
+      <tr><td><code class="tug-code">api.toc_api.get_single_buffer</code></td><td>Dashboard row drill-in</td><td>Any TOC role</td></tr>
+      <tr><td><code class="tug-code">page.toc_item_settings.toc_item_settings.get_items_for_bulk_settings</code></td><td>Item Settings page grid</td><td>Any TOC role</td></tr>
+      <tr><td><code class="tug-code">page.toc_item_settings.toc_item_settings.save_item_toc_settings</code></td><td>Item Settings modal save (single item)</td><td>System Manager / TOC Manager only</td></tr>
+      <tr><td><code class="tug-code">page.toc_item_settings.toc_item_settings.bulk_save_toc_settings</code></td><td>Bulk configure — save selected scalar fields across N items</td><td>System Manager / TOC Manager only</td></tr>
+      <tr><td><code class="tug-code">toc_engine.projection_engine.run_projection_automation</code></td><td>Sales Projection toolbar button</td><td>System Manager / TOC Manager</td></tr>
+      <tr><td><code class="tug-code">api.demo_data.create_demo_data</code></td><td>Dashboard Admin menu</td><td>Administrator</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ── S13 Troubleshooting ────────────────────────────────────────── -->
+<div class="tug-section" id="s13">
+  <div class="tug-section-head">
+    <span class="tug-section-icon">🔧</span>
+    <span class="tug-section-title">Use Cases &amp; Troubleshooting</span>
+    <span class="tug-section-num">13</span>
+  </div>
+
+  <details class="tug-details">
+    <summary>Item not showing on dashboard</summary>
+    <div class="tug-details-body">
+      <p><strong>Check 1:</strong> Is <code class="tug-code">custom_toc_enabled = 1</code> on the item?</p>
+      <p><strong>Check 2:</strong> Does the item have at least one buffer rule row with a warehouse?
+      Without a rule, it falls back to summing all warehouses — and may still show if ADU &gt; 0.</p>
+      <p><strong>Check 4:</strong> Is ADU zero? If custom_adu is off, wait for the 06:30 job or set
+      a manual ADU value to get an immediate first buffer.</p>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>BP% is wrong / unexpected zone</summary>
+    <div class="tug-details-body">
+      <p><strong>Manufacture mode:</strong> Check that the WIP warehouse is classified correctly in Warehouse Rules.
+      If a large Work Order sits in an Excluded warehouse, it will not count toward IP,
+      making BP% artificially high.</p>
+      <p><strong>Purchase mode:</strong> Check On-Order (Bin.ordered_qty). If a large PO was closed or
+      cancelled without updating the Bin, ordered_qty may be stale. Run
+      <code class="tug-code">bench --site [site] execute erpnext.stock.utils.update_bin_qty</code>
+      to reconcile Bin data.</p>
+      <p><strong>All modes:</strong> If ADU was last calculated a month ago and demand has changed,
+      BP% will be based on stale ADU. Force recalculation via TOC Settings → Recalculate All Buffers.</p>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Duplicate Material Requests being created</summary>
+    <div class="tug-details-body">
+      <p>The MR generator has a dedup check: it calls <code class="tug-code">_has_open_mr(item_code, warehouse)</code>
+      before creating. If you see duplicates:</p>
+      <ul style="margin:8px 0 0 18px;font-size:13px;line-height:1.8">
+        <li>Check if the existing MR is in Draft state (not submitted) — only open/draft MRs are checked.</li>
+        <li>Check if the warehouse on the existing MR matches the item&apos;s target warehouse in TOC Settings.</li>
+        <li>The ERPNext reorder override (<code class="tug-code">reorder_override.py</code>) should cancel ERPNext auto-MRs.
+        Verify the override is active in hooks.py doc_events.</li>
+      </ul>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Sales Projection automation not creating Work Orders</summary>
+    <div class="tug-details-body">
+      <ul style="margin:0 0 0 18px;font-size:13px;line-height:1.9">
+        <li>Is <code class="tug-code">enable_projection_automation = 1</code> in TOC Settings?</li>
+        <li>Is the Sales Projection submitted (<code class="tug-code">docstatus = 1</code>)?</li>
+        <li>Is the projection month = current calendar month? The engine only processes the current month.</li>
+        <li>Does each item have a <strong>Default BOM</strong> that is active and not expired?</li>
+        <li>Is <code class="tug-code">production_capacity &gt; 0</code> on the Sales Projected Items row?
+        Zero capacity silently skips the item and sends a notification.</li>
+        <li>Check ERPNext Error Log for exceptions from <code class="tug-code">projection_engine.py</code>.</li>
+      </ul>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>DBM is shrinking buffers unexpectedly</summary>
+    <div class="tug-details-body">
+      <p>TMG fires when an item has been Green for 3 consecutive full-RLT cycles.
+      This usually means the buffer was set too large at initial configuration.</p>
+      <p><strong>Immediate fix:</strong> Disable DBM in TOC Settings, manually increase RLT or VF
+      on the affected items, then re-enable DBM after the buffer normalises.</p>
+      <p><strong>Root cause:</strong> Check if ADU dropped significantly (e.g., seasonal slowdown).
+      If real demand is low, DBM shrinking is correct behaviour. Consider increasing VF instead of
+      fighting DBM.</p>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Dashboard shows Black zone but stock looks OK</summary>
+    <div class="tug-details-body">
+      <p>Black = BP% &gt; 100%, meaning IP &lt; 0. This happens when:</p>
+      <ul style="margin:8px 0 0 18px;font-size:13px;line-height:1.8">
+        <li>Backorders (reserved_qty in Bin) exceed On-Hand + WIP. Someone reserved more stock than exists.</li>
+        <li>For Purchase-mode items: Committed qty (WO Item unconsumed) is very high relative to on-hand + on-order.</li>
+        <li>A warehouse classification error is excluding a large Inventory warehouse.</li>
+      </ul>
+      <p>Always verify Bin data directly:
+      <code class="tug-code">frappe.get_all("Bin", filters={"item_code": "[item]"}, fields=["*"])</code>
+      in the console to see raw actual_qty, ordered_qty, reserved_qty.</p>
+    </div>
+  </details>
+
+  <details class="tug-details">
+    <summary>Page is blank after deploying changes to HTML template</summary>
+    <div class="tug-details-body">
+      <p>Frappe caches Jinja templates in Redis. After any change to an <code class="tug-code">.html</code>
+      template file you MUST flush the cache:</p>
+      <div style="font-family:monospace;font-size:12px;background:#1e293b;color:#e2e8f0;padding:12px;border-radius:6px;margin-top:8px">
+        redis-cli -h redis-cache -p 6379 FLUSHALL
+      </div>
+      <p style="margin-top:8px">Also check browser console for SyntaxError — a raw single quote inside
+      the template will cause a JS parse error because Frappe wraps templates in a JS single-quoted string.
+      Replace all <code class="tug-code">&apos;</code> possessives with <code class="tug-code">&amp;apos;</code>.</p>
+    </div>
+  </details>
+</div>
+
+<!-- ── Footer ─────────────────────────────────────────────────────── -->
+<div style="text-align:center;padding:12px;color:var(--tug-muted);font-size:12px">
+  chaizup_toc · TOC Buffer Management for ERPNext ·
+  <a onclick="frappe.set_route(&quot;toc-dashboard&quot;)" style="color:var(--tug-accent);cursor:pointer">Dashboard</a> ·
+  <a onclick="frappe.set_route(&quot;toc-item-settings&quot;)" style="color:var(--tug-accent);cursor:pointer">Item Settings</a> ·
+  <a onclick="frappe.set_route(&quot;Form&quot;,&quot;TOC Settings&quot;,&quot;TOC Settings&quot;)" style="color:var(--tug-accent);cursor:pointer">TOC Settings</a>
+</div>
+
+</div><!-- /tug-content -->
+</div><!-- /tug-root -->
+
+<!-- JS moved to toc_user_guide.js — inline script tags break Frappe template wrapping -->

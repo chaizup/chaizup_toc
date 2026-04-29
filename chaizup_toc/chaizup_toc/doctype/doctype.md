@@ -8,7 +8,7 @@ doctype/
 ├── toc_item_buffer/          ← Child Table (istable=1): per-warehouse buffer rule on Item
 ├── toc_settings/             ← Single DocType (issingle=1): app-wide configuration
 ├── toc_warehouse_rule/       ← Child Table (istable=1): warehouse classification in TOC Settings
-└── toc_item_group_rule/      ← Child Table (istable=1): item group → buffer type mapping in TOC Settings
+└── toc_item_group_rule/      ← Child Table (istable=1): LEGACY — no longer shown in TOC Settings UI
 ```
 
 ---
@@ -19,9 +19,9 @@ doctype/
 |---------|------|--------|---------|
 | TOC Buffer Log | Standard | — | One row per item+warehouse+date. Historical archive for trend analysis and DBM. |
 | TOC Item Buffer | Child Table | Item (`custom_toc_buffer_rules`) | ADU/RLT/VF/DAF parameters per warehouse. Drives all F1-F6 calculations. |
-| TOC Settings | Singleton | — | Zone thresholds, DBM params, DAF, warehouse rules, item group rules. |
+| TOC Settings | Singleton | — | Zone thresholds, DBM params, DAF, warehouse rules, notification users. |
 | TOC Warehouse Rule | Child Table | TOC Settings (`warehouse_rules`) | Classify warehouses as Inventory/WIP/Excluded for F2 calculation. |
-| TOC Item Group Rule | Child Table | TOC Settings (`item_group_rules`) | Auto-assign buffer type (FG/SFG/RM/PM) from Item Group hierarchy. |
+| TOC Item Group Rule | Child Table | LEGACY (removed from UI) | Previously mapped item groups to buffer types; no longer used. |
 
 ---
 
@@ -34,7 +34,6 @@ These are not separate DocTypes — they are `Custom Field` records installed vi
 | Field Label | Fieldname | Type | Purpose |
 |-------------|-----------|------|---------|
 | Enable TOC | `custom_toc_enabled` | Check | Master switch for this item in TOC system |
-| Buffer Type | `custom_toc_buffer_type` | Select (FG/SFG/RM/PM) | Manual type override (auto-resolved from item group rules if blank) |
 | ADU Value | `custom_toc_adu_value` | Float | Computed ADU (from delivery notes or manual) |
 | ADU Last Updated | `custom_toc_adu_last_updated` | Datetime | When ADU was last auto-calculated |
 | ADU Period (days) | `custom_toc_adu_period` | Int | Lookback period used for ADU calculation |
@@ -75,7 +74,6 @@ These are not separate DocTypes — they are `Custom Field` records installed vi
 ```
 Item (built-in ERPNext)
 ├── custom_toc_enabled: Check
-├── custom_toc_buffer_type: Select (FG/SFG/RM/PM) — manual or auto-resolved
 ├── custom_toc_adu_value: Float — auto-updated by daily ADU task
 ├── custom_toc_tcu: Currency — (Price − TVC) × Constraint Speed
 └── custom_toc_buffer_rules: Table
@@ -100,12 +98,9 @@ TOC Settings (singleton)
 ├── enable_dbm: Check
 ├── DBM params (tmr_red_pct_of_rlt, tmg_cycles_required, dbm_adjustment_pct, ...)
 ├── default_daf: Float (global DAF, 1.0 = normal)
-├── warehouse_rules: Table
-│   └── TOC Warehouse Rule (child)
-│       └── warehouse, warehouse_purpose (Inventory/WIP/Excluded)
-└── item_group_rules: Table
-    └── TOC Item Group Rule (child)
-        └── item_group, buffer_type, include_sub_groups, priority
+└── warehouse_rules: Table
+    └── TOC Warehouse Rule (child)
+        └── warehouse, warehouse_purpose (Inventory/WIP/Excluded)
 
 Material Request (built-in ERPNext + custom fields)
 └── custom_toc_recorded_by: "By System"

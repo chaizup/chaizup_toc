@@ -327,7 +327,7 @@ elif material_requests:   → "MR Raised"    (orange)
 else:                     → "Short — No Action" (red)
 ```
 
-Work Orders are fetched only for FG/SFG types; Purchase Orders only for RM/PM types.
+Work Orders are fetched for Manufacture-mode components; Purchase Orders for Purchase-mode components. Stage logic applies to all component types — the replenishment mode determines which documents are expected, but all document types are always queried to catch transitional items.
 
 **Important**: MR queries use `mr.docstatus < 2` (Draft + Submitted), NOT `mr.docstatus = 1` (Submitted only). All TOC auto-generated MRs are Drafts (docstatus=0) — they would be invisible if the query filtered only submitted MRs.
 
@@ -335,7 +335,7 @@ Work Orders are fetched only for FG/SFG types; Purchase Orders only for RM/PM ty
 
 ### `create_purchase_requests(items_json, company)`
 
-One-click: creates a single Purchase Material Request covering all RM/PM shortages.
+One-click: creates a single Purchase Material Request covering all Purchase-mode component shortages.
 
 **Access**: `Stock Manager`, `Purchase Manager`, `TOC Manager`, `System Manager`.
 
@@ -344,8 +344,8 @@ frappe.call({
     method: "chaizup_toc.api.kitting_api.create_purchase_requests",
     args: {
         items_json: JSON.stringify([
-            { item_code: "RM-GINGER-PWD", shortage_qty: 6, uom: "Kg", warehouse: "RM Store" },
-            { item_code: "PM-POUCH-1KG",  shortage_qty: 200, uom: "Nos" }
+            { item_code: "RM-GINGER-PWD", shortage_qty: 6000, warehouse: "RM Store" },
+            { item_code: "PM-POUCH-1KG",  shortage_qty: 200 }
         ]),
         company: "Chaizup Foods Pvt Ltd"
     },
@@ -357,7 +357,18 @@ frappe.call({
 
 **Returns**: `{ "status": "success", "mr": "MAT-MR-2026-0042", "items_count": 2 }`
 
-**UOM resolution**: If `uom` not provided in input → `frappe.db.get_value("Item", item_code, "stock_uom")` → fallback "Nos".
+**UOM resolution (stock_uom → purchase_uom)**:
+`shortage_qty` input is always in **stock_uom**. The function converts to `purchase_uom` for the MR line:
+```python
+stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or "Nos"
+purchase_uom = frappe.db.get_value("Item", item_code, "purchase_uom") or stock_uom
+cf = frappe.db.get_value("UOM Conversion Detail",
+    {"parent": item_code, "uom": purchase_uom}, "conversion_factor") or 1.0
+mr_qty = shortage_qty / cf    # e.g., 6000 Gram / 1000 = 6 KG on MR line
+```
+The MR line stores `qty` (in purchase_uom), `stock_uom`, and `conversion_factor` so ERPNext can correctly compute `stock_qty = qty × conversion_factor`.
+
+**Caller responsibility**: The JS `_collectPurchaseShortages()` in kitting_report.js collects only components where `c.type === "Purchase"` — Manufacture-mode sub-assemblies are excluded (they get Work Orders, not MRs).
 
 ---
 
@@ -438,7 +449,7 @@ Admin-only utility for creating a complete test dataset. All documents prefixed 
 Creates:
 - 1 demo Warehouse (`TOC-DEMO-FG Store`)
 - 1 demo Customer (`TOC-DEMO Customer`)
-- 7 Items (3 FG, 1 SFG, 2 RM, 1 PM) — each with TOC Setting tab configured
+- 7 Items (3 Manufacture/FG, 1 Manufacture/SFG sub-assembly, 2 Purchase/RM, 1 Purchase/PM) — each with TOC Setting tab configured (`custom_toc_auto_manufacture` or `custom_toc_auto_purchase`)
 - 1 BOM: `FG-MASALA-1KG` → `SFG-MASALA-BLEND` + `RM-TEA-DUST` + `PM-POUCH-1KG`
 - Initial Stock Entries to set realistic on-hand quantities
 - Delivery Notes (3 months history) for FG ADU auto-calculation
@@ -466,6 +477,27 @@ Returns `{ "exists": bool, "count": int, "manifest": dict }`.
 
 ---
 
+## pipeline_api.py — Supply Chain Tracker API
+
+### `get_pipeline_data(item_code, buffer_type, zone, days_back, supplier, warehouse, show_overdue_only)`
+
+Returns the full supply chain graph for TOC-managed items. Two views from one call:
+- **Pipeline view**: `nodes` + `edges` (column/kanban layout by stage)
+- **Tracker view**: `tracks` (one track per item with all linked documents)
+
+**7 pipeline stages**: `items` → `material_request` → `rfq_pp` → `sq_wo` → `po_jc` → `receipt_qc` → `output`
+
+**UOM standard in pipeline_api**:
+- All TOC buffer data (`on_hand`, `order_qty`, `inventory_position`, `target_buffer`) come from `calculate_all_buffers()` and are in `stock_uom`.
+- `Stock Entry.transfer_qty` (stock_uom) is used for `produced_qty` display — NOT `sed.qty` (transaction UOM).
+- Purchase/Sales document quantities shown in pipeline UI are for display only and use document UOM (not converted).
+
+### `get_filter_options()`
+
+Returns `{ suppliers: [...], item_groups: [...], warehouses: [...] }` for filter dropdowns.
+
+---
+
 ## Integration with Other Modules
 
 ```
@@ -475,8 +507,13 @@ toc_api.py calls:
   → mr_generator.generate_material_requests()   (trigger_manual_run)
 
 kitting_api.py calls:
-  → frappe.db.sql() directly for demand/supply queries
+  → frappe.db.sql() directly for demand/supply queries (all stock_uom fields)
   → kitting_api._walk_bom() for BOM tree (internal, not reusing buffer_calculator._walk_bom)
+
+pipeline_api.py calls:
+  → buffer_calculator.calculate_all_buffers()   (_get_toc_map — overlay TOC zone/bp on items)
+  → frappe.db.sql() for pipeline document fetching
+  Note: produced_qty uses sed.transfer_qty (stock_uom), NOT sed.qty (transaction UOM)
 
 permissions.py called by:
   → hooks.py has_permission["TOC Buffer Log"]

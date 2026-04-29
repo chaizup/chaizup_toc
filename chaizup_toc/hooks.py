@@ -52,6 +52,21 @@ before_uninstall = "chaizup_toc.setup.install.before_uninstall"
 # ═══════════════════════════════════════════════════════
 scheduler_events = {
     "cron": {
+        # ── 12:00 AM Daily: Min Order Qty Sync ──
+        # Syncs Item Min Order Qty (purchase) from Item.minimum_order_qty field.
+        # Syncs Item Minimum Manufacture (manufacture) from WO history for items with no rows.
+        # Sends email alert for any items still missing min order qty config.
+        "0 0 * * *": [
+            "chaizup_toc.tasks.daily_tasks.daily_min_order_sync"
+        ],
+        # ── 02:00 AM Daily: Sales Projection → Production Plan Automation ──
+        # Finds all submitted Sales Projections for the current month (one per warehouse).
+        # Calculates warehouse-specific demand shortage per item and creates Draft
+        # Production Plans. Runs before ADU (06:30) so new PPs are visible in daily calcs.
+        # Two scenarios: Calc 1 (forecast exists) and Calc 2 (0 forecast but SOs pending).
+        "0 2 * * *": [
+            "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.daily_production_plan_automation"
+        ],
         # ── 06:30 AM Daily: ADU Auto-Calculate (R1/R4) ──
         # Calculates Average Daily Usage for all TOC items
         # SKIPS items where "Custom ADU [TOC App]" is checked
@@ -105,7 +120,9 @@ doc_events = {
         "on_update_after_submit": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
     },
     # Purchase Order → on_order changes → RM buffer impact
+    # before_insert → copy TOC metadata from source Material Request (if TOC-generated)
     "Purchase Order": {
+        "before_insert": "chaizup_toc.overrides.purchase_order.on_purchase_order_before_insert",
         "on_submit": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
         "on_cancel": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
     },
@@ -116,6 +133,18 @@ doc_events = {
     # Item validate — auto-calc target buffer when TOC fields change
     "Item": {
         "validate": "chaizup_toc.overrides.item.on_item_validate",
+    },
+    # Sales Projection — notify configured users on edit and submit
+    # on_update fires after every save; the handler gates on docstatus==0 to
+    # avoid double-notification (on_update also fires after on_submit).
+    "Sales Projection": {
+        "on_update": "chaizup_toc.chaizup_toc.toc_engine.projection_engine.on_sales_projection_update",
+        "on_submit": "chaizup_toc.chaizup_toc.toc_engine.projection_engine.on_sales_projection_submit",
+    },
+    # Production Plan — auto-set custom_created_by = "User" for manually created plans.
+    # The automation pre-sets "System" before insert; this hook only fires for blank field.
+    "Production Plan": {
+        "before_insert": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_production_plan_before_insert",
     },
     # NOTE: TOC Item Buffer calculations (F1/F6/zone thresholds) are handled
     # entirely by TOCItemBuffer.validate() in the controller. No doc_event needed.

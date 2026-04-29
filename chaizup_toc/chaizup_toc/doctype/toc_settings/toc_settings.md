@@ -15,23 +15,19 @@ Step 1: Warehouse Classification (warehouse_rules)
         ↓ Defines what counts as "on-hand" vs "WIP" vs "excluded"
         ↓ Wrong setup → Scrap/Expiry stock artificially inflates buffers
 
-Step 2: Item Group Rules (item_group_rules)
-        ↓ Auto-assigns FG/SFG/RM/PM from item group hierarchy
-        ↓ Without this, every item needs manual buffer type selection
-
-Step 3: Zone Thresholds
+Step 2: Zone Thresholds
         ↓ Defaults (33/67%) work for most companies
         ↓ Adjust if your operations have different risk tolerances
 
-Step 4: MR Generation
+Step 3: MR Generation
         ↓ Toggle auto_generate_mr, choose which zones trigger MRs
         ↓ Start with "Red and Black Only" — easier to manage
 
-Step 5: Enable items
+Step 4: Enable items
         ↓ Set custom_toc_enabled=1 on first few items, verify calculations
-        ↓ buffer_type resolves automatically from Step 2 rules
+        ↓ Set auto_purchase or auto_manufacture flag per item for replenishment mode
 
-Step 6: Enable DBM
+Step 5: Enable DBM
         Wait at least 1 month of buffer log data before enabling
         DBM needs historical patterns to make meaningful adjustments
 ```
@@ -107,11 +103,8 @@ Aggressive (more responsive):
 | Field | Type | Description |
 |-------|------|-------------|
 | `warehouse_rules` | Table → TOC Warehouse Rule | Classify each warehouse: Inventory / WIP / Excluded |
-| `item_group_rules` | Table → TOC Item Group Rule | Map item groups to FG/SFG/RM/PM buffer types |
 
 **If `warehouse_rules` is empty**: Calculator falls back to single-warehouse mode (reads from the warehouse specified on each `TOC Item Buffer` rule). Backward-compatible.
-
-**If `item_group_rules` is empty**: Items must have `custom_toc_buffer_type` set manually on each Item form.
 
 ### Demo Data (hidden)
 
@@ -128,7 +121,6 @@ def validate(self):
     self._validate_zone_thresholds()
     self._validate_dbm_params()
     self._validate_warehouse_rules()
-    self._validate_item_group_rules()
 ```
 
 ### _validate_zone_thresholds()

@@ -5,13 +5,13 @@ Creates test items, stock, BOMs, delivery notes to exercise every TOC trigger.
 Admin only. Tracks every created doc for one-click cleanup.
 
 Scenarios created:
-  🔴 RED:    FG item with very low stock (BP% ~80%)
-  🟡 YELLOW: FG item with medium stock (BP% ~50%)
-  🟢 GREEN:  FG item with healthy stock (BP% ~15%)
-  🔴 RED:    RM item with low stock
-  🟢 GREEN:  RM item with healthy stock
-  🟡 YELLOW: PM item with medium stock
-  🏭 SFG:   Semi-finished good linked to FG via BOM
+  🔴 RED:    Manufacture item with very low stock (BP% ~80%)
+  🟡 YELLOW: Manufacture item with medium stock (BP% ~50%)
+  🟢 GREEN:  Manufacture item with healthy stock (BP% ~15%)
+  🔴 RED:    Purchase item with low stock
+  🟢 GREEN:  Purchase item with healthy stock
+  🟡 YELLOW: Purchase item with medium stock
+  🏭 SFG:   Sub-assembly (Manufacture) linked via BOM
 
 All names prefixed with TOC-DEMO- for easy identification.
 """
@@ -45,34 +45,34 @@ def create_demo_data():
         # ── CREATE ITEMS ──
         items_config = [
             {"code": f"{PREFIX}FG-MASALA-1KG", "name": "Masala Tea 1kg [DEMO]",
-             "group": "Products", "uom": "Nos", "btype": "FG",
+             "group": "Products", "uom": "Nos",
              "adu": 200, "rlt": 3, "vf": 1.5, "price": 380, "tvc": 172, "speed": 30,
              "stock_qty": 200, "target": 900, "auto_mfg": 1},
 
             {"code": f"{PREFIX}FG-GINGER-500G", "name": "Ginger Tea 500g [DEMO]",
-             "group": "Products", "uom": "Nos", "btype": "FG",
+             "group": "Products", "uom": "Nos",
              "adu": 180, "rlt": 3, "vf": 1.5, "stock_qty": 450, "target": 810,
              "price": 195, "tvc": 81, "speed": 40, "auto_mfg": 1},
 
             {"code": f"{PREFIX}FG-CARDAMOM-200G", "name": "Cardamom Tea 200g [DEMO]",
-             "group": "Products", "uom": "Nos", "btype": "FG",
+             "group": "Products", "uom": "Nos",
              "adu": 280, "rlt": 3, "vf": 1.5, "stock_qty": 1100, "target": 1260,
              "price": 90, "tvc": 41, "speed": 45, "auto_mfg": 1},
 
             {"code": f"{PREFIX}SFG-MASALA-BLEND", "name": "Masala Premix Blend [DEMO]",
-             "group": "Sub Assemblies", "uom": "Kg", "btype": "SFG",
+             "group": "Sub Assemblies", "uom": "Kg",
              "adu": 150, "rlt": 1.5, "vf": 1.3, "stock_qty": 200, "target": 293, "auto_mfg": 1},
 
             {"code": f"{PREFIX}RM-TEA-DUST", "name": "Tea Dust CTC [DEMO]",
-             "group": "Raw Material", "uom": "Kg", "btype": "RM",
+             "group": "Raw Material", "uom": "Kg",
              "adu": 450, "rlt": 10, "vf": 1.6, "stock_qty": 1800, "target": 7200, "auto_pur": 1},
 
             {"code": f"{PREFIX}RM-SUGAR", "name": "Sugar [DEMO]",
-             "group": "Raw Material", "uom": "Kg", "btype": "RM",
+             "group": "Raw Material", "uom": "Kg",
              "adu": 1500, "rlt": 5, "vf": 1.3, "stock_qty": 8000, "target": 9750, "auto_pur": 1},
 
             {"code": f"{PREFIX}PM-POUCH-1KG", "name": "1kg Printed Pouch [DEMO]",
-             "group": "Consumable", "uom": "Nos", "btype": "PM",
+             "group": "Consumable", "uom": "Nos",
              "adu": 200, "rlt": 18, "vf": 1.5, "stock_qty": 3000, "target": 5400, "auto_pur": 1},
         ]
 
@@ -294,8 +294,9 @@ def _create_item(config, company, warehouse, manifest):
         "item_group": group,
         "stock_uom": config.get("uom", "Nos"),
         "is_stock_item": 1,
-        "include_item_in_manufacturing": 1 if config["btype"] in ("FG", "SFG") else 0,
-        # TOC fields (buffer type is auto-resolved from item group rules in TOC Settings)
+        # include_item_in_manufacturing: true for Manufacture-mode items (auto_mfg=1)
+        "include_item_in_manufacturing": 1 if config.get("auto_mfg") else 0,
+        # TOC fields — routing derived from auto_manufacture / auto_purchase flags
         "custom_toc_enabled": 1,
         "custom_toc_auto_purchase": config.get("auto_pur", 0),
         "custom_toc_auto_manufacture": config.get("auto_mfg", 0),
@@ -305,7 +306,8 @@ def _create_item(config, company, warehouse, manifest):
         "custom_toc_selling_price": config.get("price", 0),
         "custom_toc_tvc": config.get("tvc", 0),
         "custom_toc_constraint_speed": config.get("speed", 0),
-        "custom_toc_check_bom_availability": 1 if config["btype"] == "FG" else 0,
+        # Enable BOM availability check for all Manufacture-mode items
+        "custom_toc_check_bom_availability": 1 if config.get("auto_mfg") else 0,
     })
 
     # Add buffer rule row

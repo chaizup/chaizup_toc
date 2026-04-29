@@ -8,7 +8,6 @@ class TOCSettings(Document):
         self._validate_zone_thresholds()
         self._validate_dbm_params()
         self._validate_warehouse_rules()
-        self._validate_item_group_rules()
 
     def _validate_zone_thresholds(self):
         if flt(self.red_zone_threshold) <= flt(self.yellow_zone_threshold):
@@ -49,21 +48,3 @@ class TOCSettings(Document):
                 indicator="orange"
             )
 
-    def _validate_item_group_rules(self):
-        if not self.item_group_rules:
-            return
-
-        from collections import defaultdict
-        group_entries = defaultdict(list)
-        for row in self.item_group_rules:
-            group_entries[row.item_group].append(row.idx)
-
-        conflicts = {g: rows for g, rows in group_entries.items() if len(rows) > 1}
-        if conflicts:
-            msgs = [f"<b>{g}</b> (rows {', '.join(str(r) for r in rows)})"
-                    for g, rows in conflicts.items()]
-            frappe.msgprint(
-                "Duplicate item group rules found — use Priority to resolve conflicts:<br>" +
-                "<br>".join(msgs),
-                indicator="orange"
-            )

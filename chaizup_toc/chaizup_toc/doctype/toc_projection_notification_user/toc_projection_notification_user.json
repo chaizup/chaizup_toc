@@ -1,0 +1,76 @@
+{
+ "actions": [],
+ "creation": "2026-04-18 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "user_name",
+  "notify_on_edit",
+  "notify_on_submit",
+  "notify_on_wo_create"
+ ],
+ "fields": [
+  {
+   "columns": 3,
+   "description": "Select a Frappe/ERPNext user who should receive email alerts about Sales Projection changes and WO automation results.",
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "fetch_from": "user.full_name",
+   "fetch_if_empty": 1,
+   "fieldname": "user_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Full Name",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "description": "Send email when anyone saves (edits) a Sales Projection document.",
+   "fieldname": "notify_on_edit",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "On Edit"
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "description": "Send email when a Sales Projection is submitted (finalised for the month).",
+   "fieldname": "notify_on_submit",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "On Submit"
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "description": "Send email after each automation run (daily or manual) with the full list of Work Orders created and items skipped with reasons.",
+   "fieldname": "notify_on_wo_create",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "On WO Run"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-18 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Chaizup Toc",
+ "name": "TOC Projection Notification User",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

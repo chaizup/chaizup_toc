@@ -4,10 +4,64 @@ The mathematical heart of the Chaizup TOC app. Three modules form the complete r
 
 ```
 toc_engine/
-├── buffer_calculator.py   ← F1–F5 formulas, IP, Zone, BOM availability
-├── dbm_engine.py          ← F7/F8 Dynamic Buffer Management (weekly auto-resize)
-└── mr_generator.py        ← F4 Material Request creation from buffer data
+├── buffer_calculator.py         ← F1–F5 formulas, IP, Zone, BOM availability
+├── dbm_engine.py                ← F7/F8 Dynamic Buffer Management (weekly auto-resize)
+├── mr_generator.py              ← F4 Material Request creation from buffer data
+└── component_mr_generator.py   ← Post-WO component shortage Purchase MR creation
 ```
+
+---
+
+## UOM Standard
+
+**All inventory quantities are in `stock_uom`** — the item's canonical warehouse unit (Gram, Nos, Kg, etc. as set on the Item master).
+
+| Source Field | DocType | UOM | Notes |
+|---|---|---|---|
+| `Bin.actual_qty` | Bin | stock_uom | Always stock_uom |
+| `Bin.ordered_qty` | Bin | stock_uom | ERPNext updates from POs automatically |
+| `Bin.reserved_qty` | Bin | stock_uom | ERPNext updates from SOs automatically |
+| `Work Order.qty − produced_qty` | Work Order | stock_uom | ERPNext `wo.stock_uom` is fetched from item — WO qty IS in stock_uom |
+| `Work Order Item.required_qty − transferred_qty` | Work Order Item | stock_uom | Set from BOM Item.stock_qty; already in stock_uom |
+| `BOM Item.stock_qty` | BOM Item | stock_uom | ERPNext auto-converts at BOM save |
+| `soi.stock_qty` | Sales Order Item | stock_uom | Use this, NOT `soi.qty` (transaction UOM) |
+| `soi.delivered_qty` | Sales Order Item | transaction UOM | Multiply by `soi.conversion_factor` to get stock_uom |
+| `dni.stock_qty` | Delivery Note Item | stock_uom | Use this, NOT `dni.qty` |
+| `sed.transfer_qty` | Stock Entry Detail | stock_uom | Use this, NOT `sed.qty` (transaction UOM) |
+| `Bin.ordered_qty` | Bin | stock_uom | ERPNext populates from `poi.stock_qty` |
+| `Bin.reserved_qty` | Bin | stock_uom | ERPNext populates from `soi.stock_qty` |
+
+### UOM Conversion for Purchase MRs
+
+`order_qty` (from buffer_calculator) is always in `stock_uom`. When creating a Purchase MR:
+```python
+purchase_uom = frappe.db.get_value("Item", item_code, "purchase_uom") or stock_uom
+# UOM Conversion Detail.conversion_factor = stock units per 1 purchase unit
+# e.g., stock_uom=Gram, purchase_uom=KG → conversion_factor=1000
+mr_qty = order_qty_in_stock_uom / conversion_factor   # e.g., 5000 Gram / 1000 = 5 KG
+```
+The MR line always stores `stock_uom` and `conversion_factor` so ERPNext can correctly compute stock impact.
+
+### RESTRICT — UOM Rules
+- **NEVER use `soi.qty`, `dni.qty`, or `sed.qty`** for stock calculations — these are transaction UOM.
+- **NEVER compare `soi.delivered_qty` directly** to `soi.stock_qty` — multiply by `conversion_factor` first.
+- **NEVER hard-code `"Nos"` or `"Kg"`** as a fallback UOM — always read from Item master.
+- **BOM Item.stock_qty** is already in stock_uom — do NOT apply an additional conversion factor.
+
+---
+
+## Universal Transaction Model
+
+**The IP formula queries ALL transaction types for EVERY item** — no mode-based branching in the calculation path.
+
+A Purchase-mode item that is also occasionally used as a component in Work Orders will have `committed > 0`. A Manufacture-mode item with no open WOs has `wip = 0`. Unused transaction sources return 0 and do not distort the result.
+
+**The replenishment mode** (Manufacture / Purchase) determines only what *output document* gets created (Work Order MR vs Purchase MR) — it does NOT limit which IP components are queried.
+
+This matters in practice:
+- Items can transition from purchased to manufactured in-house (or vice versa) — IP is always correct because all sources are always summed.
+- Dual-source items (sometimes bought, sometimes produced) are correctly represented.
+- Never add `IF mr_type = 'Purchase' THEN skip WIP` logic — it breaks the formula.
 
 ---
 
@@ -20,7 +74,7 @@ toc_engine/
 | F3 | `BP% = (Target − IP) / Target × 100` | `_calculate_single()` | 0–100+ range; >100 = Black |
 | F3a | `SR% = IP / Target × 100` | `_calculate_single()` | Stock Remaining % = 100 − BP% |
 | F4 | `Order Qty = max(0, Target − IP)` | `_calculate_single()` + `_create_mr()` | Never negative |
-| F5 | `T/CU = (Price − TVC) × Speed` | `on_item_validate()` in overrides | Only FG items; tie-breaker |
+| F5 | `T/CU = (Price − TVC) × Speed` | `on_item_validate()` in overrides | Manufacture-mode items; tie-breaker |
 | F6 | `Adjusted = Target × DAF` | `TOCItemBuffer.calculate_adjusted_buffer()` | 0 if DAF = 1.0 (signals "use base target") |
 | F7 | `new_target = round(target × (1 + adj%))` | `dbm_engine._evaluate_single()` → TMR | Fast increase; fires after 20% of RLT in Red |
 | F8 | `new_target = max(floor, round(target × (1 − adj%)))` | `dbm_engine._evaluate_single()` → TMG | Slow decrease; needs 3 full RLT cycles all-Green |
@@ -28,9 +82,9 @@ toc_engine/
 ### Step-by-Step Calculation Example
 
 ```
-Item: FG-MASALA-1KG
+Item: FG-MASALA-1KG  (Manufacture mode)
 Warehouse: Finished Goods Store
-ADU = 10 units/day  (90-day average from Delivery Notes)
+ADU = 10 units/day  (90-day average from all SLE outflows)
 RLT = 7 days        (blend + fill + QC + move)
 VF  = 1.5           (moderate demand variability)
 DAF = 1.6           (Diwali season uplift)
@@ -50,9 +104,9 @@ F2 IP = 42 + 18 + 0 − 8 − 5 = 47 units
 F3 BP% = (168 − 47) / 168 × 100 = 72.0%   → RED ZONE
 F3a SR% = 47 / 168 × 100 = 28.0%
 
-F4 Order Qty = 168 − 47 = 121 units  ← Manufacture MR will be created for this qty
+F4 Order Qty = 168 − 47 = 121 units  ← Production Plan created for this qty
 
-F5 (FG only):
+F5 (Manufacture mode):
   Price = ₹350, TVC = ₹120, Speed = 8 units/min
   T/CU = (350 − 120) × 8 = ₹1,840/min  ← tie-breaker if two items both at 72%
 ```
@@ -70,7 +124,7 @@ F5 (FG only):
 | Backorders | `tabBin` | `reserved_qty` | `SUM(reserved_qty) WHERE warehouse IN (Inventory)` |
 | Committed | `tabWork Order Item` JOIN `tabWork Order` | `required_qty − transferred_qty` | `WHERE wo.docstatus=1 AND status NOT IN (...) AND source_warehouse IN (Inventory)` |
 
-**Key insight**: All 5 components are queried for **every item** regardless of buffer type. An RM item that is also occasionally sold will have `backorders > 0`. An FG item with no open Work Orders has `wip = 0`. Unused sources return 0 and don't distort the result.
+**Key insight**: All 5 components are queried for **every item** regardless of replenishment mode. A Purchase-mode item that is also occasionally sold will have `backorders > 0`. A Manufacture-mode item with no open Work Orders has `wip = 0`. Unused sources return 0 and don't distort the result.
 
 ---
 
@@ -89,9 +143,9 @@ def get_zone(bp_pct, settings=None):
 
 Thresholds (67 / 33) come from `TOC Settings` and are configurable. Defaults are stored as fallback in `_get_settings()`.
 
-#### Zone Action Text by Type
+#### Zone Action Text by Replenishment Mode
 
-| Zone | FG Action | RM/PM Action |
+| Zone | Manufacture Action | Purchase Action |
 |------|-----------|-------------|
 | Green | No action | No action |
 | Yellow | Plan production | Standard PO |
@@ -242,9 +296,9 @@ def _calculate_single(item, rule, settings):
     zone = get_zone(bp_pct, settings)
     order_qty = max(0, target - ip)                  # never negative
 
-    # BOM check for FG and SFG items (optional, only if configured)
+    # BOM availability check — all items with a default BOM configured
     sfg_status = None
-    if btype in ("FG", "SFG") and item.custom_toc_default_bom:
+    if item.custom_toc_default_bom and item.custom_toc_check_bom_availability:
         sfg_status = check_bom_availability(item.name, order_qty, rule.warehouse)
 
     return {
@@ -304,7 +358,7 @@ Browser (desk_branding.js):
 | Source DocType | Event | Items Checked |
 |---------------|-------|---------------|
 | Stock Ledger Entry | after_insert | `doc.item_code` |
-| Sales Order | on_submit, on_cancel | All `doc.items` where `custom_toc_buffer_type="FG"` |
+| Sales Order | on_submit, on_cancel | All `doc.items` where `custom_toc_enabled=1` |
 | Work Order | on_submit, on_cancel, on_update_after_submit | `doc.production_item` |
 | Purchase Order | on_submit, on_cancel | All `doc.items` |
 
@@ -432,8 +486,9 @@ Example: RLT=7, tmg_cycles=3 → window = 21 days
 ```
 1. Check TOC Settings.auto_generate_mr → return [] if disabled
 
-2. buffers = calculate_all_buffers(buffer_type, company)
+2. buffers = calculate_all_buffers(company)
    → sorted by BP% desc, T/CU desc
+   Note: buffer_type param kept for backward compat but silently ignored
 
 3. zone_filter from settings:
    "Red and Black Only" → ["Red", "Black"]
@@ -473,8 +528,19 @@ Returns truthy if any open MR exists → item skipped to avoid duplicate MRs.
 
 ### _create_mr() — MR Document Structure
 
+UOM handling: `order_qty` from buffer_calculator is always in `stock_uom`. For Purchase MRs,
+the function looks up `Item.purchase_uom` and `UOM Conversion Detail.conversion_factor`,
+then divides `order_qty` by the factor so the MR shows supplier-friendly units (e.g., KG
+instead of Gram). ERPNext MR validation recomputes `stock_qty = qty × conversion_factor`.
+
 ```python
-mr.material_request_type = "Manufacture"  # if auto_manufacture else "Purchase"
+# UOM resolution for Purchase MRs
+purchase_uom = frappe.db.get_value("Item", item_code, "purchase_uom") or stock_uom
+# UOM Conversion Detail: conversion_factor = stock units per 1 purchase unit
+# e.g., stock_uom=Gram, purchase_uom=KG → conversion_factor=1000
+# mr_qty = order_qty (in Gram) / 1000 → qty in KG on the MR
+
+mr.material_request_type = "Purchase"  # (or "Manufacture" for Manufacture-mode items)
 mr.transaction_date = today()
 mr.company = frappe.db.get_value("Warehouse", warehouse, "company")
 mr.schedule_date = add_days(today(), max(1, int(rlt)))  # delivery expected date
@@ -489,17 +555,24 @@ mr.custom_toc_sr_pct = 28.0
 
 # Item row — one per MR (one item per MR for traceability)
 mr.append("items", {
-    "item_code": "FG-MASALA-1KG",
-    "qty": 121,        # F4: Target − IP = 168 − 47
+    "item_code": "RM-SALT-BULK",
+    "qty": 5,                      # 5 KG (= 5000 Gram / 1000 conversion_factor)
+    "uom": "KG",                   # purchase_uom — supplier-friendly unit
+    "stock_uom": "Gram",           # stock_uom — warehouse unit
+    "conversion_factor": 1000,     # ERPNext recomputes: stock_qty = 5 × 1000 = 5000 Gram
     "description": "TOC Replenishment | Zone: Red | BP: 72.0% | "
-                   "Target: 168 | IP: 47 | Formula: F4 Order Qty = 168 − 47 = 121"
+                   "Target: 168 | IP: 47 | Formula: F4 Order Qty = 168 − 47 = 121 Gram"
 })
 
 mr.flags.ignore_permissions = True   # scheduler runs as Administrator
 mr.insert()                          # NOT submitted — stays as Draft for review
 ```
 
-**Design decision**: MRs are inserted as **Draft** (docstatus=0). The production planner reviews and submits them, then converts to Work Orders or Purchase Orders. TOC does not auto-submit.
+**Design decision**: MRs are inserted as **Draft** (docstatus=0). The production planner reviews and submits them, then converts to Purchase Orders. TOC does not auto-submit.
+
+**UOM rule summary:**
+- Manufacture-mode: `order_qty` used directly in `stock_uom` (Production Plans always use stock UOM)
+- Purchase-mode: `order_qty` divided by `conversion_factor`; MR line shows `purchase_uom`
 
 ### Email Alert — _send_alerts()
 
@@ -531,7 +604,7 @@ Daily Schedule:
                                          → creates Material Request (Draft)
                                          → creates TOC Buffer Log
                                          → sends email alerts
-  07:30 daily_procurement_run()     → calculate_all_buffers(RM/PM) → log warning
+  07:30 daily_procurement_run()     → calculate_all_buffers() → log warning (Purchase-mode items)
   08:00 daily_buffer_snapshot()     → creates TOC Buffer Log (all types)
   08:00 Sun weekly_dbm_check()      → evaluate_all_dbm() → updates TOC Item Buffer
 
@@ -562,9 +635,9 @@ On-Demand (API):
 | Item stuck Red 3 weeks | Sunday DBM → F7 TMR | Target grows 33%; tmr_count=1 |
 | TMR fires 3 times in a row | DBM safeguard | Error Log written; further inflation blocked |
 | Item Green for 3 RLTs | Sunday DBM → F8 TMG | Target shrinks 33%; saves holding cost |
-| SFG component short | `check_bom_availability` | FG MR still created; sfg_status shows shortfall |
+| Component short on BOM | `check_bom_availability` | MR still created; sfg_status shows shortfall |
 | Duplicate MR prevention | `_has_open_mr` | Second MR not created; existing MR reused |
-| No buffer_type on item | `_resolve_buffer_type` | Item Group hierarchy walked; Error Log if unresolved |
+| Item stock_uom=Gram, purchase_uom=KG | `_create_mr` | MR qty in KG with conversion_factor=1000 |
 
 ---
 
@@ -575,3 +648,118 @@ On-Demand (API):
 - `frappe.get_cached_doc("TOC Settings")` — cached in memory; no DB hit per item. Changes take effect after `bench clear-cache` or server restart.
 - Background jobs (`enqueue_after_commit=True`) run asynchronously — real-time alerts don't block the transaction.
 - Weekly DBM: single `frappe.db.commit()` at the end — all `set_value` calls accumulate and commit together.
+
+---
+
+## Production Plan Column Guards (mr_generator.py + production_plan_engine.py)
+
+Two dynamically-created columns require runtime guards before querying:
+
+### `tabProduction Plan.custom_projection_reference`
+
+Defined in `chaizup_toc/fixtures/custom_field.json`. Only exists after fixtures are imported.
+
+| File | Function | Guard |
+|------|----------|-------|
+| `mr_generator.py` | `_has_open_pp()` | `_pp_has_custom_ref_column()` with `_pp_custom_ref_column_cache` |
+| `production_plan_engine.py` | `_pp_exists_for_item()` | — (assumes fixtures applied; documents fix procedure) |
+
+Without this guard: `OperationalError: (1054, "Unknown column 'pp.custom_projection_reference' in 'WHERE'")`
+
+**Fallback behaviour** when column missing:
+- `_has_open_pp` falls back to matching ANY non-cancelled PP for item+warehouse (conservative dedup — may over-block but never crashes)
+
+**To apply fixtures** (required on first deploy):
+```python
+# bench console
+import frappe.utils.fixtures
+frappe.utils.fixtures.sync_fixtures(app='chaizup_toc')
+frappe.db.commit()
+# If sync_fixtures fails silently, insert manually — see production_plan_engine.md
+```
+
+### `tabSales Order.workflow_state`
+
+Frappe only adds this column when a Workflow is assigned to the Sales Order DocType.
+
+| File | Function | Guard |
+|------|----------|-------|
+| `production_plan_engine.py` | `_so_conditions_and_params()` | `_so_has_workflow_column()` with `_so_workflow_column_cache` |
+
+Without this guard: `OperationalError: (1054, "Unknown column 'so.workflow_state' in 'WHERE'")`
+
+**Behaviour when column missing**: PATH A (draft SOs with workflow states) is skipped entirely. Only PATH B (submitted SOs in pending statuses) runs.
+
+### General Rule for Dynamic Columns
+
+Always use `frappe.db.has_column(doctype, fieldname)` before querying a column that:
+- Is a Frappe workflow column (`workflow_state`, `workflow_state_before_workflow`)
+- Is a Custom Field (may not be installed on all sites)
+- Is added by an app's fixtures (installed lazily)
+
+Cache the result at module level in a `_xxx_column_cache = None` variable to avoid repeated `INFORMATION_SCHEMA` lookups.
+
+---
+
+## DANGER ZONE (mr_generator.py)
+
+| Risk | Detail |
+|------|--------|
+| `custom_projection_reference` column | Only exists after fixtures imported. `_has_open_pp` guards with `_pp_has_custom_ref_column()`. DO NOT remove guard. |
+| `_pp_custom_ref_column_cache` | Module-level cache. Fixtures imported mid-session won't be reflected until worker restarts. Acceptable. |
+| `frappe.sendmail` in `_send_alerts` | Already uses queue mode (no `now=True`). Wrapped in try/except. Safe. |
+| `buffer_type` param in `generate_material_requests` | Kept for backward compat — silently ignored. DO NOT pass to `calculate_all_buffers`. |
+| `frappe.db.commit()` in `_create_buffer_production_plan` | Called after PP insert AND after WO creation. Both required. Do NOT remove. |
+
+## RESTRICT (mr_generator.py)
+
+- Do NOT remove `_pp_has_custom_ref_column()` guard from `_has_open_pp`.
+- Do NOT collapse the two `_has_open_pp` SQL branches into one query that always references `custom_projection_reference`.
+- Do NOT pass `buffer_type` to `calculate_all_buffers` — parameter was removed in refactor.
+- Do NOT use `stock_uom` directly for Purchase MR `uom` field — must use `purchase_uom` with `conversion_factor`.
+- Do NOT skip `_log_snapshot` — required for DBM trend analysis.
+
+---
+
+## component_mr_generator.py — Post-WO Component Shortage MRs
+
+**Full documentation**: `component_mr_generator.md` (same folder)
+
+### Summary
+
+Called as **Step 7** in `production_plan_engine._submit_pp_and_create_work_orders()` after WOs are created. Creates Purchase MRs for BOM components that are short, specifically for items with `custom_toc_auto_purchase = 1`.
+
+### Min Order Qty Floor
+
+Both `component_mr_generator` and `mr_generator` apply this floor for Purchase MRs:
+
+```python
+order_qty = max(shortage_in_stock_uom, min_order_qty_in_stock_uom)
+```
+
+The floor is read from the `Item Min Order Qty` child table on Item Master (custom field `custom_min_order_qty`, Table → `Item Min Order Qty`). Each row has: warehouse, uom, min_order_qty (user input), stock_uom (read-only), conversion_factor (read-only), stock_uom_qty (computed = min_order_qty × cf).
+
+**`build_min_order_map(item_codes)`** is a public function in `component_mr_generator.py` — imported by `mr_generator.py` so both engines share the same min-order floor logic.
+
+### Item Min Order Qty DocType
+
+| Field | Type | Auto-populated? |
+|---|---|---|
+| `warehouse` | Link/Warehouse | No — user input |
+| `uom` | Link/UOM | No — user input |
+| `min_order_qty` | Float | No — user input |
+| `stock_uom` | Data | Yes — from Item.stock_uom |
+| `conversion_factor` | Float | Yes — from UOM Conversion Detail |
+| `stock_uom_qty` | Float | Yes — `min_order_qty × conversion_factor` |
+
+**RESTRICT**: `custom_min_order_qty` parentfield name must not change — hardcoded in `build_min_order_map()`.
+
+### TOC Settings Toggle
+
+`auto_create_component_mrs` (Check, default ON) — disabling this skips Step 7 entirely.
+
+### RESTRICT (component_mr_generator.py)
+
+- Do NOT call `frappe.db.commit()` — caller owns the transaction.
+- Do NOT create MRs for `custom_toc_auto_manufacture = 1` items — they are manufactured via WOs already created by the PP.
+- Do NOT move Step 7 before Step 5 — WOs must exist before querying `tabWork Order Item`.

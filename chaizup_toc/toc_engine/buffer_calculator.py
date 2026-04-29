@@ -1,16 +1,50 @@
 """
 TOC Buffer Calculator — Core Engine
 =====================================
+# =============================================================================
+# CONTEXT: Universal buffer engine — no item-type classification. Every item
+#   (regardless of what it is or which industry) is treated identically.
+#   Replenishment routing (Manufacture vs Purchase) is read from the item's
+#   own auto_manufacture / auto_purchase flags — NOT from a category label.
+# MEMORY: app_chaizup_toc.md § TOC Engine | toc_engine.md
+# INSTRUCTIONS:
+#   - IP formula (F2) is universal: same query for every item.
+#   - ADU is now calculated from ALL stock outflows (SLE actual_qty < 0).
+#   - BOM check runs for any item that has custom_toc_default_bom set.
+#   - mr_type is always derived from flags: auto_manufacture → Manufacture,
+#     auto_purchase → Purchase, neither → Monitor.
+#   - buffer_type in the result dict = mr_type (Manufacture/Purchase/Monitor)
+#     for backward compat with TOC Buffer Log.
+# DANGER ZONE:
+#   - Do NOT re-add _resolve_buffer_type() — it was removed intentionally.
+#   - Do NOT add item-type branching for any calculation.
+#   - BOM check recursion now based on 'has custom_toc_default_bom', not type.
+#
+# MODE-TRANSITION SAFETY (e.g. item switches from Purchase → Manufacture):
+#   The IP formula always queries ALL supply/demand sources unconditionally:
+#     On-Order  = Bin.ordered_qty   → captures open POs (even from before mode switch)
+#     WIP       = Work Order qty − produced_qty → captures new WOs after mode switch
+#     Backorders = Bin.reserved_qty → SO demand regardless of mode
+#     Committed = WO Item required_qty − transferred_qty → component consumption
+#   There is NO branching by mr_type in get_inventory_position(). The mode flag
+#   only decides what REPLENISHMENT document to create (MR vs PP) — it NEVER
+#   limits which transaction sources are counted in the formula.
+#   This means a switched item will correctly count both legacy open POs (as
+#   On-Order from Bin.ordered_qty) AND any new WOs (as WIP) in the same IP calc.
+#
+# RESTRICT:
+#   - Do NOT filter items by item_group in any calculation path.
+#   - Do NOT use TOC Settings item_group_rules anywhere in this file.
+#   - Do NOT add IF mr_type == 'Purchase' THEN skip WIP logic — it breaks F2.
+#   - Do NOT add IF mr_type == 'Manufacture' THEN skip On-Order — it breaks F2.
+# =============================================================================
+
 Reads from built-in ERPNext Bin + Work Order + Item DocTypes.
 Custom Fields on Item hold buffer config.
 Child table 'TOC Item Buffer' holds per-warehouse rules.
 
-Universal IP Formula (F2) — same for ALL item types:
+Universal IP Formula (F2) — same for ALL items:
   IP = On-Hand + WIP + On-Order − Backorders − Committed
-
-Every item checks every transaction source. An item may be both manufactured
-AND purchased; both sold AND consumed as a component — whichever transactions
-exist for an item contribute to its IP. Unused sources simply return 0.
 
   ┌─────────────────────┬─────────────────┬──────────────────────────────────────┐
   │ TOC Concept         │ DocType         │ Field / Query                        │
@@ -21,7 +55,7 @@ exist for an item contribute to its IP. Unused sources simply return 0.
   │ Backorders (demand) │ Bin             │ reserved_qty (Sales Order demand)    │
   │ Committed (demand)  │ Work Order Item │ required_qty − transferred_qty       │
   │ ADU, RLT, VF        │ Item child      │ TOC Item Buffer                      │
-  │ Buffer Type         │ TOC Settings    │ item_group_rules (TOC Item Group Rule)│
+  │ Replenishment mode  │ Item            │ custom_toc_auto_manufacture/purchase  │
   └─────────────────────┴─────────────────┴──────────────────────────────────────┘
 """
 
@@ -63,15 +97,17 @@ def get_zone_label(zone):
     return {"Green": "🟢 GREEN", "Yellow": "🟡 YELLOW", "Red": "🔴 RED", "Black": "⚫ BLACK"}.get(zone, zone)
 
 
-def get_zone_action(zone, buffer_type="FG"):
-    """Return action text for each zone."""
+def get_zone_action(zone, mr_type="Purchase"):
+    """
+    Return action text based on replenishment mode (mr_type), not item category.
+    mr_type: "Manufacture" | "Purchase" | "Monitor"
+    """
     actions = {
-        "FG": {"Green": "No action", "Yellow": "Plan production", "Red": "PRODUCE NOW", "Black": "EMERGENCY"},
-        "RM": {"Green": "No action", "Yellow": "Standard PO", "Red": "ORDER NOW + Express", "Black": "EMERGENCY — Alt supplier"},
-        "PM": {"Green": "No action", "Yellow": "Standard PO", "Red": "ORDER NOW + Express", "Black": "EMERGENCY — Alt supplier"},
-        "SFG": {"Green": "No action", "Yellow": "Plan blending", "Red": "BLEND NOW", "Black": "EMERGENCY"},
+        "Manufacture": {"Green": "No action", "Yellow": "Plan production", "Red": "PRODUCE NOW", "Black": "EMERGENCY"},
+        "Purchase":    {"Green": "No action", "Yellow": "Plan order", "Red": "ORDER NOW", "Black": "EMERGENCY — alt supplier"},
+        "Monitor":     {"Green": "No action", "Yellow": "Monitor closely", "Red": "URGENT: INVESTIGATE", "Black": "EMERGENCY"},
     }
-    return actions.get(buffer_type, actions["FG"]).get(zone, "Unknown")
+    return actions.get(mr_type, actions["Purchase"]).get(zone, "Unknown")
 
 
 # ═══════════════════════════════════════════════════════
@@ -199,46 +235,27 @@ def get_rm_position(item_code, warehouse, settings=None):
 # MAIN CALCULATION ENGINE
 # ═══════════════════════════════════════════════════════
 
-def calculate_all_buffers(buffer_type=None, company=None, warehouse=None, item_code=None):
+def calculate_all_buffers(company=None, warehouse=None, item_code=None):
     """
-    Calculate IP, BP%, Zone, Order Qty for all enabled buffer configs.
-    Reads from Item.custom_toc_buffer_rules (child table).
-
+    Calculate IP, BP%, Zone, Order Qty for all TOC-enabled items.
+    No item-type filtering — every enabled item with buffer rules is included.
     Returns list sorted by BP% desc (most urgent first), T/CU as tie-breaker.
     """
     settings = _get_settings()
 
-    # Build filters for Items with TOC enabled.
-    # NOTE: buffer_type filter is applied in Python after resolving via item_group_rules;
-    # it cannot be pushed to SQL because the type lives in TOC Settings, not on the Item.
     item_filters = {"custom_toc_enabled": 1, "disabled": 0}
     if item_code:
         item_filters["name"] = item_code
 
     items = frappe.get_all("Item", filters=item_filters,
-        fields=["name", "item_name", "item_group", "stock_uom",
-                "custom_toc_auto_purchase", "custom_toc_auto_manufacture", "custom_toc_selling_price", "custom_toc_tvc",
-                "custom_toc_constraint_speed", "custom_toc_tcu", "custom_toc_default_bom"])
+        fields=["name", "item_name", "stock_uom",
+                "custom_toc_auto_purchase", "custom_toc_auto_manufacture",
+                "custom_toc_selling_price", "custom_toc_tvc",
+                "custom_toc_constraint_speed", "custom_toc_tcu",
+                "custom_toc_default_bom"])
 
     results = []
     for item in items:
-        # Buffer type is always resolved from TOC Settings → Item Group Rules
-        btype = _resolve_buffer_type(item.name, item.item_group, settings)
-        if not btype:
-            frappe.log_error(
-                f"Item {item.name} has TOC enabled but no matching Item Group rule "
-                f"in TOC Settings → Item Group Rules. Item skipped.",
-                "TOC Buffer Type Unresolved"
-            )
-            continue
-        # Attach resolved type so _calculate_single can use it
-        item.custom_toc_buffer_type = btype
-
-        # Apply buffer_type filter after resolution
-        if buffer_type and btype != buffer_type:
-            continue
-
-        # Get all buffer rules (child table rows) for this item
         rules = frappe.get_all("TOC Item Buffer",
             filters={"parent": item.name, "parentfield": "custom_toc_buffer_rules", "enabled": 1},
             fields=["*"])
@@ -255,38 +272,35 @@ def calculate_all_buffers(buffer_type=None, company=None, warehouse=None, item_c
                 frappe.log_error(frappe.get_traceback(),
                     f"TOC Calc Error: {item.name} / {rule.warehouse}")
 
-    # F3+F5: Primary sort by BP% desc, secondary by T/CU desc
     results.sort(key=lambda x: (-x["bp_pct"], -x["tcu"]))
     return results
 
 
 def _calculate_single(item, rule, settings):
     """Calculate buffer status for one item-warehouse pair."""
-    # Effective buffer = adjusted (DAF) or base target
     target = flt(rule.adjusted_buffer) or flt(rule.target_buffer)
     if target <= 0:
         return None
 
-    btype = item.custom_toc_buffer_type
-    # F2: Universal inventory position — all transaction types checked for every item
+    # Replenishment mode — derived purely from item flags
+    mr_type = "Manufacture" if item.custom_toc_auto_manufacture else (
+              "Purchase"    if item.custom_toc_auto_purchase    else "Monitor")
+
     pos = get_inventory_position(item.name, rule.warehouse, settings)
     ip = flt(pos["ip"])
 
-    # F3: Buffer Penetration % and Stock Remaining %
     bp_pct = max(0, (target - ip) / target * 100)
     sr_pct = min(100, max(0, ip / target * 100))
     zone = get_zone(bp_pct, settings)
-
-    # F4: Order Qty
     order_qty = max(0, target - ip)
 
-    # Check BOM component availability if this FG/SFG has a BOM linked
-    sfg_status = None
-    if btype in ("FG", "SFG") and item.custom_toc_default_bom:
+    # BOM component availability — runs for any item with a BOM linked + check enabled
+    bom_status = None
+    if item.custom_toc_default_bom:
         try:
-            sfg_status = check_bom_availability(item.name, order_qty, rule.warehouse)
+            bom_status = check_bom_availability(item.name, order_qty, rule.warehouse)
         except Exception:
-            sfg_status = {"available": True, "message": "BOM check skipped (error)"}
+            bom_status = {"available": True, "message": "BOM check skipped (error)"}
 
     company = frappe.db.get_value("Warehouse", rule.warehouse, "company")
 
@@ -296,15 +310,15 @@ def _calculate_single(item, rule, settings):
         "stock_uom": item.stock_uom,
         "warehouse": rule.warehouse,
         "company": company,
-        "buffer_type": btype,
-        "mr_type": "Manufacture" if item.custom_toc_auto_manufacture else "Purchase",
-        # Position — all four components always present
+        # buffer_type kept for TOC Buffer Log backward compat — equals mr_type
+        "buffer_type": mr_type,
+        "mr_type": mr_type,
+        # Position
         "on_hand": pos.get("on_hand", 0),
         "wip": pos.get("wip", 0),
         "on_order": pos.get("on_order", 0),
         "backorders": pos.get("backorders", 0),
         "committed": pos.get("committed", 0),
-        # Combined convenience fields (supply side / demand side)
         "wip_or_on_order": pos.get("wip", 0) + pos.get("on_order", 0),
         "backorders_or_committed": pos.get("backorders", 0) + pos.get("committed", 0),
         "inventory_position": round(ip, 2),
@@ -314,19 +328,18 @@ def _calculate_single(item, rule, settings):
         "sr_pct": round(sr_pct, 1),
         "zone": zone,
         "zone_color": get_zone_color(zone),
-        "zone_action": get_zone_action(zone, btype),
+        "zone_action": get_zone_action(zone, mr_type),
         "order_qty": round(order_qty, 2),
-        # T/CU
         "tcu": flt(item.custom_toc_tcu),
-        # Rule metadata
         "adu": flt(rule.adu),
         "rlt": flt(rule.rlt),
         "vf": flt(rule.variability_factor),
         "daf": flt(rule.daf) or 1.0,
         "rule_name": rule.name,
-        # SFG check
-        "sfg_item": item.custom_toc_default_bom or "",
-        "sfg_status": sfg_status,
+        "bom_item": item.custom_toc_default_bom or "",
+        "bom_status": bom_status,
+        # Legacy alias — some callers may use sfg_status
+        "sfg_status": bom_status,
     }
 
 
@@ -346,9 +359,9 @@ def on_stock_movement(doc, method):
 
 
 def on_demand_change(doc, method):
-    """Sales Order submit/cancel → reserved_qty changes → check FG buffers."""
+    """Sales Order submit/cancel → reserved_qty changes → check all affected buffers."""
     for item in doc.items:
-        if _is_toc_item(item.item_code, "FG"):
+        if _is_toc_item(item.item_code):
             frappe.enqueue(
                 "chaizup_toc.toc_engine.buffer_calculator.check_realtime_alert",
                 item_code=item.item_code, warehouse=item.warehouse,
@@ -394,15 +407,9 @@ def check_realtime_alert(item_code, warehouse=None):
 # HELPERS
 # ═══════════════════════════════════════════════════════
 
-def _is_toc_item(item_code, buffer_type=None):
+def _is_toc_item(item_code):
     """Check if an item has TOC buffer management enabled."""
-    if not frappe.db.exists("Item", {"name": item_code, "custom_toc_enabled": 1}):
-        return False
-    if buffer_type:
-        item_group = frappe.db.get_value("Item", item_code, "item_group") or ""
-        resolved = _resolve_buffer_type(item_code, item_group, _get_settings())
-        return resolved == buffer_type
-    return True
+    return bool(frappe.db.exists("Item", {"name": item_code, "custom_toc_enabled": 1}))
 
 
 def _get_settings():
@@ -410,7 +417,6 @@ def _get_settings():
     try:
         return frappe.get_cached_doc("TOC Settings")
     except Exception:
-        # Return defaults if settings don't exist yet
         return frappe._dict({
             "red_zone_threshold": 67,
             "yellow_zone_threshold": 33,
@@ -420,7 +426,6 @@ def _get_settings():
             "max_tmr_consecutive": 3,
             "min_buffer_floor": 50,
             "warehouse_rules": [],
-            "item_group_rules": [],
         })
 
 
@@ -465,61 +470,14 @@ def _sum_bin_field(item_code, warehouses, field):
     return flt(result[0][0]) if result else 0.0
 
 
-def _resolve_buffer_type(item_code, item_group, settings):
-    """
-    Resolve buffer type for an item using TOC Settings item_group_rules.
-
-    Resolution order:
-      1. Exact item_group match (lowest priority number wins on tie)
-      2. Parent group match if include_sub_groups = 1 (walks hierarchy upward)
-      3. Returns None — item will be skipped, Error Log entry written
-    """
-    rules = getattr(settings, "item_group_rules", None) or []
-    if not rules:
-        return None
-
-    # Sort ascending by priority so lower numbers are checked first
-    sorted_rules = sorted(rules, key=lambda r: (r.priority if r.priority is not None else 10))
-
-    # Build lookup maps
-    exact_map = {}
-    sub_group_map = {}
-    for r in sorted_rules:
-        if r.item_group not in exact_map:
-            exact_map[r.item_group] = r.buffer_type
-        if r.include_sub_groups and r.item_group not in sub_group_map:
-            sub_group_map[r.item_group] = r.buffer_type
-
-    # 1. Exact match
-    if item_group in exact_map:
-        return exact_map[item_group]
-
-    # 2. Walk item group hierarchy
-    visited = set()
-    parent = frappe.db.get_value("Item Group", item_group, "parent_item_group")
-    while parent and parent not in visited and parent != "All Item Groups":
-        visited.add(parent)
-        if parent in sub_group_map:
-            return sub_group_map[parent]
-        parent = frappe.db.get_value("Item Group", parent, "parent_item_group")
-
-    return None
-
-
 # ═══════════════════════════════════════════════════════
-# R3: MULTI-LEVEL BOM AVAILABILITY CHECK
+# MULTI-LEVEL BOM AVAILABILITY CHECK
 # ═══════════════════════════════════════════════════════
 
 def check_bom_availability(item_code, required_qty, warehouse=None):
     """
-    R3: Walk the BOM tree for an FG/SFG item and check component availability.
-
-    One FG BOM can have multiple SFGs + materials.
-    One SFG BOM can have multiple sub-SFGs + materials.
-    This function recursively checks each level.
-
-    Returns:
-        dict with component-level availability status
+    Walk the BOM tree for any item that has a BOM linked.
+    Works for any item regardless of type — not restricted to FG/SFG.
     """
     bom_name = frappe.db.get_value("Item", item_code, "custom_toc_default_bom")
     check_enabled = frappe.db.get_value("Item", item_code, "custom_toc_check_bom_availability")
@@ -542,9 +500,12 @@ def check_bom_availability(item_code, required_qty, warehouse=None):
 
 
 def _walk_bom(bom_name, parent_qty, multiplier, warehouse, results, depth, max_depth):
-    """Recursively walk BOM tree. Handles multi-level SFG→SFG→RM structures."""
+    """
+    Recursively walk BOM tree. Recurses into any component that itself has a
+    custom_toc_default_bom — no item-type check needed.
+    """
     if depth > max_depth:
-        return  # Safety: prevent infinite recursion
+        return
 
     bom_items = frappe.get_all("BOM Item",
         filters={"parent": bom_name, "parenttype": "BOM"},
@@ -552,37 +513,29 @@ def _walk_bom(bom_name, parent_qty, multiplier, warehouse, results, depth, max_d
 
     for bi in bom_items:
         required = flt(bi.stock_qty or bi.qty) * multiplier * parent_qty
-        _ig = frappe.db.get_value("Item", bi.item_code, "item_group") or ""
-        item_type = _resolve_buffer_type(bi.item_code, _ig, _get_settings()) or ""
         is_toc = frappe.db.get_value("Item", bi.item_code, "custom_toc_enabled")
 
-        # Get current stock
-        actual_qty = 0
         if warehouse:
             actual_qty = flt(frappe.db.get_value("Bin",
                 {"item_code": bi.item_code, "warehouse": warehouse}, "actual_qty"))
         else:
-            # Sum across all warehouses
             actual_qty = flt(frappe.db.sql(
                 "SELECT COALESCE(SUM(actual_qty),0) FROM `tabBin` WHERE item_code=%s",
                 bi.item_code)[0][0])
 
-        available = actual_qty >= required
-
         results.append({
             "item_code": bi.item_code,
             "item_name": bi.item_name,
-            "item_type": item_type,
+            "uom": bi.stock_uom or bi.uom,   # always stock_uom for qty comparisons
             "is_toc_managed": bool(is_toc),
             "required_qty": round(required, 2),
             "available_qty": round(actual_qty, 2),
             "shortfall": round(max(0, required - actual_qty), 2),
-            "available": available,
+            "available": actual_qty >= required,
             "depth": depth,
         })
 
-        # If this component is itself an SFG with a BOM, recurse
-        if item_type == "SFG":
-            sub_bom = frappe.db.get_value("Item", bi.item_code, "custom_toc_default_bom")
-            if sub_bom:
-                _walk_bom(sub_bom, required, 1.0, warehouse, results, depth + 1, max_depth)
+        # Recurse if component has its own BOM linked (sub-assembly)
+        sub_bom = frappe.db.get_value("Item", bi.item_code, "custom_toc_default_bom")
+        if sub_bom:
+            _walk_bom(sub_bom, required, 1.0, warehouse, results, depth + 1, max_depth)

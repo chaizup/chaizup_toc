@@ -1,50 +1,64 @@
 """
 Scheduled Tasks
 ================
+# =============================================================================
+# CONTEXT: Scheduled task runner for TOC daily operations.
+# MEMORY: app_chaizup_toc.md § Scheduled Tasks
+# INSTRUCTIONS:
+#   - ADU is universal: reads ALL stock outflows from Stock Ledger Entry
+#     (actual_qty < 0) for every item, regardless of item type/category.
+#   - No FG/SFG/RM/PM branching anywhere in this file.
+#   - Procurement run now filters by auto_purchase flag, not buffer_type.
+# DANGER ZONE:
+#   - Do NOT re-add FG/SFG/RM/PM branching to daily_adu_update().
+#   - Universal SLE query captures: sales, production consumption, transfers,
+#     WO component draw-downs — all in one query per item.
+# =============================================================================
+12:00 AM — Min Order Qty Sync (purchase from ERPNext field; manufacture from WO history) + missing alert
 06:30 AM — ADU Auto-Calculate (R1: skips items with Custom ADU checked)
 07:00 AM — Production Priority Run
-07:30 AM — Procurement Alert Run
+07:30 AM — Procurement Alert Run (Purchase-mode items only)
 08:00 AM — Buffer Snapshot Logging
 Sunday 08:00 AM — Weekly DBM
-
-R4 CLARITY: ADU is calculated here at 6:30 AM. It reads:
-  - For FG: Delivery Note submitted qty (what was shipped)
-  - For RM/PM: Stock Entry consumed qty (what was used in production)
-  - For SFG: Stock Entry consumed qty (what was packed into FG)
-  Then: ADU = total_qty / number_of_days_in_period
-  Result is written to Item.custom_toc_adu_value
 """
 
 import frappe
 from frappe.utils import today, add_days, flt, now_datetime
-from chaizup_toc.toc_engine.buffer_calculator import _resolve_buffer_type, _get_settings
+
+
+def daily_min_order_sync():
+    """
+    12:00 AM — Sync Item Min Order Qty (purchase) and Item Minimum Manufacture (manufacture)
+    from ERPNext built-in fields / Work Order history. Notifies on missing configuration.
+    """
+    try:
+        from chaizup_toc.toc_engine.min_order_sync import daily_min_order_sync as _sync
+        _sync()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC Min Order Sync FAILED")
 
 
 def daily_adu_update():
     """
-    06:30 AM — Auto-calculate ADU for all TOC items.
+    06:30 AM — Universal ADU auto-calculate for all TOC items.
 
-    R1: If "Custom ADU [TOC App]" is checked → SKIP that item entirely.
-    R4: Sources explained:
-      FG  → SUM(Delivery Note Item.qty) WHERE dn.docstatus=1 AND dn.posting_date in period
-      RM  → SUM(Stock Entry Detail.qty) WHERE se.docstatus=1 AND type in (Material Issue, Manufacture)
-      PM  → Same as RM
-      SFG → SUM(Stock Entry Detail.qty) WHERE consumed from source warehouse
+    R1: Items with custom_toc_custom_adu checked are skipped entirely.
+    Universal: ADU = total stock outflows (SLE.actual_qty < 0) ÷ days.
+    Captures ALL outflow types: sales, production consumption, transfers, WO draw-down.
+    No item-type branching — same query for every item.
     """
     try:
         frappe.logger("chaizup_toc").info(f"=== ADU Auto-Update: {today()} ===")
 
         items = frappe.get_all("Item",
             filters={"custom_toc_enabled": 1, "disabled": 0},
-            fields=["name", "item_group", "custom_toc_adu_period", "custom_toc_custom_adu"])
+            fields=["name", "custom_toc_adu_period", "custom_toc_custom_adu"])
 
         period_map = {"Last 30 Days": 30, "Last 90 Days": 90, "Last 180 Days": 180, "Last 365 Days": 365}
         updated = 0
         skipped = 0
-        _settings = _get_settings()
 
         for item in items:
-            # R1: Skip if Custom ADU is checked — user entered manual value
             if item.custom_toc_custom_adu:
                 skipped += 1
                 continue
@@ -52,45 +66,19 @@ def daily_adu_update():
             try:
                 days = period_map.get(item.custom_toc_adu_period or "Last 90 Days", 90)
                 from_date = add_days(today(), -days)
-                btype = _resolve_buffer_type(item.name, item.item_group, _settings) or ""
-                adu = 0.0
 
-                if btype == "FG":
-                    # FG: How many units were SHIPPED to customers?
-                    result = frappe.db.sql("""
-                        SELECT COALESCE(SUM(dni.qty), 0) as total
-                        FROM `tabDelivery Note Item` dni
-                        JOIN `tabDelivery Note` dn ON dn.name = dni.parent
-                        WHERE dni.item_code = %s AND dn.docstatus = 1
-                        AND dn.posting_date >= %s AND dn.posting_date <= %s
-                    """, (item.name, from_date, today()), as_dict=True)
-                    adu = round(flt(result[0].total) / days, 2) if result else 0
+                # Universal: sum ALL stock outflows from SLE (negative qty = item left stock)
+                result = frappe.db.sql("""
+                    SELECT COALESCE(ABS(SUM(actual_qty)), 0) AS total_out
+                    FROM `tabStock Ledger Entry`
+                    WHERE item_code = %s
+                      AND actual_qty < 0
+                      AND posting_date >= %s
+                      AND posting_date <= %s
+                      AND is_cancelled = 0
+                """, (item.name, from_date, today()), as_dict=True)
 
-                elif btype in ("RM", "PM"):
-                    # RM/PM: How many units were CONSUMED in production?
-                    result = frappe.db.sql("""
-                        SELECT COALESCE(SUM(sed.qty), 0) as total
-                        FROM `tabStock Entry Detail` sed
-                        JOIN `tabStock Entry` se ON se.name = sed.parent
-                        WHERE sed.item_code = %s AND se.docstatus = 1
-                        AND se.posting_date >= %s AND se.posting_date <= %s
-                        AND se.stock_entry_type IN ('Material Issue', 'Manufacture',
-                            'Material Transfer for Manufacture')
-                        AND sed.s_warehouse IS NOT NULL
-                    """, (item.name, from_date, today()), as_dict=True)
-                    adu = round(flt(result[0].total) / days, 2) if result else 0
-
-                elif btype == "SFG":
-                    # SFG: How many units were consumed when packed into FG?
-                    result = frappe.db.sql("""
-                        SELECT COALESCE(SUM(sed.qty), 0) as total
-                        FROM `tabStock Entry Detail` sed
-                        JOIN `tabStock Entry` se ON se.name = sed.parent
-                        WHERE sed.item_code = %s AND se.docstatus = 1
-                        AND se.posting_date >= %s AND se.posting_date <= %s
-                        AND sed.s_warehouse IS NOT NULL
-                    """, (item.name, from_date, today()), as_dict=True)
-                    adu = round(flt(result[0].total) / days, 2) if result else 0
+                adu = round(flt(result[0].total_out) / days, 4) if result else 0.0
 
                 frappe.db.set_value("Item", item.name, {
                     "custom_toc_adu_value": adu,
@@ -121,18 +109,15 @@ def daily_production_run():
 
 def daily_procurement_run():
     """
-    07:30 AM — RM/PM monitoring run. Logs Red/Black items for operator awareness.
-
-    NOTE: Material Requests for RM/PM are already created by daily_production_run()
-    at 07:00 AM, which calls generate_material_requests() without a buffer_type filter
-    (covers FG, SFG, RM, and PM). This run is monitoring-only — no MRs created here.
+    07:30 AM — Purchase-mode item monitoring. Logs Red/Black for operator awareness.
+    Filters by mr_type == "Purchase" (auto_purchase flag) — no buffer_type needed.
     """
     try:
         from chaizup_toc.toc_engine.buffer_calculator import calculate_all_buffers
-        rm_pm = calculate_all_buffers(buffer_type="RM") + calculate_all_buffers(buffer_type="PM")
-        red = [b for b in rm_pm if b["zone"] in ("Red", "Black")]
+        purchase_items = [b for b in calculate_all_buffers() if b["mr_type"] == "Purchase"]
+        red = [b for b in purchase_items if b["zone"] in ("Red", "Black")]
         if red:
-            frappe.logger("chaizup_toc").warning(f"Procurement: {len(red)} RM/PM in Red/Black")
+            frappe.logger("chaizup_toc").warning(f"Procurement: {len(red)} purchase items in Red/Black")
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC Procurement FAILED")
 

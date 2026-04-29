@@ -6,6 +6,7 @@ Hooks into built-in ERPNext DocType lifecycle events to enforce TOC rules. No ne
 overrides/
 ├── item.py               ← Item validate: ADU validation, T/CU, BOM, mutual exclusion
 ├── material_request.py   ← MR validate: TOC compliance warning
+├── purchase_order.py     ← PO before_insert: copy TOC metadata from source MR
 └── reorder_override.py   ← Intercepts erpnext.stock.reorder_item.reorder_item()
 ```
 
@@ -69,14 +70,14 @@ Items with neither flag are still calculated (BP%, zone, IP) but `_create_mr()` 
 ### Validation 3: F5 T/CU Calculation
 
 ```python
-if doc.custom_toc_buffer_type == "FG":
-    price = flt(doc.custom_toc_selling_price)
-    tvc   = flt(doc.custom_toc_tvc)
-    speed = flt(doc.custom_toc_constraint_speed)
-    if price and speed > 0:
-        doc.custom_toc_tcu = round((price - tvc) * speed, 2)
-    else:
-        doc.custom_toc_tcu = 0
+# T/CU calculated whenever selling_price and constraint_speed are set
+price = flt(doc.custom_toc_selling_price)
+tvc   = flt(doc.custom_toc_tvc)
+speed = flt(doc.custom_toc_constraint_speed)
+if price and speed > 0:
+    doc.custom_toc_tcu = round((price - tvc) * speed, 2)
+else:
+    doc.custom_toc_tcu = 0
 ```
 
 **Example:**
@@ -164,6 +165,105 @@ The validate hook checks this and returns early — no warning for auto-generate
 
 ---
 
+## purchase_order.py
+
+### `on_purchase_order_before_insert(doc, method)`
+
+**Trigger**: `hooks.py → doc_events["Purchase Order"]["before_insert"]`
+
+Fires when a Purchase Order is being created (before it is written to the database). This is the correct hook for stamping computed/derived fields on the new document without triggering unnecessary validators.
+
+**Purpose**: When purchasing staff converts a TOC-generated Material Request into a Purchase Order, the six TOC identification fields (zone, BP%, target buffer, IP, SR%) must carry over to the PO header. Without this, POs appear untagged — you cannot tell which replenishment trigger caused them.
+
+```python
+_TOC_FIELDS = [
+    "custom_toc_recorded_by",
+    "custom_toc_zone",
+    "custom_toc_bp_pct",
+    "custom_toc_sr_pct",
+    "custom_toc_target_buffer",
+    "custom_toc_inventory_position",
+]
+
+def on_purchase_order_before_insert(doc, method):
+    try:
+        for item in doc.items or []:
+            mr_name = item.get("material_request")
+            if not mr_name:
+                continue
+
+            mr_fields = frappe.db.get_value(
+                "Material Request", mr_name, _TOC_FIELDS, as_dict=True
+            )
+            if not mr_fields or mr_fields.get("custom_toc_recorded_by") != "By System":
+                continue
+
+            # First TOC-generated MR found — copy all fields to PO header
+            doc.custom_toc_recorded_by        = mr_fields["custom_toc_recorded_by"]
+            doc.custom_toc_zone               = mr_fields.get("custom_toc_zone") or ""
+            doc.custom_toc_bp_pct             = flt(mr_fields.get("custom_toc_bp_pct"))
+            doc.custom_toc_sr_pct             = flt(mr_fields.get("custom_toc_sr_pct"))
+            doc.custom_toc_target_buffer      = flt(mr_fields.get("custom_toc_target_buffer"))
+            doc.custom_toc_inventory_position = flt(mr_fields.get("custom_toc_inventory_position"))
+            break  # one source MR is enough
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC PO field stamp failed")
+```
+
+### Logic Flow
+
+```
+PO before_insert fires
+  └─ loop po.items
+       └─ for each item: read item.material_request
+            └─ frappe.db.get_value("Material Request", mr_name, _TOC_FIELDS)
+                 └─ if custom_toc_recorded_by == "By System"
+                      └─ copy 6 fields to PO header
+                      └─ break  (first TOC MR wins)
+```
+
+**Why `before_insert` and not `on_submit`?**
+- `before_insert` fires before the document is written to DB — field values set here are persisted with the initial INSERT.
+- `on_submit` fires after docstatus changes to 1 — at that point you'd need `frappe.db.set_value()` to update the already-saved record.
+- `before_insert` is cleaner: one write, no separate UPDATE query.
+
+**Why first TOC MR wins?**
+Multi-source POs (items from different MRs) are rare in a TOC context. When TOC generates MRs, each MR covers one item + one warehouse run. A mixed PO (TOC item + non-TOC item) still gets tagged correctly from the first TOC MR found. In practice all TOC items in a batch share the same buffer state snapshot.
+
+**Why `frappe.db.get_value()` and not `frappe.get_doc()`?**
+`frappe.get_doc("Material Request", mr_name)` would trigger MR validators (including `validate_toc_compliance` in `material_request.py`). That's unnecessary overhead and could cause side effects. `frappe.db.get_value()` is a direct DB read — safe and fast.
+
+### TOC Fields on Purchase Order
+
+All 8 TOC fields on the Purchase Order header (added via fixtures):
+
+| Field | Type | Purpose |
+|---|---|---|
+| `custom_toc_recorded_by` | Select (By System / By User) | Was this PO triggered by TOC automation? |
+| `custom_toc_zone` | Data | Buffer zone at time of MR creation (Red / Yellow / Green) |
+| `custom_toc_bp_pct` | Float | BP% snapshot when MR was created |
+| `custom_toc_sr_pct` | Float | SR% snapshot when MR was created |
+| `custom_toc_target_buffer` | Float | Target Buffer (F1) at time of replenishment |
+| `custom_toc_inventory_position` | Float | IP (F2) at time of replenishment |
+| `custom_toc_col` | Section Break | Visual grouping on PO form |
+| `custom_toc_section` | Column Break | Visual grouping on PO form |
+
+### DANGER ZONE
+
+- **Do NOT** use `frappe.get_doc("Material Request", ...)` — triggers MR validators unnecessarily.
+- **Do NOT** raise exceptions — the entire function is wrapped in `try/except`. A failure logs to Error Log but never blocks PO creation.
+- **Do NOT** modify `po.items` — only the PO header TOC fields are set here.
+- **Do NOT** remove the `break` — multi-source PO logic intentionally uses first-TOC-MR-wins.
+
+### RESTRICT
+
+- Do NOT add `frappe.db.commit()` inside this hook — `before_insert` is inside a transaction; explicit commit would break the atomic write.
+- Do NOT check `doc.docstatus` here — `before_insert` always has `docstatus = 0`.
+- Do NOT add a fallback that copies TOC fields from non-TOC MRs — only `"By System"` MRs should tag the PO.
+
+---
+
 ## reorder_override.py
 
 ### `toc_reorder_item()`
@@ -236,7 +336,7 @@ This function was never defined in `overrides/item.py`. Every time a user saved 
 
 ---
 
-## How All Three Overrides Work Together
+## How All Four Overrides Work Together
 
 ```
 User saves Item (with TOC enabled):
@@ -250,6 +350,10 @@ User saves Item with buffer rules (child table):
 User creates Manual MR:
   → overrides/material_request.py:validate_toc_compliance()
   → Shows warning if any item is TOC-managed
+
+User converts TOC-generated MR into Purchase Order:
+  → overrides/purchase_order.py:on_purchase_order_before_insert()
+  → Copies zone / BP% / target / IP / SR% from source MR to PO header
 
 ERPNext scheduler tries to run reorder:
   → overrides/reorder_override.py:toc_reorder_item()

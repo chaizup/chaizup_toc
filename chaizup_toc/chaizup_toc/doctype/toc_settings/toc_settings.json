@@ -1,228 +1,347 @@
 {
-  "actions": [],
-  "allow_rename": 0,
-  "creation": "2026-03-14 10:00:00",
-  "doctype": "DocType",
-  "engine": "InnoDB",
-  "issingle": 1,
-  "module": "Chaizup Toc",
-  "name": "TOC Settings",
-  "owner": "Administrator",
-  "fields": [
-    {
-      "fieldname": "zone_section",
-      "fieldtype": "Section Break",
-      "label": "Zone Thresholds",
-      "description": "F3: Buffer Penetration % boundaries for Green \u2192 Yellow \u2192 Red \u2192 Black zones."
-    },
-    {
-      "fieldname": "red_zone_threshold",
-      "fieldtype": "Float",
-      "label": "Red Zone Threshold (%)",
-      "default": "67",
-      "reqd": 1,
-      "description": "F3: BP% \u2265 this value = Red Zone (produce/order IMMEDIATELY). Default: 67%"
-    },
-    {
-      "fieldname": "yellow_zone_threshold",
-      "fieldtype": "Float",
-      "label": "Yellow Zone Threshold (%)",
-      "default": "33",
-      "reqd": 1,
-      "description": "F3: BP% \u2265 this value = Yellow Zone (plan replenishment). Default: 33%"
-    },
-    {
-      "fieldname": "col_zone",
-      "fieldtype": "Column Break"
-    },
-    {
-      "fieldname": "auto_generate_mr",
-      "fieldtype": "Check",
-      "label": "Auto-Generate Material Requests",
-      "default": "1",
-      "description": "When checked, the daily scheduler automatically creates Material Requests for Red/Yellow items."
-    },
-    {
-      "fieldname": "mr_zones",
-      "fieldtype": "Select",
-      "label": "Generate MR for Zones",
-      "options": "Red and Black Only\nRed, Black, and Yellow",
-      "default": "Red, Black, and Yellow",
-      "description": "Which buffer zones should trigger automatic Material Request creation."
-    },
-    {
-      "fieldname": "notify_on_red",
-      "fieldtype": "Check",
-      "label": "Email Alert on Red Zone",
-      "default": "1",
-      "description": "Send email notification when items enter Red or Black zone."
-    },
-    {
-      "fieldname": "red_alert_roles",
-      "fieldtype": "Small Text",
-      "label": "Alert Recipient Roles",
-      "default": "Stock Manager\nPurchase Manager",
-      "description": "Newline-separated role names. Users with these roles receive Red zone email alerts."
-    },
-    {
-      "fieldname": "dbm_section",
-      "fieldtype": "Section Break",
-      "label": "Dynamic Buffer Management (DBM)",
-      "description": "F7/F8: Auto-adjustment of buffer sizes based on observed behaviour."
-    },
-    {
-      "fieldname": "enable_dbm",
-      "fieldtype": "Check",
-      "label": "Enable DBM Auto-Adjustment",
-      "default": "1",
-      "description": "When checked, buffers auto-adjust weekly via TMR (increase) and TMG (decrease)."
-    },
-    {
-      "fieldname": "tmr_red_pct_of_rlt",
-      "fieldtype": "Float",
-      "label": "TMR: Red % of RLT",
-      "default": "20",
-      "reqd": 1,
-      "description": "F7 TMR Trigger: If stock in Red > this % of RLT in one cycle \u2192 increase buffer. Default: 20%"
-    },
-    {
-      "fieldname": "tmg_cycles_required",
-      "fieldtype": "Int",
-      "label": "TMG: Green Cycles Required",
-      "default": "3",
-      "reqd": 1,
-      "description": "F8 TMG Trigger: Stock must be in Green for this many full RLT cycles \u2192 decrease buffer. Default: 3"
-    },
-    {
-      "fieldname": "col_dbm",
-      "fieldtype": "Column Break"
-    },
-    {
-      "fieldname": "dbm_adjustment_pct",
-      "fieldtype": "Float",
-      "label": "DBM Adjustment %",
-      "default": "33",
-      "reqd": 1,
-      "description": "F7/F8: TMR increases by +this%, TMG decreases by \u2212this%. Default: 33%"
-    },
-    {
-      "fieldname": "max_tmr_consecutive",
-      "fieldtype": "Int",
-      "label": "Max Consecutive TMR Increases",
-      "default": "3",
-      "reqd": 1,
-      "description": "Safeguard: Max consecutive TMR increases before requiring manual review. Prevents runaway inflation."
-    },
-    {
-      "fieldname": "min_buffer_floor",
-      "fieldtype": "Float",
-      "label": "Minimum Buffer Floor",
-      "default": "50",
-      "reqd": 1,
-      "description": "Safeguard: TMG will never shrink a buffer below this value. Prevents buffer collapse."
-    },
-    {
-      "fieldname": "calc_section",
-      "fieldtype": "Section Break",
-      "label": "Calculation Defaults",
-      "description": "Default values used when configuring new buffer rules."
-    },
-    {
-      "fieldname": "default_vf",
-      "fieldtype": "Float",
-      "label": "Default Variability Factor",
-      "default": "1.5",
-      "reqd": 1,
-      "description": "F1: Default VF for new buffer rules. 1.0-1.3=stable, 1.3-1.6=moderate, 1.6-2.0=volatile."
-    },
-    {
-      "fieldname": "adu_lookback_days",
-      "fieldtype": "Int",
-      "label": "ADU Lookback Days",
-      "default": "90",
-      "reqd": 1,
-      "description": "F1: Number of days to look back when auto-calculating Average Daily Usage. Default: 90 days."
-    },
-    {
-      "fieldname": "col_calc",
-      "fieldtype": "Column Break"
-    },
-    {
-      "fieldname": "default_daf",
-      "fieldtype": "Float",
-      "label": "Current Global DAF",
-      "default": "1.0",
-      "description": "F6: Demand Adjustment Factor. 1.0=normal. Diwali=1.6. Summer=0.7. Applied to ALL buffers."
-    },
-    {
-      "fieldname": "daf_event_name",
-      "fieldtype": "Data",
-      "label": "Current DAF Event",
-      "description": "Name of the active seasonal event (e.g. 'Diwali 2026', 'Summer Slowdown'). Informational only."
-    },
-    {
-      "fieldname": "inventory_classification_section",
-      "fieldtype": "Section Break",
-      "label": "Inventory Classification",
-      "description": "CONFIGURE FIRST before enabling items. Defines which warehouses count as on-hand stock, WIP, or are excluded entirely (Scrap, Expiry, Wastage). Also defines how item groups map to buffer types (FG/SFG/RM/PM)."
-    },
-    {
-      "fieldname": "warehouse_rules",
-      "fieldtype": "Table",
-      "label": "Warehouse Classification",
-      "options": "TOC Warehouse Rule",
-      "description": "Classify every warehouse in your company. Inventory = usable on-hand stock. WIP = in-process (adds to WIP in F2). Excluded = never counted (Scrap, Expiry, Wastage, QC Hold, Demo). Leave empty to use the warehouse defined on each item's buffer rule (backward-compatible)."
-    },
-    {
-      "fieldname": "col_classification",
-      "fieldtype": "Column Break"
-    },
-    {
-      "fieldname": "item_group_rules",
-      "fieldtype": "Table",
-      "label": "Item Group → Buffer Type",
-      "options": "TOC Item Group Rule",
-      "description": "Map item groups to buffer types. Items with a manual buffer type set (on the Item form) always take precedence. These rules auto-assign FG/SFG/RM/PM for items without a manual type. Lower priority number = wins on conflict. Enable Include Sub-Groups to apply a rule to all child groups."
-    },
-    {
-      "fieldname": "ai_section",
-      "fieldtype": "Section Break",
-      "label": "AI Advisor (DeepSeek)",
-      "collapsible": 1,
-      "description": "DeepSeek API key for the AI Advisor tab in WO Kitting Planner. Get a key at https://platform.deepseek.com/api_keys"
-    },
-    {
-      "fieldname": "custom_deepseek_api_key",
-      "fieldtype": "Password",
-      "label": "DeepSeek API Key",
-      "description": "Starts with sk-. Stored encrypted. Used by wo_kitting_planner AI Advisor tab. Fallback: site_config.json deepseek_api_key key."
-    },
-    {
-      "fieldname": "demo_section",
-      "fieldtype": "Section Break",
-      "label": "Demo Data (Admin Only)",
-      "collapsible": 1,
-      "description": "Create/delete test data to verify all TOC triggers work correctly."
-    },
-    {
-      "fieldname": "demo_data_manifest",
-      "fieldtype": "Long Text",
-      "label": "Demo Data Manifest",
-      "read_only": 1,
-      "hidden": 1,
-      "description": "JSON list of all demo doc IDs created. Used for cleanup."
-    }
-  ],
-  "permissions": [
-    {"role": "System Manager",        "read": 1, "write": 1, "create": 1},
-    {"role": "TOC Manager",           "read": 1, "write": 1},
-    {"role": "TOC User",              "read": 1},
-    {"role": "Stock Manager",         "read": 1},
-    {"role": "Stock User",            "read": 1},
-    {"role": "Purchase Manager",      "read": 1},
-    {"role": "Manufacturing Manager", "read": 1}
-  ],
-  "sort_field": "modified",
-  "sort_order": "DESC",
-  "track_changes": 1
+ "actions": [],
+ "creation": "2026-03-14 10:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "zone_section",
+  "red_zone_threshold",
+  "yellow_zone_threshold",
+  "col_zone",
+  "auto_generate_mr",
+  "mr_zones",
+  "auto_create_component_mrs",
+  "toc_engine_notification_section",
+  "toc_engine_notification_users",
+  "notify_on_red",
+  "red_alert_roles",
+  "dbm_section",
+  "enable_dbm",
+  "tmr_red_pct_of_rlt",
+  "tmg_cycles_required",
+  "col_dbm",
+  "dbm_adjustment_pct",
+  "max_tmr_consecutive",
+  "min_buffer_floor",
+  "calc_section",
+  "default_vf",
+  "adu_lookback_days",
+  "col_calc",
+  "default_daf",
+  "daf_event_name",
+  "inventory_classification_section",
+  "warehouse_rules",
+  "ai_section",
+  "custom_deepseek_api_key",
+  "projection_section",
+  "enable_projection_automation",
+  "projection_pending_so_statuses",
+  "projection_confirmed_so_workflow_states",
+  "col_projection",
+  "projection_notification_users",
+  "demo_section",
+  "demo_data_manifest"
+ ],
+ "fields": [
+  {
+   "description": "F3: Buffer Penetration % boundaries for Green → Yellow → Red → Black zones.",
+   "fieldname": "zone_section",
+   "fieldtype": "Section Break",
+   "label": "Zone Thresholds"
+  },
+  {
+   "default": "67",
+   "description": "F3: BP% ≥ this value = Red Zone (produce/order IMMEDIATELY). Default: 67%",
+   "fieldname": "red_zone_threshold",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Red Zone Threshold (%)",
+   "reqd": 1
+  },
+  {
+   "default": "33",
+   "description": "F3: BP% ≥ this value = Yellow Zone (plan replenishment). Default: 33%",
+   "fieldname": "yellow_zone_threshold",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Yellow Zone Threshold (%)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_zone",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "When checked, the daily scheduler automatically creates Material Requests for Red/Yellow items.",
+   "fieldname": "auto_generate_mr",
+   "fieldtype": "Check",
+   "label": "Auto-Generate Material Requests"
+  },
+  {
+   "default": "Red, Black, and Yellow",
+   "description": "Which buffer zones should trigger automatic Material Request creation.",
+   "fieldname": "mr_zones",
+   "fieldtype": "Select",
+   "label": "Generate MR for Zones",
+   "options": "Red and Black Only\nRed, Black, and Yellow"
+  },
+  {
+   "default": "1",
+   "description": "After creating Work Orders from a Production Plan, automatically walk the full multi-level BOM tree, check each component's Bin.actual_qty, and create Purchase Material Requests for items with shortages where 'Auto Purchase TOC' is enabled on the Item. Applies the Min Purchase / Production Qty floor from the Item's Min Order Qty child table: order_qty = max(shortage, min_order_qty).",
+   "fieldname": "auto_create_component_mrs",
+   "fieldtype": "Check",
+   "label": "Auto-Create Component Purchase MRs After WO Creation"
+  },
+  {
+   "description": "Users who receive automated TOC Engine alerts: component shortage MR summaries (after each WO generation) and daily min-order-qty configuration warnings (12 AM).",
+   "fieldname": "toc_engine_notification_section",
+   "fieldtype": "Section Break",
+   "label": "TOC Engine Notifications"
+  },
+  {
+   "description": "Add users to receive TOC Engine operational emails. Per-user flags control which alert types they receive.",
+   "fieldname": "toc_engine_notification_users",
+   "fieldtype": "Table",
+   "label": "TOC Engine Notification Users",
+   "options": "TOC Engine Notification User"
+  },
+  {
+   "default": "1",
+   "description": "Send email notification when items enter Red or Black zone.",
+   "fieldname": "notify_on_red",
+   "fieldtype": "Check",
+   "label": "Email Alert on Red Zone"
+  },
+  {
+   "default": "Stock Manager\nPurchase Manager",
+   "description": "Newline-separated role names. Users with these roles receive Red zone email alerts.",
+   "fieldname": "red_alert_roles",
+   "fieldtype": "Small Text",
+   "label": "Alert Recipient Roles"
+  },
+  {
+   "description": "F7/F8: Auto-adjustment of buffer sizes based on observed behaviour.",
+   "fieldname": "dbm_section",
+   "fieldtype": "Section Break",
+   "label": "Dynamic Buffer Management (DBM)"
+  },
+  {
+   "default": "1",
+   "description": "When checked, buffers auto-adjust weekly via TMR (increase) and TMG (decrease).",
+   "fieldname": "enable_dbm",
+   "fieldtype": "Check",
+   "label": "Enable DBM Auto-Adjustment"
+  },
+  {
+   "default": "20",
+   "description": "F7 TMR Trigger: If stock in Red > this % of RLT in one cycle → increase buffer. Default: 20%",
+   "fieldname": "tmr_red_pct_of_rlt",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "TMR: Red % of RLT",
+   "reqd": 1
+  },
+  {
+   "default": "3",
+   "description": "F8 TMG Trigger: Stock must be in Green for this many full RLT cycles → decrease buffer. Default: 3",
+   "fieldname": "tmg_cycles_required",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "TMG: Green Cycles Required",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_dbm",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "33",
+   "description": "F7/F8: TMR increases by +this%, TMG decreases by −this%. Default: 33%",
+   "fieldname": "dbm_adjustment_pct",
+   "fieldtype": "Float",
+   "label": "DBM Adjustment %",
+   "reqd": 1
+  },
+  {
+   "default": "3",
+   "description": "Safeguard: Max consecutive TMR increases before requiring manual review. Prevents runaway inflation.",
+   "fieldname": "max_tmr_consecutive",
+   "fieldtype": "Int",
+   "label": "Max Consecutive TMR Increases",
+   "reqd": 1
+  },
+  {
+   "default": "50",
+   "description": "Safeguard: TMG will never shrink a buffer below this value. Prevents buffer collapse.",
+   "fieldname": "min_buffer_floor",
+   "fieldtype": "Float",
+   "label": "Minimum Buffer Floor",
+   "reqd": 1
+  },
+  {
+   "description": "Default values used when configuring new buffer rules.",
+   "fieldname": "calc_section",
+   "fieldtype": "Section Break",
+   "label": "Calculation Defaults"
+  },
+  {
+   "default": "1.5",
+   "description": "F1: Default VF for new buffer rules. 1.0-1.3=stable, 1.3-1.6=moderate, 1.6-2.0=volatile.",
+   "fieldname": "default_vf",
+   "fieldtype": "Float",
+   "label": "Default Variability Factor",
+   "reqd": 1
+  },
+  {
+   "default": "90",
+   "description": "F1: Number of days to look back when auto-calculating Average Daily Usage. Default: 90 days.",
+   "fieldname": "adu_lookback_days",
+   "fieldtype": "Int",
+   "label": "ADU Lookback Days",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_calc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1.0",
+   "description": "F6: Demand Adjustment Factor. 1.0=normal. Diwali=1.6. Summer=0.7. Applied to ALL buffers.",
+   "fieldname": "default_daf",
+   "fieldtype": "Float",
+   "label": "Current Global DAF"
+  },
+  {
+   "description": "Name of the active seasonal event (e.g. 'Diwali 2026', 'Summer Slowdown'). Informational only.",
+   "fieldname": "daf_event_name",
+   "fieldtype": "Data",
+   "label": "Current DAF Event"
+  },
+  {
+   "description": "CONFIGURE FIRST before enabling items. Defines which warehouses count as on-hand stock, WIP, or are excluded entirely (Scrap, Expiry, Wastage).",
+   "fieldname": "inventory_classification_section",
+   "fieldtype": "Section Break",
+   "label": "Inventory Classification"
+  },
+  {
+   "description": "Classify every warehouse in your company. Inventory = usable on-hand stock. WIP = in-process (adds to WIP in F2). Excluded = never counted (Scrap, Expiry, Wastage, QC Hold, Demo). Leave empty to use the warehouse defined on each item's buffer rule (backward-compatible).",
+   "fieldname": "warehouse_rules",
+   "fieldtype": "Table",
+   "label": "Warehouse Classification",
+   "options": "TOC Warehouse Rule"
+  },
+  {
+   "collapsible": 1,
+   "description": "DeepSeek API key for the AI Advisor tab in WO Kitting Planner. Get a key at https://platform.deepseek.com/api_keys",
+   "fieldname": "ai_section",
+   "fieldtype": "Section Break",
+   "label": "AI Advisor (DeepSeek)"
+  },
+  {
+   "description": "Starts with sk-. Stored encrypted. Used by wo_kitting_planner AI Advisor tab. Fallback: site_config.json deepseek_api_key key.",
+   "fieldname": "custom_deepseek_api_key",
+   "fieldtype": "Password",
+   "label": "DeepSeek API Key"
+  },
+  {
+   "collapsible": 1,
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;color:#1f2937;font-family:sans-serif;line-height:1.5\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;border-bottom:2px solid #3b82f6;padding-bottom:8px\">\n        <span style=\"font-size:1.2rem;margin-right:8px\">📋</span>\n        <strong style=\"font-size:1.1rem;color:#1e40af\">Production Automation Guide</strong>\n    </div>\n\n    <p style=\"margin-bottom:16px;font-size:0.95rem\">\n        Each month your sales team submits a <b>Sales Projection</b>. This section allows the system to automatically generate <b>Work Orders</b> to fulfill those specific production targets.\n    </p>\n\n    <div style=\"background-color:#ffffff;border-left:4px solid #3b82f6;padding:12px;border-radius:4px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0, 0, 0, 0.05)\">\n        <h5 style=\"margin-top:0;color:#3b82f6;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em\">▶ How it Works</h5>\n        <ol style=\"margin:0;padding-left:20px;font-size:0.9rem\">\n            <li style=\"margin-bottom:8px\"><b>Schedule:</b> Every day at <b>06:00 AM</b>, the system checks for a SUBMITTED Sales Projection for the current month.</li>\n            <li style=\"margin-bottom:8px\">\n                <b>Calculation:</b> For each item, the system calculates demand using the following logic:\n                <div style=\"background-color:#f1f5f9;padding:10px;border-radius:6px;margin:8px 0;font-family:monospace;font-size:0.85rem;border:1px solid #cbd5e1\">\n                    Net Required = (Projected Qty + Carryover Pending SOs) − Current Month Pending SOs − (Current Stock + Open WO Qty)\n                </div>\n                <ul style=\"list-style-type:circle;padding-left:20px;font-size:0.85rem;color:#4b5563\">\n                    <li><b>Carryover Pending SOs:</b> Unfulfilled orders due <i>before</i> this month.</li>\n                    <li><b>Open WO Qty:</b> Quantity in open/draft orders (prevents double-ordering).</li>\n                </ul>\n            </li>\n            <li style=\"margin-bottom:8px\"><b>Execution:</b> If Net Required &gt; 0 and <b>Production Capacity</b> is set, a <b>Draft Work Order</b> is created.</li>\n            <li style=\"margin-bottom:8px\"><b>Recursive BOM:</b> Sub-assemblies are automatically triggered for the full BOM tree.</li>\n        </ol>\n    </div>\n\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;margin-bottom:16px\">\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">⚠️ Capacity Gate</strong><br>\n            If Capacity is 0 or blank, no Work Order is created. You will be notified via email.\n        </div>\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">⚠️ BOM Gate</strong><br>\n            If no active Default BOM is found, the system skips the item and sends an email alert.\n        </div>\n    </div>\n\n    <div style=\"font-size:0.85rem;border-top:1px dashed #cbd5e1;padding-top:10px;color:#64748b\">\n        <span><b>Manual Trigger:</b> Use the 'Run Projection Automation' button on any submitted Projection.</span><br>\n        <span style=\"color:#059669\"><b>✓ Safe by Design:</b> The system accounts for existing orders; running it twice will not create duplicates.</span>\n    </div>\n</div>",
+   "fieldname": "projection_section",
+   "fieldtype": "Section Break",
+   "label": "Sales Projection Automation"
+  },
+  {
+   "default": "0",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">⚙️</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Automation Switch</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Control how the system handles monthly Sales Projections. Toggle this setting to enable or disable background production triggers.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:60px\">ON</div>\n            <div style=\"font-size:12px;color:#444\">\n                System <b>auto-creates Draft Work Orders</b> daily at <b>06:00 AM</b> for the current month's submitted Sales Projection.\n            </div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#dc3545;font-weight:bold;margin-right:12px;font-size:12px;min-width:60px\">OFF</div>\n            <div style=\"font-size:12px;color:#444\">\n                Sales Projections are <b>reference-only</b>. No automatic Work Orders will be generated.\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#f1f5f9;border-radius:4px;border-left:3px solid #64748b\">\n        <div style=\"font-size:11px;color:#475569;line-height:1.4\">\n            <b>Manual Trigger:</b> The 'Run Projection Automation' button is restricted by this setting. If set to <b>OFF</b>, manual runs are also disabled.\n        </div>\n    </div>\n</div>",
+   "fieldname": "enable_projection_automation",
+   "fieldtype": "Check",
+   "label": "Enable Projection Automation"
+  },
+  {
+   "default": "To Deliver and Bill\nTo Deliver\nOn Hold",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📊</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Demand Filter</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Define which <b>Submitted</b> ($docstatus=1$) Sales Order statuses should be treated as active demand in the production formula.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">INCLUDE</div>\n            <div style=\"font-size:12px;color:#444\">\n                Statuses that represent <b>unfulfilled</b> items. <br>\n                <i style=\"color:#64748b\">Typical: To Deliver and Bill, To Deliver, On Hold.</i>\n            </div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#dc3545;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">EXCLUDE</div>\n            <div style=\"font-size:12px;color:#444\">\n                Do <b>NOT</b> include: <i>Completed, Closed, or To Bill</i>. These represent items that have already been physically delivered.\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#fefce8;border-radius:4px;border-left:3px solid #eab308\">\n        <div style=\"font-size:11px;color:#854d0e;line-height:1.4\">\n            <b>Formula Impact:</b> These values are additive defaults used to calculate <i>Carryover Pending SOs</i> and <i>Current Month Pending SOs</i>.\n        </div>\n    </div>\n</div>",
+   "fieldname": "projection_pending_so_statuses",
+   "fieldtype": "Small Text",
+   "label": "Pending Sales Order Statuses — Submitted SOs (one per line)"
+  },
+  {
+   "default": "Confirmed",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">🔗</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Draft Demand Logic</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Define specific <b>Workflow States</b> for Draft Sales Orders ($docstatus=0$) that should be treated as committed demand, bypassing the standard status list above.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#6366f1;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">DRAFT ONLY</div>\n            <div style=\"font-size:12px;color:#444\">\n                Counted as <b>Committed Demand</b> regardless of the main statuses. \n                <br><i style=\"color:#64748b\">Standard Default: <b>Confirmed</b></i>\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#f1f5f9;border-radius:4px;border-left:3px solid #4f46e5\">\n        <div style=\"font-size:11px;color:#475569;line-height:1.4\">\n            <b>Custom Workflows:</b> If your internal Sales Order approval process uses different state names (e.g., \"Validated\", \"Pre-Approved\"), update this list to ensure accurate demand tracking.\n        </div>\n    </div>\n</div>",
+   "fieldname": "projection_confirmed_so_workflow_states",
+   "fieldtype": "Small Text",
+   "label": "Confirmed Draft SO Workflow States (one per line)"
+  },
+  {
+   "fieldname": "col_projection",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📧</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Email Notification Settings</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Add users to the table below to subscribe them to automated alerts. Each user can receive three types of updates:\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#2490ef;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON EDIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered every time a <b>Sales Projection</b> draft is saved.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON SUBMIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered when a Sales Projection is officially finalized/submitted.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#ff9800;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON WO RUN</div>\n            <div style=\"font-size:12px;color:#444\">\n                Full summary report (daily or manual) including:\n                <ul style=\"margin:4px 0 0 0;padding-left:18px;color:#666;font-size:11px\">\n                    <li>List of Work Orders created</li>\n                    <li>Items skipped and specific reasons (Capacity/BOM)</li>\n                </ul>\n            </div>\n        </div>\n    </div>\n</div>",
+   "fieldname": "projection_notification_users",
+   "fieldtype": "Table",
+   "label": "Notification Users",
+   "options": "TOC Projection Notification User"
+  },
+  {
+   "collapsible": 1,
+   "description": "Create/delete test data to verify all TOC triggers work correctly.",
+   "fieldname": "demo_section",
+   "fieldtype": "Section Break",
+   "label": "Demo Data (Admin Only)"
+  },
+  {
+   "description": "JSON list of all demo doc IDs created. Used for cleanup.",
+   "fieldname": "demo_data_manifest",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Demo Data Manifest",
+   "read_only": 1
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-04-27 12:00:00.000000",
+ "modified_by": "it@chaizup.in",
+ "module": "Chaizup Toc",
+ "name": "TOC Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "TOC Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "TOC User"
+  },
+  {
+   "read": 1,
+   "role": "Stock Manager"
+  },
+  {
+   "read": 1,
+   "role": "Stock User"
+  },
+  {
+   "read": 1,
+   "role": "Purchase Manager"
+  },
+  {
+   "read": 1,
+   "role": "Manufacturing Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
 }

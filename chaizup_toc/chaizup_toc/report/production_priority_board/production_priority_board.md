@@ -26,7 +26,7 @@ Every row = one item-warehouse buffer. Sorted by Buffer Penetration % descending
 | Filter | Type | Description |
 |--------|------|-------------|
 | `company` | Link | Defaults to user's default company. Passed to `calculate_all_buffers()` |
-| `buffer_type` | Select (FG/SFG/RM/PM) | Filter to one type. Blank = all types |
+| `buffer_type` | Select (Manufacture/Purchase/Monitor) | Filter to one replenishment mode. Blank = all |
 | `warehouse` | Link | Filter to one warehouse |
 | `zone` | Select (Green/Yellow/Red/Black) | Post-calculation zone filter (applied in Python after full calculation) |
 | `item_code` | Link → Item | Filter to a single item. Dropdown shows only `custom_toc_enabled=1` items |

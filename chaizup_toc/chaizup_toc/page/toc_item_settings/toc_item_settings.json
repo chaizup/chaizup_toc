@@ -1,0 +1,17 @@
+{
+  "doctype": "Page",
+  "name": "toc-item-settings",
+  "page_name": "toc-item-settings",
+  "title": "TOC Item Settings",
+  "module": "Chaizup Toc",
+  "standard": "Yes",
+  "roles": [
+    {"role": "System Manager"},
+    {"role": "TOC Manager"},
+    {"role": "TOC User"},
+    {"role": "Stock Manager"},
+    {"role": "Stock User"},
+    {"role": "Manufacturing Manager"},
+    {"role": "Manufacturing User"}
+  ]
+}

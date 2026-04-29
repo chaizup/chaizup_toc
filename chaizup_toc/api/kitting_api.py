@@ -1,13 +1,52 @@
+# =============================================================================
+# CONTEXT: Kitting Report API — answers "Can we produce this item today?"
+#   Shows Manufacture-mode TOC items (auto_manufacture=1) with multi-level BOM
+#   walk, per-component shortage analysis, and one-click WO/MR creation.
+# MEMORY: app_chaizup_toc.md § Key Module Structure (kitting_api.py)
+# INSTRUCTIONS:
+#   - get_kitting_summary: filters items by custom_toc_auto_manufacture=1.
+#     The old buffer_type FG/SFG filter is removed — all Manufacture-mode items shown.
+#   - _walk_bom: assigns type="Manufacture" to components that have a BOM (recurse),
+#     or type="Purchase" to leaf components (no BOM).
+#   - _infer_type: for non-TOC components, checks auto_manufacture flag and BOM
+#     existence. Returns "Manufacture" | "Purchase". No more FG/SFG/RM/PM strings.
+#   - _component_stage: routes Work Order check to type=="Manufacture";
+#     Purchase Order check to type=="Purchase".
+#   - UOM RULE: ALL quantity comparisons must use stock_uom.
+#     _so_pending: uses soi.stock_qty (not soi.qty) and pending = stock_qty - delivered_qty*cf
+#     _dispatched:  uses dni.stock_qty (always in stock_uom)
+#     _produced:    uses sed.transfer_qty (stock_uom) not sed.qty
+#     _stock_map:   uses Bin.actual_qty (always stock_uom) — already correct
+#     create_purchase_requests: uses purchase_uom + conversion_factor (same pattern as mr_generator._create_mr)
+# DANGER ZONE:
+#   - _resolve_buffer_type was removed from buffer_calculator.py. DO NOT import it.
+#     Filtering is now done via frappe.get_all filters on custom_toc_auto_manufacture.
+#   - Component "type" field in BOM tree rows is now "Manufacture" or "Purchase" —
+#     not "FG"/"SFG"/"RM"/"PM". kitting_report.js checks r.mr_type, not r.buffer_type.
+#   - UOM DANGER: BOM Item.stock_qty is in stock_uom (ERPNext auto-converts on BOM save).
+#     Always use stock_qty not qty for BOM-based calculations.
+#   - SO pending vs stock comparison MUST both be in stock_uom — mixing UOMs gives wrong
+#     should_produce values, leading to incorrect WO creation qty.
+# RESTRICT:
+#   - Do NOT re-add _resolve_buffer_type import — it no longer exists.
+#   - Do NOT add FG/SFG/RM/PM strings back — they break the filter in kitting_report.js.
+#   - frappe.only_for() in create_purchase_requests / create_work_order_from_kitting —
+#     do not remove (security gates).
+#   - Do NOT use soi.qty or dni.qty for demand/dispatch — use stock_qty (stock_uom).
+#   - Do NOT use sed.qty for produced qty — use transfer_qty (stock_uom).
+# =============================================================================
+
 """
 Kitting Report API — Full Supply Chain Visibility
 ==================================================
-Answers: "Can we produce this FG today? If not, why, and what is in motion?"
+Answers: "Can we produce this Manufacture-mode item today? If not, why?"
 
 Features:
-- Multi-level BOM walking (FG → SFG → SFG → RM/PM)
+- Filters to custom_toc_auto_manufacture=1 items (Manufacture-mode)
+- Multi-level BOM walking (top-level → sub-assembly → leaf components)
 - Per-component stage tracking (In Stock / In Production / Purchase Ordered / MR Raised / Short)
-- One-click Purchase MR creation for all RM/PM shortages
-- One-click Work Order creation for FG/SFG
+- One-click Purchase MR creation for all Purchase-mode shortages
+- One-click Work Order creation for Manufacture-mode items/sub-assemblies
 - Monthly demand vs dispatch vs production analysis
 
 Called by: chaizup_toc/page/kitting_report/kitting_report.js
@@ -18,7 +57,6 @@ from datetime import date
 
 import frappe
 from frappe.utils import cint, flt, today
-from chaizup_toc.toc_engine.buffer_calculator import _resolve_buffer_type, _get_settings
 
 
 # ═══════════════════════════════════════════════════════
@@ -28,7 +66,11 @@ from chaizup_toc.toc_engine.buffer_calculator import _resolve_buffer_type, _get_
 @frappe.whitelist()
 def get_kitting_summary(company=None, month=None, year=None, buffer_type=None):
     """
-    Main table data — one row per FG/SFG item.
+    Main table data — one row per Manufacture-mode item.
+
+    Args:
+        buffer_type: kept for backward compat — silently ignored.
+                     All custom_toc_auto_manufacture=1 items are shown.
 
     Returns:
         List of dicts with SO demand, dispatch, stock, production
@@ -42,24 +84,10 @@ def get_kitting_summary(company=None, month=None, year=None, buffer_type=None):
     curr_from, curr_to = _period_dates(curr_month, curr_year)
     prev_from, prev_to = _period_dates(prev_month, prev_year)
 
-    # Which buffer types to show
-    valid_types = ["FG", "SFG"]
-    if buffer_type and buffer_type in valid_types:
-        type_filter = [buffer_type]
-    else:
-        type_filter = valid_types
-
-    _settings = _get_settings()
-    all_items = frappe.get_all("Item",
-        filters={"custom_toc_enabled": 1, "disabled": 0},
+    # Show all Manufacture-mode TOC items (auto_manufacture=1)
+    items = frappe.get_all("Item",
+        filters={"custom_toc_enabled": 1, "disabled": 0, "custom_toc_auto_manufacture": 1},
         fields=["name", "item_name", "item_group", "stock_uom", "custom_toc_default_bom"])
-    # Filter by resolved buffer type (item group rules, not item-level field)
-    items = []
-    for _i in all_items:
-        _bt = _resolve_buffer_type(_i.name, _i.item_group, _settings)
-        if _bt in type_filter:
-            _i["resolved_buffer_type"] = _bt
-            items.append(_i)
 
     if not items:
         return []
@@ -93,7 +121,7 @@ def get_kitting_summary(company=None, month=None, year=None, buffer_type=None):
             "item_name"               : item.item_name,
             "item_group"              : item.item_group,
             "stock_uom"               : item.stock_uom,
-            "buffer_type"             : item.get("resolved_buffer_type", ""),
+            "mr_type"                 : "Manufacture",
             "bom"                     : item.custom_toc_default_bom or "",
             # Demand
             "total_so_pending"        : round(total_p, 2),
@@ -121,12 +149,12 @@ def get_kitting_summary(company=None, month=None, year=None, buffer_type=None):
 @frappe.whitelist()
 def get_item_kitting_detail(item_code, required_qty):
     """
-    Full drill-down for one FG/SFG.
+    Full drill-down for one Manufacture-mode item.
 
     Returns:
         BOM component tree with per-component stock, shortage,
         stage, and all linked open documents (WO / PO / MR).
-        Also returns the FG item's own open Work Orders and MRs.
+        Each component has type="Manufacture" (has BOM) or "Purchase" (leaf/purchased).
     """
     required_qty = flt(required_qty) or 1.0
 
@@ -159,7 +187,7 @@ def get_item_kitting_detail(item_code, required_qty):
 def create_purchase_requests(items_json, company):
     """
     One-click: Create a single Purchase Material Request
-    covering all RM/PM shortages passed in.
+    covering all Purchase-mode component shortages passed in.
 
     Args:
         items_json: JSON list of {item_code, shortage_qty, uom, warehouse}
@@ -185,15 +213,32 @@ def create_purchase_requests(items_json, company):
 
     default_wh = _default_warehouse(company)
     for it in items:
-        uom = (it.get("uom")
-               or frappe.db.get_value("Item", it["item_code"], "stock_uom")
-               or "Nos")
+        stock_uom = frappe.db.get_value("Item", it["item_code"], "stock_uom") or "Nos"
+        # Resolve purchase_uom + conversion_factor (same pattern as mr_generator._create_mr)
+        purchase_uom = frappe.db.get_value("Item", it["item_code"], "purchase_uom") or stock_uom
+        conversion_factor = 1.0
+        if purchase_uom and purchase_uom != stock_uom:
+            cf = frappe.db.get_value(
+                "UOM Conversion Detail",
+                {"parent": it["item_code"], "uom": purchase_uom},
+                "conversion_factor",
+            )
+            conversion_factor = flt(cf) if cf else 1.0
+        # shortage_qty is in stock_uom; convert to purchase_uom for the MR line
+        shortage_in_stock_uom = flt(it["shortage_qty"])
+        if conversion_factor > 0 and conversion_factor != 1.0:
+            mr_qty = shortage_in_stock_uom / conversion_factor
+        else:
+            mr_qty = shortage_in_stock_uom
+            purchase_uom = stock_uom
         mr.append("items", {
-            "item_code"    : it["item_code"],
-            "qty"          : flt(it["shortage_qty"]),
-            "uom"          : uom,
-            "warehouse"    : it.get("warehouse") or default_wh,
-            "schedule_date": add_days(today(), 7),
+            "item_code"        : it["item_code"],
+            "qty"              : mr_qty,
+            "uom"              : purchase_uom,
+            "stock_uom"        : stock_uom,
+            "conversion_factor": conversion_factor,
+            "warehouse"        : it.get("warehouse") or default_wh,
+            "schedule_date"    : add_days(today(), 7),
         })
 
     mr.flags.ignore_permissions = True
@@ -205,7 +250,7 @@ def create_purchase_requests(items_json, company):
 @frappe.whitelist()
 def create_work_order_from_kitting(item_code, qty, company, bom=None):
     """
-    One-click: Create a Work Order for a FG/SFG shortage.
+    One-click: Create a Work Order for a Manufacture-mode item shortage.
 
     Returns:
         {status, work_order, item_code, qty}
@@ -248,19 +293,28 @@ def create_work_order_from_kitting(item_code, qty, company, bom=None):
 # ═══════════════════════════════════════════════════════
 
 def _so_pending(item_codes, from_date, to_date, company=None):
-    """Pending SO qty per item — delivery_date in period, not fully dispatched."""
+    """
+    Pending SO qty per item in STOCK UOM — delivery_date in period, not fully dispatched.
+
+    Uses soi.stock_qty (stock_uom) for total ordered qty and
+    soi.delivered_qty * soi.conversion_factor to get delivered qty in stock_uom.
+    This ensures the result is comparable with Bin.actual_qty (also stock_uom).
+    """
     if not item_codes:
         return {}
     co = "AND so.company = %(company)s" if company else ""
     rows = frappe.db.sql(f"""
         SELECT soi.item_code,
-               SUM(soi.qty - IFNULL(soi.delivered_qty, 0)) AS pending
+               SUM(
+                   soi.stock_qty
+                   - IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+               ) AS pending
         FROM   `tabSales Order Item` soi
         JOIN   `tabSales Order` so ON so.name = soi.parent
         WHERE  soi.item_code IN %(items)s
           AND  so.docstatus = 1
           AND  so.status NOT IN ('Closed','Cancelled')
-          AND  (soi.qty - IFNULL(soi.delivered_qty, 0)) > 0
+          AND  soi.stock_qty > IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
           AND  so.delivery_date BETWEEN %(f)s AND %(t)s
           {co}
         GROUP BY soi.item_code
@@ -270,12 +324,15 @@ def _so_pending(item_codes, from_date, to_date, company=None):
 
 
 def _dispatched(item_codes, from_date, to_date, company=None):
-    """Delivered qty per item from Delivery Notes in the period."""
+    """
+    Delivered qty per item in STOCK UOM from Delivery Notes in the period.
+    Uses dni.stock_qty (automatically in stock_uom by ERPNext DN posting).
+    """
     if not item_codes:
         return {}
     co = "AND dn.company = %(company)s" if company else ""
     rows = frappe.db.sql(f"""
-        SELECT dni.item_code, SUM(dni.qty) AS dispatched
+        SELECT dni.item_code, SUM(dni.stock_qty) AS dispatched
         FROM   `tabDelivery Note Item` dni
         JOIN   `tabDelivery Note` dn ON dn.name = dni.parent
         WHERE  dni.item_code IN %(items)s
@@ -289,12 +346,15 @@ def _dispatched(item_codes, from_date, to_date, company=None):
 
 
 def _produced(item_codes, from_date, to_date, company=None):
-    """Qty manufactured (Stock Entries, type=Manufacture) per item in period."""
+    """
+    Qty manufactured in STOCK UOM (Stock Entries, type=Manufacture) per item in period.
+    Uses sed.transfer_qty which is in stock_uom (= sed.qty × sed.conversion_factor).
+    """
     if not item_codes:
         return {}
     co = "AND se.company = %(company)s" if company else ""
     rows = frappe.db.sql(f"""
-        SELECT sed.item_code, SUM(sed.qty) AS produced
+        SELECT sed.item_code, SUM(sed.transfer_qty) AS produced
         FROM   `tabStock Entry Detail` sed
         JOIN   `tabStock Entry` se ON se.name = sed.parent
         WHERE  sed.item_code IN %(items)s
@@ -362,8 +422,7 @@ def _walk_bom(bom_name, parent_qty, results, depth, max_depth):
              "custom_toc_default_bom", "custom_toc_enabled"],
             as_dict=True) or {}
 
-        _ig = item_meta.get("item_group") or ""
-        itype = _resolve_buffer_type(bi.item_code, _ig, _get_settings()) or _infer_type(bi.item_code)
+        itype = _infer_type(bi.item_code)
 
         in_stock = flt(frappe.db.sql(
             "SELECT COALESCE(SUM(actual_qty),0) FROM `tabBin` WHERE item_code=%s",
@@ -389,8 +448,8 @@ def _walk_bom(bom_name, parent_qty, results, depth, max_depth):
             "sub_components"   : [],
         }
 
-        # Recurse for SFG — walk its BOM to expose full chain
-        if itype == "SFG":
+        # Recurse for Manufacture-mode sub-assemblies — walk their BOM to expose full chain
+        if itype == "Manufacture":
             sub_bom = (
                 item_meta.get("custom_toc_default_bom")
                 or frappe.db.get_value("BOM",
@@ -443,8 +502,8 @@ def _calc_kit_qty_from_components(required_qty, components):
             per_unit = flt(c["required_qty"]) / flt(req) if req else 0
             if per_unit <= 0:
                 continue
-            # Leaf components (RM/PM, or SFG with no sub-components) are the bottleneck
-            if c["type"] in ("RM", "PM") or not c.get("sub_components"):
+            # Leaf components (Purchase-mode, or sub-assemblies with no sub-components)
+            if c["type"] == "Purchase" or not c.get("sub_components"):
                 producible = flt(c["in_stock"]) / per_unit
                 min_units = min(min_units, producible)
             elif c.get("sub_components"):
@@ -474,7 +533,7 @@ def _component_stage(item_code, shortage, item_type):
         return empty
 
     work_orders = []
-    if item_type in ("FG", "SFG"):
+    if item_type == "Manufacture":
         work_orders = frappe.db.sql("""
             SELECT wo.name, wo.status, wo.qty, wo.produced_qty,
                    wo.planned_start_date,
@@ -487,7 +546,7 @@ def _component_stage(item_code, shortage, item_type):
         """, item_code, as_dict=True)
 
     purchase_orders = []
-    if item_type in ("RM", "PM"):
+    if item_type == "Purchase":
         purchase_orders = frappe.db.sql("""
             SELECT poi.parent AS name, po.status,
                    poi.qty, poi.received_qty,
@@ -571,21 +630,25 @@ def _prev_month(month, year):
 
 
 def _infer_type(item_code):
-    """Guess buffer type from item group/name keywords when not set on Item."""
-    item = frappe.db.get_value("Item", item_code,
-                               ["item_group", "item_name"], as_dict=True) or {}
-    grp  = (item.get("item_group") or "").lower()
-    name = (item.get("item_name")  or "").lower()
-    for kw in ("raw", "material", "ingredient", "flour", "oil", "spice"):
-        if kw in grp or kw in name:
-            return "RM"
-    for kw in ("pack", "pouch", "carton", "label", "box", "wrapper", "film"):
-        if kw in grp or kw in name:
-            return "PM"
-    for kw in ("semi", "sfg", "premix", "blend", "intermediate", "wip"):
-        if kw in grp or kw in name:
-            return "SFG"
-    return "RM"
+    """
+    Determine replenishment mode for a BOM component.
+    Priority: TOC flags → BOM existence → fallback to Purchase.
+    Returns "Manufacture" | "Purchase" — never FG/SFG/RM/PM.
+    """
+    flags = frappe.db.get_value(
+        "Item", item_code,
+        ["custom_toc_auto_manufacture", "custom_toc_auto_purchase"],
+        as_dict=True,
+    ) or {}
+    if flags.get("custom_toc_auto_manufacture"):
+        return "Manufacture"
+    if flags.get("custom_toc_auto_purchase"):
+        return "Purchase"
+    # Non-TOC item: check if an active BOM exists — if so, treat as manufactured sub-assembly
+    has_bom = frappe.db.get_value(
+        "BOM", {"item": item_code, "is_active": 1, "docstatus": 1}, "name"
+    )
+    return "Manufacture" if has_bom else "Purchase"
 
 
 def _default_warehouse(company):

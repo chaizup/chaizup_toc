@@ -38,9 +38,10 @@ frappe.pages["kitting-report"].on_page_load = function (wrapper) {
     default: String(currYear),
     change() { window.kitReport.load(); },
   });
+  // Kitting report only shows Manufacture-mode items; filter kept for UI consistency
   page.add_field({
     label: __("Type"), fieldname: "buffer_type", fieldtype: "Select",
-    options: ["All", "FG", "SFG"].join("\n"), default: "All",
+    options: ["All"].join("\n"), default: "All",
     change() { window.kitReport.load(); },
   });
 
@@ -133,7 +134,7 @@ class KittingReport {
     const tbody = _el("kit-tbody");
     if (!this.data.length) {
       tbody.innerHTML = `<tr><td colspan="14" class="kit-placeholder">
-        No TOC-enabled FG/SFG items found. Enable TOC on items to begin.</td></tr>`;
+        No TOC-enabled Manufacture-mode items found. Enable TOC and set Auto Manufacture on items to begin.</td></tr>`;
       return;
     }
 
@@ -152,12 +153,12 @@ class KittingReport {
       const sp = r.should_produce;
       const spCls = sp > 0 ? "style='color:#dc2626;font-weight:700'" : "";
 
+      // All kitting items are Manufacture-mode — always show WO button
       const actionBtns = canAct && sp > 0 ? `
         <div style="display:flex;gap:4px;flex-wrap:wrap">
-          ${r.buffer_type === "FG" || r.buffer_type === "SFG"
-            ? `<button class="kit-btn kit-btn-mfg" style="padding:4px 8px;font-size:11px"
-                onclick="event.stopPropagation();kitReport._quickWO('${r.item_code}','${r.bom}',${sp})">
-                ⚙️ WO</button>` : ""}
+          <button class="kit-btn kit-btn-mfg" style="padding:4px 8px;font-size:11px"
+            onclick="event.stopPropagation();kitReport._quickWO('${r.item_code}','${r.bom}',${sp})">
+            ⚙️ WO</button>
           <button class="kit-btn kit-btn-teal" style="padding:4px 8px;font-size:11px"
             onclick="event.stopPropagation();kitReport._drillAndCreateMR('${r.item_code}',${sp})">
             🛒 MR</button>
@@ -166,7 +167,7 @@ class KittingReport {
       return `<tr data-code="${r.item_code}" data-qty="${sp}" class="${this.activeRow === r.item_code ? "kit-row-active" : ""}"
                onclick="kitReport._onRowClick('${r.item_code}',${sp},this)">
         <td><span style="color:#9ca3af;font-size:11.5px;font-weight:600">${i+1}</span></td>
-        <td><span class="kit-type kit-type-${r.buffer_type}">${r.buffer_type}</span></td>
+        <td><span class="kit-type kit-type-${r.mr_type}">${r.mr_type}</span></td>
         <td>
           <a href="/app/item/${encodeURIComponent(r.item_code)}"
              onclick="event.stopPropagation()"
@@ -329,7 +330,7 @@ class KittingReport {
     }
   }
 
-  /* ── Render one BOM component row (recursive for SFG) ── */
+  /* ── Render one BOM component row (recursive for Manufacture sub-assemblies) ── */
   _renderComponent(comp, parentEl, depth = 0) {
     const indent = depth * 24;
     const hasSubs = comp.sub_components && comp.sub_components.length > 0;
@@ -347,7 +348,7 @@ class KittingReport {
 
     const shortCls = comp.shortage > 0 ? "shortage-val" : "ok-val";
     const rowClass = comp.shortage > 0 ? "kit-comp-shortage"
-                   : (comp.type === "SFG" ? "kit-comp-sfg" : "");
+                   : (comp.type === "Manufacture" ? "kit-comp-sfg" : "");
 
     const wrapper = document.createElement("div");
 
@@ -494,7 +495,7 @@ class KittingReport {
     const shortages = [];
     this._collectPurchaseShortages(this.drillData.components, shortages);
     if (!shortages.length) {
-      frappe.show_alert({ message: "No RM/PM shortages to purchase.", indicator: "orange" });
+      frappe.show_alert({ message: "No Purchase-mode component shortages.", indicator: "orange" });
       return;
     }
 
@@ -615,7 +616,7 @@ class KittingReport {
   /* ── Helpers ── */
   _collectPurchaseShortages(components, result) {
     (components || []).forEach(c => {
-      if (c.shortage > 0 && (c.type === "RM" || c.type === "PM")) {
+      if (c.shortage > 0 && c.type === "Purchase") {
         result.push({
           item_code   : c.item_code,
           shortage_qty: c.shortage,

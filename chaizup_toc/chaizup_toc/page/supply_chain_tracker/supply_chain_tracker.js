@@ -72,7 +72,7 @@
  *     status       : Document status string
  *     zone         : "Red"|"Yellow"|"Green"|"Black" (item/output nodes only)
  *     bp_pct       : Buffer penetration % (0-100+)
- *     buffer_type  : "RM"|"PM"|"SFG"|"FG" (item/output nodes only)
+ *     buffer_type  : "Manufacture"|"Purchase"|"Monitor" (item/output nodes -- from toc_map)
  *     mr_type      : "Purchase"|"Manufacture" (MR nodes only)
  *     item_code    : Item code
  *     item_name    : Item name (long)
@@ -278,8 +278,8 @@
  *
  * ── TOC FORMULA REFERENCE ────────────────────────────────────────────────────
  *   F1: Target = ADU × RLT × VF
- *   F2a (FG/SFG): IP = On-Hand + WIP - Backorders
- *   F2b (RM/PM):  IP = On-Hand + On-Order - Committed
+ *   F2a (Manufacture): IP = On-Hand + WIP - Backorders
+ *   F2b (Purchase):   IP = On-Hand + On-Order - Committed
  *   F3: BP% = (Target - IP) / Target × 100
  *   F4: Order Qty = Target - IP   (replenishment deficit)
  *
@@ -345,7 +345,7 @@ class SupplyChainTracker {
     // days_back changes the look-back window for open documents.
     this.f = {
       search:     "",      // Free-text search across item codes, doc names, suppliers
-      type:       "All",   // Buffer type: "All" | "FG" | "SFG" | "RM" | "PM"
+      type:       "All",   // Replenishment mode: "All" | "Manufacture" | "Purchase" | "Monitor"
       zone:       "All",   // TOC zone: "All" | "Red" | "Yellow" | "Green" | "Black"
       doctype:    "All",   // Document type abbreviation: "All" | "MR" | "PO" | ...
       supplier:   "",      // Supplier name (server-side filter -- triggers load())
@@ -371,7 +371,7 @@ class SupplyChainTracker {
       { id: "sq_wo",            label: "Quotation / WO",    sub: "Quote or Work Order",    icon: "⚙",  flow: "both", num: "04" },
       { id: "po_jc",            label: "PO / Job Card",     sub: "Confirmed order/op",     icon: "🛒", flow: "both", num: "05" },
       { id: "receipt_qc",       label: "Receipt / QC / SE", sub: "Goods or production",   icon: "✅", flow: "both", num: "06" },
-      { id: "output",           label: "FG / SFG Buffer",   sub: "Current buffer state",  icon: "🏭", flow: "out",  num: "07" },
+      { id: "output",           label: "Manufacture Output", sub: "Current buffer state",  icon: "🏭", flow: "out",  num: "07" },
     ];
 
     // Edge stroke colours -- must be hex values, NOT CSS vars, because SVG
@@ -541,7 +541,7 @@ class SupplyChainTracker {
           <span style="font-size:11px;font-weight:400;color:var(--stone-500)"> -- ${track.item_name}</span>
         </div>
         <div class="sct-track-item-sub">
-          ${track.buffer_type ? `<span class="sct-doc-tag tag-item">${track.buffer_type}</span>` : ""}
+          ${(track.mr_type||track.buffer_type) ? `<span class="sct-doc-tag tag-item">${track.mr_type||track.buffer_type}</span>` : ""}
           ${!track.toc_enabled ? `<span class="sct-tag-non-toc">Non-TOC</span>` : ""}
           ${track.item_group  ? `<span style="font-size:10px;color:var(--stone-400);margin-left:4px">${track.item_group}</span>` : ""}
           ${track.warehouse   ? `<span style="font-size:10px;color:var(--stone-400);margin-left:4px">📍 ${track.warehouse}</span>` : ""}
@@ -663,7 +663,7 @@ class SupplyChainTracker {
         sq_wo:            "Supplier Quotation / Work Order",
         po_jc:            "Purchase Order / Job Card",
         receipt_qc:       "Receipt / QC / Stock Entry",
-        output:           "FG/SFG Output",
+        output:           "Manufacture Output",
       };
       const stageOrder = Object.keys(stageLabels);
       const byStage    = {};
@@ -911,24 +911,25 @@ class SupplyChainTracker {
    * BOTH flavours are present -- if only one type exists, no separator is added
    * to keep the column clean. Each stage has its own split logic:
    *
-   *   items        -> RM/PM vs SFG/FG (by buffer_type)
+   *   items        -> Purchase vs Manufacture (by mr_type)
    *   material_req -> Purchase MR vs Manufacture MR (by mr_type)
    *   rfq_pp       -> RFQ vs Production Plan (by sub_type)
    *   sq_wo        -> Supplier Quotation vs Work Order (by sub_type)
    *   po_jc        -> Purchase Order vs Job Card (by sub_type)
    *   receipt_qc   -> PR/QI vs Stock Entry (by sub_type)
-   *   output       -> SFG Output vs FG Output (by buffer_type)
+   *   output       -> Manufacture Output (all Manufacture-mode items)
    */
   _appendSeparatedCards(stageId, nodes, body) {
     // Helper: build card element and register in cardEls map for edge anchoring
     const add = (n) => { const c = this._buildPipelineCard(n); this.cardEls[n.id] = c; body.appendChild(c); };
 
     if (stageId === "items") {
-      const buy   = nodes.filter(n => ["rm","pm"].includes((n.buffer_type||"").toLowerCase()));
-      const mfg   = nodes.filter(n => ["sfg","fg"].includes((n.buffer_type||"").toLowerCase()));
-      const other = nodes.filter(n => !["rm","pm","sfg","fg"].includes((n.buffer_type||"").toLowerCase()));
-      if (buy.length) { body.appendChild(this._makeSep("Raw Mat & Packaging", "ts-buy")); buy.forEach(add); }
-      if (mfg.length) { body.appendChild(this._makeSep("Semi-FG & Finished", "ts-mfg")); mfg.forEach(add); }
+      // mr_type is the canonical field (buffer_type = mr_type for backward compat)
+      const buy   = nodes.filter(n => (n.mr_type||n.buffer_type||"") === "Purchase");
+      const mfg   = nodes.filter(n => (n.mr_type||n.buffer_type||"") === "Manufacture");
+      const other = nodes.filter(n => !["Purchase","Manufacture"].includes(n.mr_type||n.buffer_type||""));
+      if (buy.length) { body.appendChild(this._makeSep("Purchase", "ts-buy")); buy.forEach(add); }
+      if (mfg.length) { body.appendChild(this._makeSep("Manufacture", "ts-mfg")); mfg.forEach(add); }
       other.forEach(add);
 
     } else if (stageId === "material_request") {
@@ -981,11 +982,10 @@ class SupplyChainTracker {
       other.forEach(add);
 
     } else if (stageId === "output") {
-      const sfg   = nodes.filter(n => (n.buffer_type||"").toLowerCase() === "sfg");
-      const fg    = nodes.filter(n => (n.buffer_type||"").toLowerCase() === "fg");
-      const other = nodes.filter(n => !["sfg","fg"].includes((n.buffer_type||"").toLowerCase()));
-      if (sfg.length) { body.appendChild(this._makeSep("SFG Output", "ts-mfg")); sfg.forEach(add); }
-      if (fg.length)  { body.appendChild(this._makeSep("FG Output", "ts-out")); fg.forEach(add); }
+      // All Manufacture-mode items get output nodes — no more SFG vs FG distinction
+      const mfg   = nodes.filter(n => (n.mr_type||n.buffer_type||"") === "Manufacture");
+      const other = nodes.filter(n => (n.mr_type||n.buffer_type||"") !== "Manufacture");
+      if (mfg.length) { body.appendChild(this._makeSep("Manufacture Output", "ts-out")); mfg.forEach(add); }
       other.forEach(add);
 
     } else {
@@ -1098,15 +1098,14 @@ class SupplyChainTracker {
    * and node.sub_type using a priority-ordered lookup.
    */
   _v2TypeChip(node) {
-    const bt  = (node.buffer_type || "").toLowerCase();
+    // mr_type is the canonical field post-refactor; buffer_type = mr_type for compat
+    const bt  = (node.mr_type || node.buffer_type || "").toLowerCase();
     const sub = node.sub_type || "";
     let cls = "v2tc-item", label = "ITEM";
 
-    if      (sub === "output")  { cls = bt === "sfg" ? "v2tc-sfg" : "v2tc-out"; label = bt === "sfg" ? "SFG Output" : "FG Output"; }
-    else if (bt === "rm")       { cls = "v2tc-rm";  label = "Raw Mat"; }
-    else if (bt === "pm")       { cls = "v2tc-pm";  label = "Packaging"; }
-    else if (bt === "sfg")      { cls = "v2tc-sfg"; label = "Semi-FG"; }
-    else if (bt === "fg")       { cls = "v2tc-fg";  label = "Fin. Good"; }
+    if      (sub === "output")        { cls = "v2tc-out"; label = "Mfg. Output"; }
+    else if (bt === "purchase")       { cls = "v2tc-buy"; label = "Purchase"; }
+    else if (bt === "manufacture")    { cls = "v2tc-mfg"; label = "Manufacture"; }
     else if (sub === "mr")      {
       const isBuy = (node.mr_type || "").toLowerCase().includes("purchase");
       cls = isBuy ? "v2tc-buy" : "v2tc-mfg"; label = isBuy ? "Purchase MR" : "Mfg. MR";
@@ -1294,14 +1293,12 @@ class SupplyChainTracker {
    * The CSS ::before pseudo-element reads this class for its background colour.
    */
   _btClass(node) {
-    const bt  = (node.buffer_type || "").toLowerCase();
+    const bt  = (node.mr_type || node.buffer_type || "").toLowerCase();
     const sub = node.sub_type || "";
-    if (bt === "rm")  return "bt-rm";   // stone/brown
-    if (bt === "pm")  return "bt-pm";   // teal
-    if (bt === "sfg") return "bt-sfg";  // violet
-    if (bt === "fg")  return "bt-fg";   // brand orange
-    if (["rfq","sq","po","pr","qi"].includes(sub)) return "bt-buy";  // cyan
-    if (["pp","wo","jc","se"].includes(sub))       return "bt-mfg";  // purple
+    if (bt === "purchase")    return "bt-buy";
+    if (bt === "manufacture") return "bt-mfg";
+    if (["rfq","sq","po","pr","qi"].includes(sub)) return "bt-buy";
+    if (["pp","wo","jc","se"].includes(sub))       return "bt-mfg";
     if (node.stage === "items" || node.stage === "output") return "bt-item";
     return "";
   }
@@ -2525,7 +2522,7 @@ class SupplyChainTracker {
         break;
       case "output":
       case "items":
-        add("Buffer Type", node.buffer_type);
+        add("Replenishment Mode", node.mr_type || node.buffer_type);
         add("Item Group",  node.item_group);
         add("Warehouse",   node.warehouse);
         if (node.toc_enabled) {

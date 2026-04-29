@@ -69,7 +69,7 @@ Five DocTypes providing the data model for the TOC system:
 | TOC Item Buffer | Child Table | Per-warehouse buffer rules on Item |
 | TOC Settings | Singleton | App-wide configuration |
 | TOC Warehouse Rule | Child Table | Warehouse classification (Inventory/WIP/Excluded) |
-| TOC Item Group Rule | Child Table | Item group → buffer type auto-mapping |
+| TOC Item Group Rule | Child Table | LEGACY — removed from TOC Settings UI |
 
 Also includes `Custom Field` and `Property Setter` fixtures that extend built-in ERPNext DocTypes (Item, Material Request, Work Order).
 
@@ -77,12 +77,16 @@ Full documentation: `doctype/doctype.md`
 
 ### page/ — Desk Pages
 
-Two interactive operational interfaces:
+Six interactive operational interfaces:
 
 | Page | Route | Purpose |
 |------|-------|---------|
-| toc_dashboard | `/app/toc-dashboard` | Live auto-refreshing buffer dashboard |
+| toc_dashboard | `/app/toc-dashboard` | Live auto-refreshing buffer priority board |
+| toc_item_settings | `/app/toc-item-settings` | Bulk TOC configuration per item with help panel (added 2026-04-26) |
+| toc_user_guide | `/app/toc-user-guide` | Self-contained tutorial — formulas, triggers, config reference (added 2026-04-26) |
 | kitting_report | `/app/kitting-report` | Production readiness and BOM component status |
+| supply_chain_tracker | `/app/supply-chain-tracker` | 7-stage supply chain Kanban pipeline |
+| wo_kitting_planner | `/app/wo-kitting-planner` | Work Order kitting planner (7 tabs) |
 
 Full documentation: `page/page.md`
 
@@ -92,8 +96,8 @@ Four Script Reports for daily operations and analysis:
 
 | Report | Purpose |
 |--------|---------|
-| production_priority_board | What to produce today (FG/SFG) — sorted by BP% |
-| procurement_action_list | What to buy today (RM/PM) — with freight recommendations |
+| production_priority_board | What to produce/order today — sorted by BP%, filterable by Manufacture/Purchase/Monitor mode |
+| procurement_action_list | What to buy today (Purchase-mode items) — with freight recommendations |
 | buffer_status_report | Historical buffer trends from TOC Buffer Log |
 | dbm_analysis_report | DBM health check — which buffers need manual review |
 

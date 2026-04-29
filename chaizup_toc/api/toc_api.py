@@ -1,3 +1,26 @@
+# =============================================================================
+# CONTEXT: TOC Public API — all @frappe.whitelist() endpoints for the dashboard,
+#   item settings page, and external integrations.
+# MEMORY: app_chaizup_toc.md § Key Module Structure (toc_api.py)
+# INSTRUCTIONS:
+#   - get_priority_board: calls calculate_all_buffers(); returns sorted buffer list.
+#     buffer_type param is kept for backward compat but silently ignored — routing
+#     is derived from auto_purchase/auto_manufacture flags, not a type label.
+#   - trigger_manual_run: passes buffer_type to generate_material_requests() which
+#     also ignores it (kept for backward compat). zone_filter is a JSON list.
+#   - Number Card methods (nc_*): return single int counts from TOC Buffer Log.
+#     Called by Frappe Workspace number cards — must return a plain scalar.
+# DANGER ZONE:
+#   - Do NOT pass buffer_type= to calculate_all_buffers() — it no longer accepts
+#     that param (removed in buffer_type refactor 2026-04-27). Causes TypeError.
+#   - frappe.only_for() in trigger_manual_run — do not remove. Manual run is
+#     destructive (creates MRs for ALL items in zones).
+# RESTRICT:
+#   - Do NOT remove buffer_type param from get_priority_board / trigger_manual_run
+#     signatures — existing JS callers (dashboard, item form) pass it.
+#   - Do NOT add item.save() or doc manipulation here — use toc_engine modules.
+# =============================================================================
+
 """
 Chaizup TOC — Public API Endpoints
 ====================================
@@ -5,7 +28,7 @@ All methods are @frappe.whitelist() — callable from JS, REST, or external syst
 
 Usage:
   JS:   frappe.call({ method: 'chaizup_toc.api.toc_api.get_priority_board', ... })
-  REST: GET /api/method/chaizup_toc.api.toc_api.get_priority_board?buffer_type=FG
+  REST: GET /api/method/chaizup_toc.api.toc_api.get_priority_board?company=...
 """
 
 import frappe
@@ -20,14 +43,17 @@ def get_priority_board(buffer_type=None, company=None, warehouse=None, item_code
     Sorted by BP% desc (most urgent first), T/CU as tie-breaker (F5).
 
     Args:
+        buffer_type: kept for backward compat — silently ignored. Routing is
+                     derived from auto_purchase/auto_manufacture flags per item.
         item_code: filter to a single item (used by Item form "Buffer Status" button)
 
     Access: Stock User, Stock Manager, TOC User, TOC Manager, System Manager
     """
     from chaizup_toc.toc_engine.buffer_calculator import calculate_all_buffers
     return calculate_all_buffers(
-        buffer_type=buffer_type, company=company,
-        warehouse=warehouse, item_code=item_code,
+        company=company,
+        warehouse=warehouse,
+        item_code=item_code,
     )
 
 
