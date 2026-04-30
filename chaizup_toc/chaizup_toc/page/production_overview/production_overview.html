@@ -1,0 +1,1181 @@
+<!-- =============================================================================
+  CONTEXT: Production Overview Page — 3-tab production planning dashboard.
+    Tab 1 "Overview":  Item-level table (18 cols) with filters, modals, export.
+    Tab 2 "AI Advisor": DeepSeek chat + auto-insight.
+    Tab 3 "Charts":    Pie + bar summaries of loaded data.
+  MEMORY: app_chaizup_toc.md § Production Overview Page
+  INSTRUCTIONS:
+    - onclick attrs must use &quot; (never raw single quotes).
+    - CSS % values MUST end with ; before } to avoid Frappe %} template conflict.
+    - Use --slate-* CSS vars ONLY. --stone-* is undefined (transparent).
+    - ID prefix: por-   CSS class prefix: por-
+    - Chart.js loaded from CDN below; check "typeof Chart" before rendering.
+  DANGER:
+    - Single quotes inside onclick break Frappe JS template wrapping (SyntaxError).
+    - %} in CSS is parsed as Jinja2 block close. Always: width:40%;} not width:40%}.
+  RESTRICT:
+    - Do NOT add server-side rendering. All data via frappe.call().
+    - Do NOT use --stone-* variables (undefined → transparent).
+    - Tab IDs and class names are referenced by production_overview.js — do not rename.
+============================================================================= -->
+
+<link rel="stylesheet"
+  href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+  crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+/* ============================================================
+   § ROOT VARIABLES — Tiger Theme (slate palette, por- prefix)
+   ============================================================ */
+:root {
+  --por-bg:          #f8fafc;
+  --por-surface:     #ffffff;
+  --por-border:      #e2e8f0;
+  --por-text:        #0f172a;
+  --por-muted:       #64748b;
+  --por-sl-50:       #f8fafc;
+  --por-sl-100:      #f1f5f9;
+  --por-sl-200:      #e2e8f0;
+  --por-sl-300:      #cbd5e1;
+  --por-sl-400:      #94a3b8;
+  --por-sl-500:      #64748b;
+  --por-sl-700:      #334155;
+  --por-sl-900:      #0f172a;
+  --por-ok:          #10b981;
+  --por-ok-bg:       #d1fae5;
+  --por-ok-text:     #065f46;
+  --por-warn:        #f59e0b;
+  --por-warn-bg:     #fef3c7;
+  --por-warn-text:   #92400e;
+  --por-err:         #ef4444;
+  --por-err-bg:      #fee2e2;
+  --por-err-text:    #991b1b;
+  --por-info:        #0ea5e9;
+  --por-info-bg:     #e0f2fe;
+  --por-info-text:   #0c4a6e;
+  --por-brand:       #4f46e5;
+  --por-brand-h:     #4338ca;
+  --por-sh-sm:       0 1px 2px 0 rgba(0,0,0,.05);
+  --por-sh-md:       0 4px 6px -1px rgba(0,0,0,.1),0 2px 4px -2px rgba(0,0,0,.1);
+  --por-sh-lg:       0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);
+  --por-r-sm:        4px;
+  --por-r-md:        8px;
+  --por-r-lg:        12px;
+}
+
+/* === Scrollbar === */
+#por-root ::-webkit-scrollbar { width:6px; height:6px; }
+#por-root ::-webkit-scrollbar-track { background:transparent; }
+#por-root ::-webkit-scrollbar-thumb { background:var(--por-sl-300); border-radius:3px; }
+#por-root ::-webkit-scrollbar-thumb:hover { background:var(--por-sl-400); }
+
+/* === Root container === */
+#por-root {
+  font-family:"DM Sans",system-ui,-apple-system,sans-serif;
+  background:var(--por-bg);
+  color:var(--por-text);
+  height:calc(100dvh - 110px);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ============================================================
+   § PAGE HEADER
+   ============================================================ */
+.por-page-hdr {
+  background:var(--por-surface);
+  border-bottom:1px solid var(--por-border);
+  padding:8px 20px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-shrink:0;
+  box-shadow:var(--por-sh-sm);
+}
+.por-page-title {
+  font-family:"Oswald","DM Sans",sans-serif;
+  font-size:17px;
+  font-weight:600;
+  color:var(--por-sl-900);
+  letter-spacing:.3px;
+  flex:1;
+  margin:0;
+}
+.por-period-badge {
+  font-size:11px;
+  font-weight:700;
+  background:var(--por-info-bg);
+  color:var(--por-info-text);
+  padding:2px 8px;
+  border-radius:99px;
+  white-space:nowrap;
+}
+
+/* ============================================================
+   § BUTTONS
+   ============================================================ */
+.por-btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:5px;
+  height:30px; padding:0 12px;
+  font-size:12px; font-weight:600; font-family:inherit;
+  border-radius:var(--por-r-sm);
+  border:1px solid transparent;
+  cursor:pointer;
+  transition:all .15s;
+  white-space:nowrap;
+  text-decoration:none;
+  background:transparent;
+}
+.por-btn:active { transform:scale(.97); }
+.por-btn:disabled { opacity:.5; cursor:not-allowed; }
+.por-btn-brand  { background:var(--por-brand); color:#fff; }
+.por-btn-brand:hover  { background:var(--por-brand-h); color:#fff; }
+.por-btn-default{ background:var(--por-surface); border-color:var(--por-border); color:var(--por-text); }
+.por-btn-default:hover { background:var(--por-sl-50); border-color:var(--por-sl-300); }
+.por-btn-err { background:var(--por-err-bg); color:var(--por-err-text); border-color:var(--por-err); }
+.por-btn-err:hover { background:#fecaca; }
+.por-btn-cost { background:#eef2ff; color:#4338ca; border-color:#a5b4fc; }
+.por-btn-cost:hover { background:#e0e7ff; }
+.por-btn-ok { background:var(--por-ok-bg); color:var(--por-ok-text); border-color:var(--por-ok); }
+.por-btn-sm { height:24px; padding:0 8px; font-size:11px; }
+
+/* ============================================================
+   § FILTER BAR
+   ============================================================ */
+.por-filter-bar {
+  background:var(--por-sl-50);
+  border-bottom:1px solid var(--por-border);
+  padding:6px 20px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  flex-shrink:0;
+}
+.por-filter-grp { display:flex; align-items:center; gap:5px; }
+.por-filter-lbl {
+  font-size:10px; font-weight:700;
+  color:var(--por-muted);
+  text-transform:uppercase;
+  letter-spacing:.5px;
+  white-space:nowrap;
+}
+.por-select,.por-input {
+  height:28px; padding:0 8px;
+  border:1px solid var(--por-border);
+  border-radius:var(--por-r-sm);
+  background:var(--por-surface);
+  font-size:12px; color:var(--por-text); font-family:inherit;
+  outline:none;
+  transition:border-color .15s;
+}
+.por-select:focus,.por-input:focus {
+  border-color:var(--por-brand);
+  box-shadow:0 0 0 2px rgba(79,70,229,.12);
+}
+.por-input-yr { width:68px; }
+.por-filter-sep { width:1px; height:22px; background:var(--por-border); flex-shrink:0; }
+
+/* Multi-select dropdown */
+.por-ms-wrap { position:relative; }
+.por-ms-btn {
+  height:28px; padding:0 10px;
+  border:1px solid var(--por-border);
+  border-radius:var(--por-r-sm);
+  background:var(--por-surface);
+  font-size:12px; color:var(--por-text); font-family:inherit;
+  cursor:pointer;
+  display:inline-flex; align-items:center; gap:5px;
+  white-space:nowrap;
+  transition:border-color .15s;
+}
+.por-ms-btn:hover  { border-color:var(--por-sl-400); }
+.por-ms-btn.active { border-color:var(--por-brand); color:var(--por-brand); }
+.por-ms-panel {
+  display:none; position:absolute;
+  top:calc(100% + 4px); left:0;
+  min-width:220px; max-height:260px;
+  overflow-y:auto;
+  background:var(--por-surface);
+  border:1px solid var(--por-border);
+  border-radius:var(--por-r-md);
+  box-shadow:var(--por-sh-lg);
+  z-index:200; padding:4px 0;
+}
+.por-ms-panel.open { display:block; }
+.por-ms-item {
+  display:flex; align-items:center; gap:8px;
+  padding:5px 12px;
+  font-size:12px; cursor:pointer;
+  transition:background .1s;
+}
+.por-ms-item:hover { background:var(--por-sl-50); }
+.por-ms-actions { display:flex; gap:6px; padding:5px 12px; }
+.por-ms-divider { height:1px; background:var(--por-border); margin:2px 0; }
+
+/* Planning mode toggle */
+.por-toggle-wrap { display:flex; align-items:center; gap:6px; }
+.por-toggle { position:relative; width:34px; height:18px; flex-shrink:0; }
+.por-toggle input { opacity:0; width:0; height:0; }
+.por-toggle-slider {
+  position:absolute; cursor:pointer; inset:0;
+  background:var(--por-sl-300); border-radius:18px;
+  transition:background .2s;
+}
+.por-toggle-slider::before {
+  content:""; position:absolute;
+  width:12px; height:12px;
+  left:3px; top:3px;
+  background:white; border-radius:50%;
+  transition:transform .2s;
+}
+.por-toggle input:checked + .por-toggle-slider { background:var(--por-brand); }
+.por-toggle input:checked + .por-toggle-slider::before { transform:translateX(16px); }
+.por-toggle-lbl { font-size:11px; font-weight:600; color:var(--por-muted); }
+
+/* ============================================================
+   § TAB BAR
+   ============================================================ */
+.por-tab-bar {
+  background:var(--por-surface);
+  border-bottom:2px solid var(--por-sl-200);
+  padding:0 20px;
+  display:flex; align-items:flex-end; gap:2px;
+  flex-shrink:0;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.por-tab-btn {
+  padding:7px 14px;
+  font-size:12px; font-weight:600; font-family:inherit;
+  color:var(--por-muted);
+  border:none; border-bottom:2px solid transparent;
+  background:transparent; cursor:pointer;
+  transition:all .15s;
+  display:flex; align-items:center; gap:5px;
+  margin-bottom:-2px;
+}
+.por-tab-btn:hover { color:var(--por-text); }
+.por-tab-btn.active { color:var(--por-brand); border-bottom-color:var(--por-brand); }
+
+/* ============================================================
+   § SUMMARY STRIP
+   ============================================================ */
+.por-summary-strip {
+  display:flex; gap:8px; padding:8px 20px;
+  background:var(--por-sl-100);
+  flex-shrink:0; overflow-x:auto;
+}
+.por-sum-card {
+  background:var(--por-surface);
+  border:1px solid var(--por-border);
+  border-left:3px solid var(--por-sl-300);
+  border-radius:var(--por-r-md);
+  padding:7px 12px; min-width:120px; flex-shrink:0;
+  box-shadow:var(--por-sh-sm);
+}
+.por-sum-card.ok   { border-left-color:var(--por-ok); }
+.por-sum-card.warn { border-left-color:var(--por-warn); }
+.por-sum-card.err  { border-left-color:var(--por-err); }
+.por-sum-card.info { border-left-color:var(--por-info); }
+.por-sum-card.brand{ border-left-color:var(--por-brand); }
+.por-sum-num {
+  font-family:"Geist Mono","Courier New",monospace;
+  font-size:20px; font-weight:700; line-height:1.1;
+  color:var(--por-sl-900);
+}
+.por-sum-lbl { font-size:10px; color:var(--por-muted); margin-top:2px; font-weight:500; }
+
+/* ============================================================
+   § OVERVIEW PANE
+   ============================================================ */
+#por-pane-overview {
+  flex:1; display:flex; flex-direction:column; overflow:hidden;
+}
+.por-pane-hidden { display:none !important; }
+
+/* Loading / empty / init states */
+.por-state-box {
+  flex:1; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  color:var(--por-muted); gap:10px; padding:40px;
+}
+.por-state-box i { font-size:36px; opacity:.25; }
+.por-state-box p { font-size:13px; margin:0; text-align:center; }
+.por-spinner {
+  width:26px; height:26px;
+  border:3px solid var(--por-sl-200);
+  border-top-color:var(--por-brand);
+  border-radius:50%;
+  animation:por-spin .7s linear infinite;
+}
+@keyframes por-spin { to { transform:rotate(360deg); } }
+
+/* Main table */
+.por-table-wrap {
+  flex:1; overflow:auto; position:relative;
+}
+.por-table {
+  border-collapse:collapse; width:100%;
+  min-width:1700px;
+  font-size:12px;
+}
+.por-table thead th {
+  position:sticky; top:0;
+  background:var(--por-sl-100) !important;
+  border-bottom:2px solid var(--por-sl-200);
+  padding:7px 10px;
+  text-align:left; white-space:nowrap;
+  font-size:11px; font-weight:700; color:var(--por-sl-700);
+  z-index:10;
+}
+/* Frozen cols */
+.por-col-s { position:sticky; z-index:11; background:var(--por-sl-50) !important; }
+.por-table thead th.por-col-s { z-index:12; background:var(--por-sl-100) !important; }
+.por-col-chk  { left:0; width:34px; min-width:34px; }
+.por-col-item { left:34px; min-width:200px; }
+/* shadow divider after frozen item col */
+.por-col-item::after {
+  content:""; position:absolute; right:-1px; top:0; bottom:0;
+  width:2px; background:var(--por-sl-200); z-index:1;
+}
+.por-table tbody tr {
+  border-bottom:1px solid var(--por-sl-100); transition:background .1s;
+}
+.por-table tbody tr:nth-child(even) { background:rgba(241,245,249,.5); }
+.por-table tbody tr:hover { background:var(--por-info-bg); }
+.por-table tbody td { padding:6px 10px; vertical-align:middle; }
+.por-table tbody td.por-col-s { background:var(--por-surface); }
+.por-table tbody tr:nth-child(even) td.por-col-s { background:var(--por-sl-50); }
+.por-table tbody tr:hover td.por-col-s { background:var(--por-info-bg); }
+
+/* Qty cells */
+.por-q { font-family:"Geist Mono","Courier New",monospace; font-size:12px; font-weight:600; }
+.por-q-sub { font-family:"Geist Mono",monospace; font-size:10px; color:var(--por-muted); display:block; }
+.por-q-zero { color:var(--por-sl-400); }
+.por-q-uom  { font-size:10px; color:var(--por-muted); font-weight:400; }
+
+/* Item cell */
+.por-ic { font-family:"Geist Mono",monospace; font-size:11px; color:var(--por-brand); cursor:pointer; font-weight:600; }
+.por-ic:hover { text-decoration:underline; }
+.por-in { font-size:11px; color:var(--por-muted); display:block; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:185px; }
+
+/* Type badge */
+.por-tbadge {
+  display:inline-block; padding:2px 6px; border-radius:99px;
+  font-size:10px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
+}
+.por-tbadge-fg    { background:#dcfce7; color:#166534; }
+.por-tbadge-sfg   { background:#dbeafe; color:#1e40af; }
+.por-tbadge-rm    { background:#f3e8ff; color:#6b21a8; }
+.por-tbadge-pm    { background:#fff7ed; color:#9a3412; }
+.por-tbadge-other { background:var(--por-sl-100); color:var(--por-sl-700); }
+
+/* Sub-asm chip */
+.por-subasm {
+  display:inline-flex; align-items:center; gap:3px;
+  padding:2px 6px; border-radius:99px;
+  font-size:10px; font-weight:600;
+  background:#fef3c7; color:#92400e; border:1px solid #fde68a;
+}
+
+/* WO count chip */
+.por-wo-chip {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:22px; height:22px; padding:0 5px;
+  border-radius:99px;
+  font-family:"Geist Mono",monospace; font-size:11px; font-weight:700;
+  background:var(--por-info-bg); color:var(--por-info-text);
+}
+.por-wo-chip.zero { background:var(--por-sl-100); color:var(--por-muted); }
+
+/* BOM link */
+.por-bom-lnk { font-family:"Geist Mono",monospace; font-size:10px; color:var(--por-brand); }
+.por-no-bom  { font-size:10px; color:var(--por-sl-400); }
+
+/* Proj vs Sales */
+.por-pvs-hi  { color:var(--por-ok-text); font-weight:700; }
+.por-pvs-lo  { color:var(--por-err-text); font-weight:700; }
+.por-pvs-na  { color:var(--por-muted); }
+
+/* Shortage cell */
+.por-short-ok   { font-size:11px; color:var(--por-ok-text); font-weight:600; }
+.por-short-warn { font-size:11px; color:var(--por-err-text); font-weight:700; }
+
+/* Planning input */
+.por-plan-inp {
+  width:76px; height:24px; padding:0 5px;
+  border:1px solid var(--por-border); border-radius:var(--por-r-sm);
+  font-family:"Geist Mono",monospace; font-size:12px;
+  background:white; outline:none;
+}
+.por-plan-inp:focus { border-color:var(--por-brand); box-shadow:0 0 0 2px rgba(79,70,229,.12); }
+
+/* Tooltip i button */
+.por-tip {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:13px; height:13px; border-radius:50%;
+  background:var(--por-sl-200); color:var(--por-muted);
+  font-size:9px; cursor:help; margin-left:3px;
+  font-style:italic; font-weight:700; font-family:serif; flex-shrink:0;
+}
+
+/* ============================================================
+   § AI PANE
+   ============================================================ */
+#por-pane-ai {
+  flex:1; display:flex; flex-direction:column; overflow:hidden;
+  background:var(--por-sl-100); padding:10px 16px 10px; gap:10px;
+}
+.por-ai-layout {
+  flex:1; display:flex; gap:10px; overflow:hidden; min-height:0;
+}
+.por-ai-main {
+  flex:1; display:flex; flex-direction:column; gap:8px; overflow:hidden; min-height:0;
+}
+.por-ai-side {
+  width:195px; flex-shrink:0; display:flex; flex-direction:column; gap:8px; overflow-y:auto;
+}
+@media (max-width:1200px) { .por-ai-side { display:none; } }
+.por-ai-card {
+  background:var(--por-surface);
+  border:1px solid var(--por-border); border-radius:var(--por-r-md);
+  box-shadow:var(--por-sh-md); overflow:hidden; display:flex; flex-direction:column;
+}
+.por-ai-card-hdr {
+  background:var(--por-sl-50); border-bottom:1px solid var(--por-border);
+  padding:7px 12px; display:flex; align-items:center; gap:7px;
+  font-size:12px; font-weight:700; color:var(--por-sl-700); flex-shrink:0;
+}
+.por-ai-card-hdr i { color:var(--por-brand); font-size:12px; }
+
+/* Insight */
+.por-ai-insight { flex-shrink:0; max-height:155px; }
+#por-ai-insight-body {
+  padding:8px 12px; font-size:12px;
+  overflow-y:auto; flex:1; min-height:50px;
+}
+.por-ai-insight-ph {
+  color:var(--por-muted); font-style:italic; text-align:center; padding:16px 0;
+}
+#por-ai-data-pts { font-size:10px; color:var(--por-muted); padding:2px 12px; flex-shrink:0; }
+
+/* Chat */
+.por-ai-chat { flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0; }
+.por-ai-model-row {
+  display:flex; align-items:center; gap:7px;
+  padding:4px 10px;
+  background:var(--por-sl-50); border-bottom:1px solid var(--por-border); flex-shrink:0;
+}
+.por-ai-model-lbl { font-size:11px; font-weight:600; color:var(--por-muted); white-space:nowrap; }
+#por-ai-model {
+  flex:1; height:24px; padding:0 5px;
+  border:1px solid var(--por-border); border-radius:var(--por-r-sm);
+  font-size:11px; font-family:inherit; background:white; outline:none;
+}
+#por-ai-cost-hint { font-size:10px; color:var(--por-muted); white-space:nowrap; }
+#por-ai-msgs {
+  flex:1; overflow-y:auto; padding:8px 12px;
+  display:flex; flex-direction:column; gap:7px;
+}
+.por-ai-bubble {
+  max-width:86%;
+  border-radius:var(--por-r-md); padding:7px 11px;
+  font-size:12px; line-height:1.5;
+}
+.por-ai-bubble.user { align-self:flex-end; background:var(--por-brand); color:#fff; }
+.por-ai-bubble.asst {
+  align-self:flex-start;
+  background:var(--por-sl-50); border:1px solid var(--por-border); color:var(--por-text);
+}
+.por-ai-ok   { color:#065f46; font-weight:600; }
+.por-ai-warn { color:#92400e; font-weight:600; }
+.por-ai-err  { color:#991b1b; font-weight:600; }
+.por-ai-table { border-collapse:collapse; font-size:11px; width:100%; margin:5px 0; }
+.por-ai-table th,.por-ai-table td { padding:3px 7px; border:1px solid var(--por-border); text-align:left; white-space:nowrap; }
+.por-ai-table th { background:var(--por-sl-100); font-weight:700; position:sticky; top:0; }
+.por-ai-tablewrap {
+  overflow:auto; max-height:340px; max-width:100%;
+  margin:6px 0; border:1px solid var(--por-sl-200); border-radius:var(--por-r-sm);
+}
+.por-ai-tablewrap::-webkit-scrollbar { width:8px; height:8px; }
+.por-ai-tablewrap::-webkit-scrollbar-thumb { background:var(--por-sl-300); border-radius:4px; }
+.por-ai-actions { padding-left:18px; margin:5px 0; }
+.por-ai-actions li { margin:2px 0; }
+.por-ai-typing { font-style:italic; color:var(--por-muted); font-size:11px; align-self:flex-start; }
+.por-ai-input-row {
+  display:flex; gap:6px; padding:7px 10px;
+  border-top:1px solid var(--por-border);
+  background:var(--por-surface); flex-shrink:0; align-items:flex-end;
+}
+#por-ai-input {
+  flex:1; resize:none;
+  border:1px solid var(--por-border); border-radius:var(--por-r-sm);
+  padding:5px 8px; font-size:12px; font-family:inherit;
+  outline:none; height:36px; min-height:36px; max-height:90px; overflow-y:auto;
+  transition:border-color .15s;
+}
+#por-ai-input:focus { border-color:var(--por-brand); }
+
+/* FAQ side */
+.por-faq-list { display:flex; flex-direction:column; gap:4px; padding:7px 8px; }
+.por-faq-chip {
+  display:block; padding:5px 8px;
+  font-size:11px; font-family:inherit;
+  border:1px solid var(--por-border); border-radius:var(--por-r-sm);
+  cursor:pointer; background:white; color:var(--por-text);
+  text-align:left; transition:all .15s; line-height:1.3;
+}
+.por-faq-chip:hover { background:var(--por-info-bg); border-color:var(--por-info); color:var(--por-info-text); }
+
+/* ============================================================
+   § CHARTS PANE
+   ============================================================ */
+#por-pane-charts {
+  flex:1; display:flex; flex-direction:column;
+  overflow-y:auto; padding:14px 20px; gap:14px; background:var(--por-bg);
+}
+.por-charts-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(360px,1fr));
+  gap:14px;
+}
+.por-chart-card {
+  background:var(--por-surface); border:1px solid var(--por-border);
+  border-radius:var(--por-r-lg); box-shadow:var(--por-sh-sm);
+  padding:14px; display:flex; flex-direction:column; gap:8px;
+}
+.por-chart-card.wide { grid-column:1 / -1; }
+.por-chart-title {
+  font-family:"Oswald",sans-serif; font-size:13px; font-weight:600;
+  color:var(--por-sl-700); letter-spacing:.2px;
+}
+.por-chart-canvas { max-height:270px; }
+
+/* ============================================================
+   § MODALS
+   ============================================================ */
+.por-overlay {
+  display:none; position:fixed; inset:0;
+  background:rgba(0,0,0,.44); z-index:1000;
+  align-items:center; justify-content:center;
+}
+.por-overlay.open { display:flex; }
+.por-modal {
+  background:var(--por-surface); border-radius:var(--por-r-lg);
+  box-shadow:var(--por-sh-lg);
+  width:92vw; max-width:820px; max-height:88vh;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.por-modal.wide { max-width:980px; }
+.por-modal-hdr {
+  background:var(--por-sl-50); border-bottom:1px solid var(--por-border);
+  padding:11px 16px;
+  display:flex; align-items:center; gap:9px; flex-shrink:0;
+}
+.por-modal-title {
+  font-family:"Oswald",sans-serif; font-size:15px; font-weight:600;
+  color:var(--por-text); flex:1; letter-spacing:.2px;
+}
+.por-modal-close {
+  width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+  border:none; background:transparent; border-radius:var(--por-r-sm);
+  cursor:pointer; color:var(--por-muted); font-size:15px;
+  transition:all .15s;
+}
+.por-modal-close:hover { background:var(--por-err-bg); color:var(--por-err); }
+.por-modal-body { flex:1; overflow-y:auto; padding:14px 16px; }
+.por-modal-ftr {
+  border-top:1px solid var(--por-border); padding:9px 16px;
+  display:flex; justify-content:flex-end; gap:7px; flex-shrink:0;
+}
+
+/* Modal inner tables */
+.por-dtable { border-collapse:collapse; width:100%; font-size:12px; margin-bottom:14px; }
+.por-dtable th {
+  background:var(--por-sl-100); padding:6px 9px;
+  text-align:left; font-size:11px; font-weight:700; color:var(--por-sl-700);
+  border-bottom:2px solid var(--por-sl-200); white-space:nowrap;
+}
+.por-dtable td { padding:6px 9px; border-bottom:1px solid var(--por-sl-100); vertical-align:middle; }
+.por-dtable tr:hover td { background:var(--por-sl-50); }
+
+/* Section header inside modal */
+.por-sec-hdr {
+  font-size:11px; font-weight:700; color:var(--por-sl-700);
+  text-transform:uppercase; letter-spacing:.5px;
+  margin:12px 0 7px; padding-bottom:4px;
+  border-bottom:1px solid var(--por-sl-200);
+  display:flex; align-items:center; gap:5px;
+}
+
+/* Cost cards */
+.por-cost-strip { display:flex; gap:9px; margin-bottom:14px; flex-wrap:wrap; }
+.por-cost-card {
+  flex:1; min-width:130px;
+  background:var(--por-sl-50); border:1px solid var(--por-border);
+  border-left:3px solid var(--por-sl-300); border-radius:var(--por-r-md);
+  padding:9px 13px;
+}
+.por-cost-card.std  { border-left-color:var(--por-info); }
+.por-cost-card.act  { border-left-color:var(--por-ok); }
+.por-cost-card.over { border-left-color:var(--por-err); }
+.por-cost-card.under{ border-left-color:var(--por-ok); }
+.por-cost-num { font-family:"Geist Mono",monospace; font-size:17px; font-weight:700; }
+.por-cost-lbl { font-size:11px; color:var(--por-muted); }
+.por-var-over  { color:var(--por-err); font-weight:700; }
+.por-var-under { color:var(--por-ok-text); font-weight:700; }
+
+/* WO status badge */
+.por-wo-st {
+  font-size:10px; font-weight:700; padding:2px 6px;
+  border-radius:99px; text-transform:uppercase; letter-spacing:.3px;
+}
+.por-wo-st-ns  { background:var(--por-sl-100); color:var(--por-sl-700); }
+.por-wo-st-ip  { background:var(--por-warn-bg); color:var(--por-warn-text); }
+.por-wo-st-mt  { background:var(--por-info-bg); color:var(--por-info-text); }
+.por-wo-st-done{ background:var(--por-ok-bg); color:var(--por-ok-text); }
+
+/* Sub-asm WO chips */
+.por-sub-chips { display:flex; flex-wrap:wrap; gap:5px; margin:5px 0; }
+.por-sub-chip {
+  font-family:"Geist Mono",monospace; font-size:11px; padding:2px 7px;
+  background:var(--por-info-bg); color:var(--por-info-text);
+  border-radius:var(--por-r-sm); border:1px solid var(--por-info);
+}
+
+/* Shortage rows */
+.por-short-row-ok   td { color:var(--por-ok-text); }
+.por-short-row-bad  td { background:rgba(239,68,68,.03); }
+
+/* Open docs pills */
+.por-open-doc {
+  display:inline-block; margin:1px 2px;
+  font-size:10px; padding:1px 5px;
+  border-radius:3px; background:var(--por-sl-100);
+  color:var(--por-sl-700);
+}
+
+@media (max-height:768px) {
+  .por-ai-insight { max-height:100px; }
+  .por-summary-strip { padding:5px 20px; }
+  .por-sum-num { font-size:17px; }
+}
+
+/* ============================================================
+   § ROW HIGHLIGHTS + EXTRAS (added for full-spec compliance)
+   ============================================================ */
+/* Row highlight when item has open Sales Order — light sophisticated red */
+.por-table tbody tr.por-has-so { background:#fef2f2; }
+.por-table tbody tr.por-has-so:nth-child(even) { background:#fff5f5; }
+.por-table tbody tr.por-has-so:hover { background:#fee2e2; }
+.por-table tbody tr.por-has-so td.por-col-s { background:#fef2f2; }
+.por-table tbody tr.por-has-so:nth-child(even) td.por-col-s { background:#fff5f5; }
+
+/* Coverage cell badge */
+.por-cov-hi   { color:var(--por-ok-text);   font-weight:700; }
+.por-cov-mid  { color:var(--por-warn-text); font-weight:700; }
+.por-cov-lo   { color:var(--por-err-text);  font-weight:700; }
+.por-cov-na   { color:var(--por-muted); }
+
+/* PP count chip */
+.por-pp-chip {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:22px; height:22px; padding:0 5px;
+  border-radius:99px; gap:3px;
+  font-family:"Geist Mono",monospace; font-size:11px; font-weight:700;
+  background:#eef2ff; color:#3730a3;
+}
+.por-pp-chip.zero { background:var(--por-sl-100); color:var(--por-muted); }
+
+/* Item group cell */
+.por-grp-cell {
+  font-size:11px; color:var(--por-sl-700);
+  white-space:nowrap; max-width:160px;
+  overflow:hidden; text-overflow:ellipsis;
+}
+
+/* Sub-assembly parent WO list (shown on Sub-Asm cell hover for sub-asm items) */
+.por-subasm-list {
+  display:none; position:absolute; z-index:1500;
+  background:var(--por-surface); border:1px solid var(--por-sl-300);
+  border-radius:var(--por-r-md); box-shadow:var(--por-sh-lg);
+  padding:8px 10px; min-width:280px; font-size:11px;
+}
+.por-subasm-wrap { position:relative; }
+.por-subasm-wrap:hover .por-subasm-list { display:block; }
+.por-subasm-list .por-subasm-row {
+  border-bottom:1px solid var(--por-sl-100); padding:4px 0;
+}
+.por-subasm-list .por-subasm-row:last-child { border-bottom:0; }
+
+/* Native Frappe-style action button row in modal */
+.por-pp-card {
+  border:1px solid var(--por-sl-200); border-radius:var(--por-r-md);
+  padding:10px 12px; margin-bottom:10px; background:var(--por-sl-50);
+}
+.por-pp-card-hdr {
+  display:flex; align-items:center; gap:8px; margin-bottom:6px;
+  font-size:12px; font-weight:700; color:var(--por-sl-900);
+}
+.por-pp-target { background:#dcfce7; color:#166534; }
+.por-pp-other  { background:var(--por-sl-100); color:var(--por-sl-700); }
+.por-pp-tag {
+  font-size:10px; font-weight:700; padding:2px 6px;
+  border-radius:99px; text-transform:uppercase; letter-spacing:.3px;
+}
+</style>
+
+<!-- ╔══════════════════════════════════════════════════════════════════════╗ -->
+<!-- ║  ROOT                                                               ║ -->
+<!-- ╚══════════════════════════════════════════════════════════════════════╝ -->
+<div id="por-root">
+
+  <!-- ── Page Header ── -->
+  <div class="por-page-hdr">
+    <h2 class="por-page-title">
+      <i class="fa-solid fa-chart-gantt" style="color:var(--por-brand);margin-right:7px;"></i>
+      Production Overview
+    </h2>
+    <span id="por-period-badge" class="por-period-badge" style="display:none;"></span>
+    <div style="display:flex;gap:7px;align-items:center;">
+      <button class="por-btn por-btn-default" id="por-export-csv" style="display:none;" title="Export to CSV">
+        <i class="fa-solid fa-file-csv"></i> CSV
+      </button>
+      <button class="por-btn por-btn-default" id="por-export-excel" style="display:none;"
+              title="Server-side Excel export — 3 sheets (Overview / UOM Comparison / Summary), colour coded, frozen header.">
+        <i class="fa-solid fa-file-excel"></i> Excel
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Filter Bar ── -->
+  <div class="por-filter-bar">
+
+    <div class="por-filter-grp">
+      <span class="por-filter-lbl">Company</span>
+      <select id="por-company" class="por-select" style="min-width:130px;"></select>
+    </div>
+
+    <div class="por-filter-grp">
+      <span class="por-filter-lbl">Month</span>
+      <select id="por-month" class="por-select" style="width:105px;">
+        <option value="1">January</option>
+        <option value="2">February</option>
+        <option value="3">March</option>
+        <option value="4">April</option>
+        <option value="5">May</option>
+        <option value="6">June</option>
+        <option value="7">July</option>
+        <option value="8">August</option>
+        <option value="9">September</option>
+        <option value="10">October</option>
+        <option value="11">November</option>
+        <option value="12">December</option>
+      </select>
+      <input type="number" id="por-year" class="por-input por-input-yr" min="2020" max="2040">
+    </div>
+
+    <!-- Warehouses multi-select -->
+    <div class="por-filter-grp">
+      <span class="por-filter-lbl">Warehouses</span>
+      <div class="por-ms-wrap">
+        <button class="por-ms-btn" id="por-wh-btn" data-ms-panel="por-wh-panel">
+          <i class="fa-solid fa-warehouse" style="font-size:10px;"></i>
+          <span id="por-wh-label">All</span>
+          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+        </button>
+        <div class="por-ms-panel" id="por-wh-panel">
+          <div class="por-ms-actions">
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-wh-panel" data-val="all">All</button>
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-wh-panel" data-val="none">None</button>
+          </div>
+          <div class="por-ms-divider"></div>
+          <div id="por-wh-list"><!-- populated by JS --></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WO Status multi-select -->
+    <div class="por-filter-grp">
+      <span class="por-filter-lbl">WO Status</span>
+      <div class="por-ms-wrap">
+        <button class="por-ms-btn" id="por-wo-btn" data-ms-panel="por-wo-panel">
+          <i class="fa-solid fa-hammer" style="font-size:10px;"></i>
+          <span id="por-wo-label">Default</span>
+          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+        </button>
+        <div class="por-ms-panel" id="por-wo-panel">
+          <div class="por-ms-actions">
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-wo-panel" data-val="all">All</button>
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-wo-panel" data-val="none">None</button>
+          </div>
+          <div class="por-ms-divider"></div>
+          <div id="por-wo-status-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SO Status multi-select -->
+    <div class="por-filter-grp">
+      <span class="por-filter-lbl">SO Status</span>
+      <div class="por-ms-wrap">
+        <button class="por-ms-btn" id="por-so-btn" data-ms-panel="por-so-panel">
+          <i class="fa-solid fa-file-invoice" style="font-size:10px;"></i>
+          <span id="por-so-label">Default</span>
+          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+        </button>
+        <div class="por-ms-panel" id="por-so-panel">
+          <div class="por-ms-actions">
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-so-panel" data-val="all">All</button>
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-so-panel" data-val="none">None</button>
+          </div>
+          <div class="por-ms-divider"></div>
+          <div id="por-so-status-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stock View -->
+    <div class="por-filter-grp">
+      <span class="por-filter-lbl">Stock View</span>
+      <select id="por-stock-mode" class="por-select" title="Physical = actual_qty only. Physical+Expected adds ordered_qty and planned_qty from Bin.">
+        <option value="physical">Physical Only</option>
+        <option value="expected">Physical + Expected</option>
+      </select>
+    </div>
+
+    <!-- Planning Mode toggle + sub-mode (Independent / Priority) -->
+    <div class="por-filter-grp" title="Independent: each item checked against full pool of stock independently. Priority: items consume stock in row order — earlier rows take precedence.">
+      <span class="por-filter-lbl">Planning Mode</span>
+      <label class="por-toggle">
+        <input type="checkbox" id="por-planning-toggle">
+        <span class="por-toggle-slider"></span>
+      </label>
+      <span class="por-toggle-lbl" id="por-planning-lbl">Off</span>
+      <select id="por-plan-submode" class="por-select" style="height:24px;font-size:11px;display:none;margin-left:4px;">
+        <option value="independent">Independent</option>
+        <option value="priority">Priority</option>
+      </select>
+    </div>
+
+    <div class="por-filter-sep"></div>
+    <button class="por-btn por-btn-brand" id="por-load-btn">
+      <i class="fa-solid fa-rotate"></i> Load
+    </button>
+  </div>
+
+  <!-- ── Tab Bar ── -->
+  <div class="por-tab-bar">
+    <button class="por-tab-btn active" data-tab="overview">
+      <i class="fa-solid fa-table-cells-large"></i> Overview
+    </button>
+    <button class="por-tab-btn" data-tab="ai">
+      <i class="fa-solid fa-robot"></i> AI Advisor
+    </button>
+    <button class="por-tab-btn" data-tab="charts">
+      <i class="fa-solid fa-chart-pie"></i> Charts
+    </button>
+    <div style="flex:1;"></div>
+    <!-- Item group filter (shown after data loads) -->
+    <div id="por-grp-filter-wrap" style="display:none;padding:0 6px;align-self:center;">
+      <select id="por-grp-filter" class="por-select" style="height:24px;font-size:11px;" title="Filter by item group">
+        <option value="">All Groups</option>
+      </select>
+    </div>
+    <span id="por-count-badge" style="font-size:11px;color:var(--por-muted);padding:0 12px;align-self:center;display:none;">
+      <span id="por-vis-count">0</span> items
+    </span>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 1: OVERVIEW
+       ══════════════════════════════════════════════════════════ -->
+  <div id="por-pane-overview">
+
+    <!-- Summary cards (hidden until data loads) -->
+    <div class="por-summary-strip" id="por-summary-strip" style="display:none;">
+      <div class="por-sum-card info">
+        <div class="por-sum-num" id="por-s-total">—</div>
+        <div class="por-sum-lbl">Total Items</div>
+      </div>
+      <div class="por-sum-card err">
+        <div class="por-sum-num" id="por-s-shortage">—</div>
+        <div class="por-sum-lbl">With Shortage</div>
+      </div>
+      <div class="por-sum-card ok">
+        <div class="por-sum-num" id="por-s-ok">—</div>
+        <div class="por-sum-lbl">No Shortage</div>
+      </div>
+      <div class="por-sum-card brand">
+        <div class="por-sum-num" id="por-s-planned">—</div>
+        <div class="por-sum-lbl">Planned (WOs)</div>
+      </div>
+      <div class="por-sum-card warn">
+        <div class="por-sum-num" id="por-s-orders">—</div>
+        <div class="por-sum-lbl">Curr Month Orders</div>
+      </div>
+      <div class="por-sum-card ok">
+        <div class="por-sum-num" id="por-s-dispatch">—</div>
+        <div class="por-sum-lbl">Dispatched</div>
+      </div>
+    </div>
+
+    <!-- Init message -->
+    <div class="por-state-box" id="por-init-msg">
+      <i class="fa-solid fa-arrow-up-from-bracket"></i>
+      <p>Select a company and period, then click <strong>Load</strong>.</p>
+    </div>
+
+    <!-- Loading -->
+    <div class="por-state-box por-pane-hidden" id="por-loading">
+      <div class="por-spinner"></div>
+      <p>Loading production data…</p>
+    </div>
+
+    <!-- Empty -->
+    <div class="por-state-box por-pane-hidden" id="por-empty">
+      <i class="fa-solid fa-inbox"></i>
+      <p>No items found for the selected filters and period.</p>
+    </div>
+
+    <!-- Main table -->
+    <div class="por-table-wrap por-pane-hidden" id="por-table-wrap">
+      <table class="por-table" id="por-table">
+        <thead>
+          <tr>
+            <th class="por-col-s por-col-chk">
+              <input type="checkbox" id="por-select-all" title="Select / deselect all">
+            </th>
+            <th class="por-col-s por-col-item">
+              Item
+              <span class="por-tip" title="Item code (click to view details) and item name">i</span>
+            </th>
+            <th>Type <span class="por-tip" title="FG=Finished Goods, SFG=Semi-Finished (used in other BOMs), RM=Raw Material, PM=Packaging Material">i</span></th>
+            <th>Item Group <span class="por-tip" title="Full ERPNext item group name. Click filter above to scope view.">i</span></th>
+            <th>Sub-Asm <span class="por-tip" title="Item is a child of a parent Work Order (linked via Production Plan) AND has its own open WO. Independent BOM items are NOT marked as Sub-Asm.">i</span></th>
+            <th>Open WOs <span class="por-tip" title="Count of open Work Orders for this item, filtered by the WO Status multi-select. Click an item to see the WO list.">i</span></th>
+            <th>Planned Qty <span class="por-tip" title="Sum of `qty` across all open WOs in stock UOM. Tooltip on each cell shows all UOM conversions.">i</span></th>
+            <th>Produced <span class="por-tip" title="Sum of finished-item transfer_qty from Manufacture Stock Entries this month. In stock UOM with conversions.">i</span></th>
+            <th>Prev Month SO <span class="por-tip" title="Pending SO qty from the previous calendar month (by delivery_date). Carryover demand. Stock UOM = stock_qty − delivered_qty × conversion_factor.">i</span></th>
+            <th>Curr Month SO <span class="por-tip" title="Pending SO qty for the current calendar month (by delivery_date). Active customer demand. Stock UOM.">i</span></th>
+            <th>Prev Month Dispatch <span class="por-tip" title="Qty dispatched via Delivery Note in the previous calendar month (stock_qty). For carryover comparison.">i</span></th>
+            <th>Curr Month Dispatch <span class="por-tip" title="Qty dispatched via Delivery Note in the current calendar month (stock_qty).">i</span></th>
+            <th>Sales Projection <span class="por-tip" title="qty_in_stock_uom from the submitted Sales Projection document for this month and year (Sales Projected Items child).">i</span></th>
+            <th>Total Sales <span class="por-tip" title="All booked sales qty (delivered + pending) for the current month, submitted SOs only. Stock UOM.">i</span></th>
+            <th>Proj vs Sales % <span class="por-tip" title="Total Curr Sales ÷ Sales Projection × 100. &gt;100% means outperforming projection.">i</span></th>
+            <th>Coverage % <span class="por-tip" title="(Sales Projection + Prev Month SO carryover) ÷ Total Curr Sales × 100. ≥100% = demand fully covered by planning inputs; &lt;100% = under-planned.">i</span></th>
+            <th>Stock on Hand <span class="por-tip" title="Current stock. Physical = Bin.actual_qty. Physical+Expected = actual + ordered + planned qty.">i</span></th>
+            <th>Shortage <span class="por-tip" title="Whether the active BOM has any short components for `Possible Qty` units. Click View for breakdown by WO + sub-assembly.">i</span></th>
+            <th>Possible Qty <span class="por-tip" title="Max qty producible given current component stock and active BOM. Independent mode: each item against full pool. Priority mode: row order matters.">i</span></th>
+            <th>Active BOM <span class="por-tip" title="Default active submitted BOM used for shortage and cost calculations.">i</span></th>
+            <th>Production Plans <span class="por-tip" title="Click View Plan to see active Production Plans containing this item, including all parent + child Work Orders.">i</span></th>
+            <th>Cost <span class="por-tip" title="3-way cost (BOM Std vs Actual STE vs 6-month avg) plus per-UOM cost breakdown for every available UOM conversion.">i</span></th>
+          </tr>
+        </thead>
+        <tbody id="por-tbody"></tbody>
+      </table>
+    </div>
+
+  </div><!-- /por-pane-overview -->
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 2: AI ADVISOR
+       ══════════════════════════════════════════════════════════ -->
+  <div id="por-pane-ai" class="por-pane-hidden">
+    <div class="por-ai-layout">
+
+      <!-- Main AI panel -->
+      <div class="por-ai-main">
+
+        <!-- Auto-insight card -->
+        <div class="por-ai-card por-ai-insight">
+          <div class="por-ai-card-hdr">
+            <i class="fa-solid fa-lightbulb"></i>
+            Production Briefing
+            <button class="por-btn por-btn-default por-btn-sm" id="por-ai-refresh" style="margin-left:auto;" title="Regenerate briefing from current data">
+              <i class="fa-solid fa-rotate"></i> Refresh
+            </button>
+          </div>
+          <div id="por-ai-insight-body">
+            <div class="por-ai-insight-ph">
+              <i class="fa-solid fa-robot" style="font-size:18px;opacity:.3;display:block;margin-bottom:6px;"></i>
+              Load production data first — the AI will generate a briefing automatically.
+            </div>
+          </div>
+          <div id="por-ai-data-pts"></div>
+        </div>
+
+        <!-- Chat card -->
+        <div class="por-ai-card por-ai-chat">
+          <div class="por-ai-model-row">
+            <span class="por-ai-model-lbl"><i class="fa-solid fa-microchip"></i> Model</span>
+            <select id="por-ai-model" title="DeepSeek model to use">
+              <option value="deepseek-chat">Loading…</option>
+            </select>
+            <span id="por-ai-cost-hint"></span>
+            <button class="por-btn por-btn-default por-btn-sm" id="por-ai-test" title="Test API connection">
+              <i class="fa-solid fa-plug-circle-check"></i> Test
+            </button>
+          </div>
+          <div id="por-ai-msgs"></div>
+          <input type="hidden" id="por-ai-session">
+          <div class="por-ai-input-row">
+            <textarea id="por-ai-input" placeholder="Ask about production status, shortages, planning…" rows="2"></textarea>
+            <button class="por-btn por-btn-brand" id="por-ai-send" title="Send (Ctrl+Enter)">
+              <i class="fa-solid fa-paper-plane"></i>
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /por-ai-main -->
+
+      <!-- Side FAQ -->
+      <div class="por-ai-side">
+        <div class="por-ai-card">
+          <div class="por-ai-card-hdr">
+            <i class="fa-solid fa-circle-question"></i> Quick Questions
+          </div>
+          <div class="por-faq-list">
+            <button class="por-faq-chip">Which items have the most critical component shortages?</button>
+            <button class="por-faq-chip">Which items can start production immediately with current stock?</button>
+            <button class="por-faq-chip">What raw materials need to be purchased urgently?</button>
+            <button class="por-faq-chip">Where are we behind on Sales Projection vs actual orders?</button>
+            <button class="por-faq-chip">Which Work Orders should be prioritised this week?</button>
+            <button class="por-faq-chip">Give me a 3-point action plan to reduce shortages today.</button>
+            <button class="por-faq-chip">Which FG items have open SOs but no WOs planned?</button>
+            <button class="por-faq-chip">Which items are over BOM standard cost? Explain variance.</button>
+          </div>
+        </div>
+        <div class="por-ai-card" style="padding:10px;">
+          <div style="font-size:11px;font-weight:700;color:var(--por-sl-700);margin-bottom:5px;">
+            <i class="fa-solid fa-circle-info" style="color:var(--por-info);"></i> About
+          </div>
+          <div style="font-size:11px;color:var(--por-muted);line-height:1.5;">
+            Powered by DeepSeek. Analyses the data loaded in Tab 1. Your data is sent only when you ask — nothing is stored externally.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div><!-- /por-pane-ai -->
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 3: CHARTS
+       ══════════════════════════════════════════════════════════ -->
+  <div id="por-pane-charts" class="por-pane-hidden">
+    <div id="por-charts-empty" class="por-state-box">
+      <i class="fa-solid fa-chart-pie"></i>
+      <p>Load production data first to view charts.</p>
+    </div>
+    <div id="por-charts-content" class="por-charts-grid" style="display:none;">
+      <div class="por-chart-card">
+        <div class="por-chart-title"><i class="fa-solid fa-chart-pie" style="color:var(--por-brand);margin-right:5px;"></i>Item Type Distribution</div>
+        <canvas id="por-chart-type" class="por-chart-canvas"></canvas>
+      </div>
+      <div class="por-chart-card">
+        <div class="por-chart-title"><i class="fa-solid fa-chart-pie" style="color:var(--por-err);margin-right:5px;"></i>Shortage Status</div>
+        <canvas id="por-chart-shortage" class="por-chart-canvas"></canvas>
+      </div>
+      <div class="por-chart-card">
+        <div class="por-chart-title"><i class="fa-solid fa-chart-bar" style="color:var(--por-ok);margin-right:5px;"></i>Top 10 — Curr Month Orders</div>
+        <canvas id="por-chart-orders" class="por-chart-canvas"></canvas>
+      </div>
+      <div class="por-chart-card">
+        <div class="por-chart-title"><i class="fa-solid fa-chart-bar" style="color:var(--por-info);margin-right:5px;"></i>Top 10 — Sales Projection vs Sales</div>
+        <canvas id="por-chart-proj" class="por-chart-canvas"></canvas>
+      </div>
+      <div class="por-chart-card wide">
+        <div class="por-chart-title"><i class="fa-solid fa-chart-bar" style="color:var(--por-warn);margin-right:5px;"></i>Planned WOs by Item Group</div>
+        <canvas id="por-chart-group" class="por-chart-canvas" style="max-height:290px;"></canvas>
+      </div>
+    </div>
+  </div><!-- /por-pane-charts -->
+
+</div><!-- /por-root -->
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODAL: Item Detail
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="por-overlay" id="por-item-modal">
+  <div class="por-modal wide">
+    <div class="por-modal-hdr">
+      <i class="fa-solid fa-box" style="color:var(--por-brand);"></i>
+      <span class="por-modal-title" id="por-item-modal-title">Item Detail</span>
+      <button class="por-modal-close" data-close-modal="por-item-modal">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="por-modal-body" id="por-item-modal-body">
+      <div class="por-state-box"><div class="por-spinner"></div></div>
+    </div>
+    <div class="por-modal-ftr">
+      <button class="por-btn por-btn-default" data-close-modal="por-item-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODAL: Shortage View
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="por-overlay" id="por-shortage-modal">
+  <div class="por-modal wide">
+    <div class="por-modal-hdr">
+      <i class="fa-solid fa-triangle-exclamation" style="color:var(--por-err);"></i>
+      <span class="por-modal-title" id="por-shortage-modal-title">Component Shortage Detail</span>
+      <button class="por-modal-close" data-close-modal="por-shortage-modal">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="por-modal-body" id="por-shortage-modal-body">
+      <div class="por-state-box"><div class="por-spinner"></div></div>
+    </div>
+    <div class="por-modal-ftr">
+      <button class="por-btn por-btn-default" data-close-modal="por-shortage-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODAL: Production Plans (View Plan column)
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="por-overlay" id="por-pp-modal">
+  <div class="por-modal wide">
+    <div class="por-modal-hdr">
+      <i class="fa-solid fa-clipboard-list" style="color:var(--por-brand);"></i>
+      <span class="por-modal-title" id="por-pp-modal-title">Active Production Plans</span>
+      <button class="por-modal-close" data-close-modal="por-pp-modal">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="por-modal-body" id="por-pp-modal-body">
+      <div class="por-state-box"><div class="por-spinner"></div></div>
+    </div>
+    <div class="por-modal-ftr">
+      <button class="por-btn por-btn-default" data-close-modal="por-pp-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODAL: Cost Breakup
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="por-overlay" id="por-cost-modal">
+  <div class="por-modal wide">
+    <div class="por-modal-hdr">
+      <i class="fa-solid fa-indian-rupee-sign" style="color:var(--por-brand);"></i>
+      <span class="por-modal-title" id="por-cost-modal-title">Cost Breakup</span>
+      <button class="por-modal-close" data-close-modal="por-cost-modal">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="por-modal-body" id="por-cost-modal-body">
+      <div class="por-state-box"><div class="por-spinner"></div></div>
+    </div>
+    <div class="por-modal-ftr">
+      <button class="por-btn por-btn-default" data-close-modal="por-cost-modal">Close</button>
+    </div>
+  </div>
+</div>

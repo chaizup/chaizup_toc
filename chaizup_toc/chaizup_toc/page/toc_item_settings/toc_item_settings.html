@@ -10,383 +10,448 @@
   RESTRICT:
     - ID naming conventions (tis-*) are critical for JS binding.
 ============================================================================= -->
-
 <style>
-/* ─── Root & Native Alignment ─────────────────────────────────────────── */
-.tis-root {
-  --tis-primary: var(--primary-color, #2563eb);
-  --tis-border: var(--border-color, #d1d8dd);
-  --tis-bg: var(--bg-color, #f4f5f6);
-  --tis-card: var(--card-bg, #ffffff);
-  --tis-text: var(--text-color, #1e293b);
-  --tis-muted: var(--text-muted, #64748b);
-  --tis-green: var(--green-600, #059669);
-  --tis-yellow: var(--orange-600, #d97706);
-  --tis-red: var(--red-600, #dc2626);
-  --tis-radius: 8px;
-  --tis-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.05));
+/* =============================================================================
+   Enhanced UI Styles - Modern, Interactive, Clean
+============================================================================= */
+:root {
+  --tis-primary: #4f46e5;      /* Indigo 600 */
+  --tis-primary-hover: #4338ca;
+  --tis-border: #e2e8f0;       /* Slate 200 */
+  --tis-bg: #f8fafc;           /* Slate 50 */
+  --tis-card: #ffffff;
+  --tis-text: #0f172a;         /* Slate 900 */
+  --tis-muted: #64748b;        /* Slate 500 */
+  --tis-green: #10b981;        /* Emerald 500 */
+  --tis-yellow: #f59e0b;       /* Amber 500 */
+  --tis-red: #ef4444;          /* Red 500 */
   
+  --bg-green: #d1fae5; --text-green: #065f46;
+  --bg-red: #fee2e2;   --text-red: #991b1b;
+  --bg-blue: #dbeafe;  --text-blue: #1e40af;
+  --bg-orange: #ffedd5;--text-orange: #9a3412;
+  
+  --tis-radius: 12px;
+  --tis-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tis-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --tis-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --tis-shadow-float: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  
+  --font-stack: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Custom Scrollbar for a cleaner look */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+body {
+  margin: 0;
+  background-color: var(--tis-bg);
   font-family: var(--font-stack);
   color: var(--tis-text);
-  padding: 10px 0 60px;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Standalone Header (for preview purposes) */
+.preview-header {
+  background: white;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--tis-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: var(--tis-shadow-sm);
+}
+
+.tis-root {
+  padding: 24px 32px 100px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* ─── Buttons ───────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn:active { transform: scale(0.97); }
+.btn-primary { background: var(--tis-primary); color: white; box-shadow: var(--tis-shadow-sm); }
+.btn-primary:hover { background: var(--tis-primary-hover); box-shadow: var(--tis-shadow-md); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-default { background: white; border-color: var(--tis-border); color: var(--tis-text); }
+.btn-default:hover { background: #f1f5f9; border-color: #cbd5e1; }
+.btn-link { background: transparent; color: var(--tis-primary); padding: 0; }
+.btn-link:hover { text-decoration: underline; }
+.btn-xs { padding: 4px 10px; font-size: 12px; }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
 
 /* ─── Stats Bar ─────────────────────────────────────────────────────── */
 .tis-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
 }
 .tis-stat-card {
   background: var(--tis-card);
   border: 1px solid var(--tis-border);
   border-radius: var(--tis-radius);
-  padding: 16px;
-  box-shadow: var(--tis-shadow);
+  padding: 20px;
+  box-shadow: var(--tis-shadow-sm);
   transition: transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .tis-stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  transform: translateY(-4px);
+  box-shadow: var(--tis-shadow-md);
 }
 .tis-stat-label {
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--tis-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 8px;
+  letter-spacing: 0.5px;
 }
 .tis-stat-val {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 32px;
+  font-weight: 800;
   color: var(--tis-text);
-  line-height: 1.2;
+  line-height: 1;
 }
-.tis-stat-card.tis-stat-active .tis-stat-val { color: var(--tis-green); }
-.tis-stat-card.tis-stat-inactive .tis-stat-val { color: var(--tis-red); }
 
 /* ─── Grid / Table ──────────────────────────────────────────────────── */
 .tis-table-wrap {
   background: var(--tis-card);
   border: 1px solid var(--tis-border);
   border-radius: var(--tis-radius);
-  box-shadow: var(--tis-shadow);
+  box-shadow: var(--tis-shadow-sm);
   overflow: hidden;
 }
 .tis-table-header {
-  padding: 16px 20px;
+  padding: 20px 24px;
   border-bottom: 1px solid var(--tis-border);
-  background: var(--control-bg, #f8fafc);
+  background: #ffffff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
-.tis-table-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--tis-text);
+.tis-table-title { font-size: 18px; font-weight: 700; color: var(--tis-text); }
+.tis-table-sub { font-size: 13px; font-weight: 500; color: var(--tis-muted); background: #f1f5f9; padding: 4px 12px; border-radius: 20px; }
+
+/* Frozen Header Table Container */
+.tis-table-scroll {
+  max-height: calc(100vh - 320px); /* Adjust based on your standard Frappe view */
+  min-height: 300px;
+  overflow-y: auto;
+  overflow-x: auto;
 }
-.tis-table-sub {
-  font-size: 12px;
-  color: var(--tis-muted);
-}
+
 .tis-table {
   width: 100%;
   border-collapse: collapse;
 }
 .tis-table th {
-  padding: 12px 16px;
+  padding: 14px 24px;
   font-size: 11px;
   font-weight: 700;
   color: var(--tis-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.5px;
   text-align: left;
-  background: var(--table-header-bg, #f9f9f9);
-  border-bottom: 1px solid var(--tis-border);
+  background: #f8fafc;
+  
+  /* Sticky Header Magic */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: none; /* Replaced by box-shadow for cleaner sticky effect */
+  box-shadow: inset 0 -1px 0 var(--tis-border);
 }
+
 .tis-table td {
-  padding: 12px 16px;
+  padding: 16px 24px;
   border-bottom: 1px solid var(--tis-border);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--tis-text);
+  transition: background 0.15s;
 }
-.tis-table tbody tr:hover {
-  background: var(--table-hover-color, #f5f7fa);
-  cursor: pointer;
-}
-.tis-item-code {
-  font-weight: 600;
-  color: var(--tis-primary);
-  text-decoration: none;
-}
-.tis-item-code:hover { text-decoration: underline; }
-.tis-item-name {
-  font-size: 12px;
-  color: var(--tis-muted);
-  display: block;
-}
+.tis-table tbody tr { transition: background 0.2s; }
+.tis-table tbody tr:hover { background: #f1f5f9; cursor: pointer; }
+.tis-table tbody tr.tis-selected { background-color: #eff6ff; }
+.tis-table tbody tr.tis-selected:hover { background-color: #dbeafe; }
 
 /* ─── Badges ─── */
 .tis-badge {
+  display: inline-flex;
+  align-items: center;
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: 20px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.2px;
 }
 .tis-badge-active { background-color: var(--bg-green); color: var(--text-green); }
 .tis-badge-inactive { background-color: var(--bg-red); color: var(--text-red); }
 .tis-badge-purchase { background-color: var(--bg-blue); color: var(--text-blue); }
 .tis-badge-manufacture { background-color: var(--bg-orange); color: var(--text-orange); }
 
-/* ─── Modal Styles ─── */
+/* ─── Modals ─── */
 .tis-modal-backdrop {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(2px);
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(4px);
   z-index: 1050;
   padding: 40px 16px;
   overflow-y: auto;
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
-.tis-modal-backdrop.tis-open { display: flex; align-items: start; justify-content: center; }
+.tis-modal-backdrop.tis-open { display: flex; align-items: center; justify-content: center; opacity: 1; }
+
 .tis-modal {
   background: #ffffff;
   border-radius: var(--tis-radius);
   width: 100%;
   max-width: 900px;
-  box-shadow: var(--shadow-lg);
+  max-height: 85vh; /* Restrict max height */
+  box-shadow: var(--tis-shadow-float);
   display: flex;
-  flex-direction: column;
-  animation: modal-slide-in 0.2s ease-out;
+  flex-direction: column; /* Allows nested scrolling */
+  overflow: hidden; /* Prevents modal bleed */
+  transform: scale(0.95) translateY(10px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
-@keyframes modal-slide-in {
-  from { transform: translateY(-20px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+.tis-modal-backdrop.tis-open .tis-modal {
+  transform: scale(1) translateY(0);
+  opacity: 1;
 }
 
 .tis-modal-head {
-  padding: 16px 24px;
+  padding: 20px 30px;
   border-bottom: 1px solid var(--tis-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0; /* Never shrink the header */
 }
+.btn-modal-close {
+  background: transparent; border: none; font-size: 24px; color: var(--tis-muted); cursor: pointer;
+  width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.btn-modal-close:hover { background: #f1f5f9; color: var(--tis-text); }
+
 .tis-modal-tabs {
   display: flex;
-  padding: 0 24px;
+  padding: 0 30px;
   border-bottom: 1px solid var(--tis-border);
-  background: var(--control-bg, #fcfcfc);
+  background: #f8fafc;
+  flex-shrink: 0;
 }
 .tis-modal-tab {
-  padding: 12px 16px;
+  padding: 16px 20px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--tis-muted);
   border-bottom: 2px solid transparent;
   cursor: pointer;
   background: none;
   border: none;
+  border-top: none; border-left: none; border-right: none;
+  transition: all 0.2s;
 }
 .tis-modal-tab:hover { color: var(--tis-primary); }
 .tis-modal-tab.tis-tab-active {
   color: var(--tis-primary);
   border-bottom-color: var(--tis-primary);
-  font-weight: 600;
 }
 
-.tis-modal-body {
-  display: flex;
-  min-height: 400px;
+.tis-modal-body { 
+  display: flex; 
+  flex: 1; 
+  min-height: 0; /* Magic property to enable internal scrolling */
+  overflow: hidden; 
 }
-.tis-modal-form-area {
-  flex: 1;
-  padding: 24px;
-  overflow-y: auto;
-  max-height: 70vh;
+.tis-modal-form-area { 
+  flex: 1; 
+  padding: 30px; 
+  overflow-y: auto; 
 }
 .tis-modal-help-panel {
-  width: 300px;
-  background: var(--control-bg, #f8fafb);
+  width: 320px;
+  background: #f8fafc;
   border-left: 1px solid var(--tis-border);
-  padding: 24px;
+  padding: 30px;
   font-size: 13px;
+  overflow-y: auto;
 }
 
 .tis-modal-foot {
-  padding: 16px 24px;
+  padding: 20px 30px;
   border-top: 1px solid var(--tis-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--control-bg, #fcfcfc);
+  background: #ffffff;
+  flex-shrink: 0;
 }
 
 /* ─── Form Elements ─── */
 .tis-field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  margin-bottom: 20px;
+  gap: 24px;
+  margin-bottom: 24px;
 }
 .tis-field.tis-full { grid-column: span 2; }
 .tis-field-label {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--tis-muted);
+  color: var(--tis-text);
   margin-bottom: 8px;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 .tis-input, .tis-select {
-  border: 1px solid var(--tis-border);
-  border-radius: 4px;
-  padding: 8px 12px;
-  font-size: 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 14px;
   width: 100%;
   background: var(--tis-card);
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
 }
-.tis-input:focus { border-color: var(--tis-primary); outline: none; }
-.tis-input[readonly] { background: var(--tis-bg); cursor: not-allowed; }
+.tis-input:focus, .tis-select:focus { 
+  border-color: var(--tis-primary); 
+  outline: none; 
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15); 
+}
+.tis-input[readonly], .tis-select:disabled { background: #f1f5f9; cursor: not-allowed; color: var(--tis-muted); }
 
-.tis-check-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 0;
-}
-.tis-check {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--tis-primary);
-}
+.tis-check-row { display: flex; align-items: center; gap: 12px; }
+.tis-check { width: 18px; height: 18px; accent-color: var(--tis-primary); cursor: pointer; }
 
-/* ─── Bulk Action Bar ─── */
-.tis-spinner {
-  display: inline-block;
-  width: 24px;
-  height: 24px;
-  border: 3px solid var(--tis-border);
-  border-top-color: var(--tis-primary);
-  border-radius: 50%;
-  animation: tis-spin 0.8s linear infinite;
-}
-@keyframes tis-spin {
-  to { transform: rotate(360deg); }
-}
-.tis-table tbody tr.tis-selected {
-  background-color: var(--control-bg, #eff6ff);
-}
-.tis-table tbody tr.tis-selected:hover {
-  background-color: #dbeafe;
-}
+/* ─── Floating Bulk Action Bar ─── */
 .tis-bulk-bar {
-  display: none;
-  background: var(--tis-primary);
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(8px);
   color: #fff;
-  padding: 10px 20px;
-  border-radius: var(--tis-radius);
-  margin-bottom: 16px;
+  padding: 14px 24px;
+  border-radius: 50px;
+  display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: var(--shadow-md);
+  gap: 24px;
+  box-shadow: var(--tis-shadow-float);
+  opacity: 0;
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  z-index: 1000;
+  border: 1px solid rgba(255,255,255,0.1);
 }
-.tis-bulk-bar.tis-bulk-visible { display: flex; }
+.tis-bulk-bar.tis-bulk-visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
 .tis-btn-bulk {
-  background: #fff;
-  color: var(--tis-primary);
-  border: none;
-  padding: 6px 16px;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 8px 18px;
+  border-radius: 20px;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s;
+  transition: all 0.2s;
 }
-.tis-btn-bulk:hover { background: #f0f7ff; }
+.tis-btn-bulk:hover { background: rgba(255, 255, 255, 0.2); transform: scale(1.05); }
 .tis-btn-bulk-accent {
-  background: #fef08a;
+  background: #fbbf24;
   color: #713f12;
+  border: none;
 }
-.tis-btn-bulk-accent:hover { background: #fde047; }
-.tis-btn-bulk-accent:disabled { opacity: 0.6; cursor: not-allowed; }
-/* Auto-enable result table */
-.tis-ae-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-  margin-top: 8px;
-}
-.tis-ae-table th {
-  padding: 6px 10px;
-  background: var(--tis-bg);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--tis-muted);
-  border-bottom: 2px solid var(--tis-border);
-  text-align: left;
-}
-.tis-ae-table td {
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--tis-border);
-  vertical-align: middle;
-}
-.tis-ae-table tr:last-child td { border-bottom: none; }
-.tis-ae-ok { color: #059669; font-weight: 700; }
-.tis-ae-err { color: #dc2626; font-weight: 700; }
-.tis-ae-mode-purchase { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; padding: 2px 8px; font-weight: 600; font-size: 11px; }
-.tis-ae-mode-manufacture { background: #f0fdf4; color: #047857; border: 1px solid #a7f3d0; border-radius: 4px; padding: 2px 8px; font-weight: 600; font-size: 11px; }
-.tis-ae-mode-monitor { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; border-radius: 4px; padding: 2px 8px; font-weight: 600; font-size: 11px; }
+.tis-btn-bulk-accent:hover { background: #f59e0b; color: #fff; }
 
 /* ─── Bulk Field Row ─── */
 .tis-bulk-field-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 10px;
-  padding: 13px 14px;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 16px;
   border: 1px solid var(--tis-border);
-  border-radius: 9px;
-  transition: border-color 0.15s, background 0.15s;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  background: #fff;
 }
 .tis-bulk-field-row.tis-bulk-apply-on {
   border-color: var(--tis-primary);
-  background: var(--control-bg, #f0f7ff);
+  background: #eef2ff;
+  box-shadow: inset 0 0 0 1px var(--tis-primary);
 }
-.tis-bulk-apply-chk {
-  width: 18px;
-  height: 18px;
-}
+.tis-bulk-apply-chk { width: 20px; height: 20px; accent-color: var(--tis-primary); cursor: pointer; }
 .tis-bulk-field-body { flex: 1; }
-.tis-bulk-field-label { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-.tis-tab-pane { display: none; }
+.tis-bulk-field-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--tis-text); }
+
+.tis-tab-pane { display: none; animation: fadeIn 0.3s ease; }
 .tis-tab-pane.tis-active { display: block; }
 
-/* ─── Buffer Rule Table Inputs ─── */
-.tis-rule-input {
-  border: 1px solid var(--tis-border);
-  border-radius: 4px;
-  padding: 5px 8px;
-  font-size: 12px;
-  width: 100%;
-  background: var(--tis-card);
-  color: var(--tis-text);
-  box-sizing: border-box;
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Loaders */
+.tis-spinner {
+  display: inline-block; width: 30px; height: 30px;
+  border: 3px solid #e2e8f0; border-top-color: var(--tis-primary);
+  border-radius: 50%; animation: tis-spin 0.8s linear infinite;
 }
-.tis-rule-input:focus {
-  border-color: var(--tis-primary);
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(37,99,235,0.1);
+@keyframes tis-spin { to { transform: rotate(360deg); } }
+
+/* Checkbox Column Center */
+.tis-row-check { width: 16px; height: 16px; accent-color: var(--tis-primary); cursor: pointer; }
+
+/* Modal Inner Table Sticky Headers */
+.tis-rules-wrap table th {
+    position: sticky;
+    top: -30px; /* Offset the modal padding to stick directly to top edge */
+    background: #ffffff;
+    z-index: 5;
+    box-shadow: inset 0 -1px 0 var(--tis-border);
+    border-bottom: none;
 }
-.tis-rule-input[readonly] { background: var(--tis-bg); cursor: default; }
-select.tis-rule-input { cursor: pointer; }
-.tis-rules-wrap { overflow-x: auto; }
 </style>
+
+
+<!-- Mock Header for Preview -->
+<div class="preview-header">
+  <div>
+    <h2 style="margin:0; font-size: 20px; color: #0f172a;">TOC Item Settings</h2>
+    <span style="font-size:12px; color: #64748b;">Interactive Mock Preview</span>
+  </div>
+  <div style="display:flex; gap: 10px;">
+    <button class="btn btn-default" onclick="tisPage.reset(); tisApp.clearSelection(); tisApp.load();">↻ Refresh</button>
+  </div>
+</div>
 
 <div class="tis-root" id="tis-root">
   <!-- Stats Bar -->
@@ -395,13 +460,13 @@ select.tis-rule-input { cursor: pointer; }
       <div class="tis-stat-label">Total Items</div>
       <div class="tis-stat-val" id="tis-stat-total">—</div>
     </div>
-    <div class="tis-stat-card tis-stat-active">
+    <div class="tis-stat-card" style="border-bottom: 4px solid var(--tis-green)">
       <div class="tis-stat-label">TOC Active</div>
-      <div class="tis-stat-val" id="tis-stat-active">—</div>
+      <div class="tis-stat-val" id="tis-stat-active" style="color:var(--tis-green)">—</div>
     </div>
-    <div class="tis-stat-card tis-stat-inactive">
+    <div class="tis-stat-card" style="border-bottom: 4px solid var(--tis-red)">
       <div class="tis-stat-label">TOC Inactive</div>
-      <div class="tis-stat-val" id="tis-stat-inactive">—</div>
+      <div class="tis-stat-val" id="tis-stat-inactive" style="color:var(--tis-red)">—</div>
     </div>
     <div class="tis-stat-card">
       <div class="tis-stat-label">Manufacture</div>
@@ -413,56 +478,61 @@ select.tis-rule-input { cursor: pointer; }
     </div>
   </div>
 
-  <!-- Bulk Action Bar -->
-  <div class="tis-bulk-bar" id="tis-bulk-bar">
-    <span id="tis-bulk-count" style="font-weight:700; font-size:13px; flex:1">0 items selected</span>
-    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="tis-btn-bulk tis-btn-bulk-accent" id="tis-btn-auto-enable" onclick="tisApp.bulkAutoEnable()">
-        &#9889; Auto-Enable TOC
-      </button>
-      <button class="tis-btn-bulk" onclick="tisApp.openBulkModal()">&#9881; Bulk Configure</button>
-      <button class="tis-btn-bulk" style="background:rgba(255,255,255,0.15); color:#fff; border:1px solid rgba(255,255,255,0.4);" onclick="tisApp.clearSelection()">&#10005; Clear</button>
-    </div>
-  </div>
-
   <!-- Items Table -->
   <div class="tis-table-wrap">
     <div class="tis-table-header">
       <div class="tis-table-title">TOC Managed Items</div>
       <div class="tis-table-sub" id="tis-count-label">Loading...</div>
     </div>
-    <table class="tis-table">
-      <thead>
-        <tr>
-          <th style="width: 40px">
-            <input type="checkbox" id="tis-check-all" onchange="tisApp.selectAll(this.checked)">
-          </th>
-          <th>Item Details</th>
-          <th>Group</th>
-          <th>Status</th>
-          <th>Mode</th>
-          <th>ADU</th>
-          <th>Rules</th>
-          <th style="width: 100px"></th>
-        </tr>
-      </thead>
-      <tbody id="tis-tbody">
-        <tr class="tis-spinner-row">
-          <td colspan="8" style="text-align:center; padding: 40px">
-            <div class="tis-spinner"></div> Loading...
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <!-- Scrollable container for frozen headers -->
+    <div class="tis-table-scroll">
+      <table class="tis-table">
+        <thead>
+          <tr>
+            <th style="width: 40px; text-align: center;">
+              <input type="checkbox" class="tis-row-check" id="tis-check-all" onchange="tisApp.selectAll(this.checked)">
+            </th>
+            <th>Item Details</th>
+            <th>Group</th>
+            <th>Status</th>
+            <th>Mode</th>
+            <th>ADU</th>
+            <th>Rules</th>
+            <th style="width: 100px; text-align: right;">Action</th>
+          </tr>
+        </thead>
+        <tbody id="tis-tbody">
+          <tr class="tis-spinner-row">
+            <td colspan="8" style="text-align:center; padding: 60px">
+              <div class="tis-spinner"></div>
+              <div style="margin-top: 10px; color: var(--tis-muted); font-size: 13px;">Loading inventory data...</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     
     <!-- Pagination -->
-    <div class="tis-pagination" style="padding: 12px 20px; border-top: 1px solid var(--tis-border); display:flex; justify-content: space-between; align-items: center">
-      <span id="tis-page-info" style="font-size:12px; color:var(--tis-muted)"></span>
+    <div class="tis-pagination" style="padding: 16px 24px; border-top: 1px solid var(--tis-border); display:flex; justify-content: space-between; align-items: center; background: #fff;">
+      <span id="tis-page-info" style="font-size:13px; font-weight: 500; color:var(--tis-muted)"></span>
       <div style="display:flex; gap:8px">
-        <button class="btn btn-xs btn-default" id="tis-btn-prev" onclick="tisPage.prev()">Prev</button>
-        <button class="btn btn-xs btn-default" id="tis-btn-next" onclick="tisPage.next()">Next</button>
+        <button class="btn btn-default" id="tis-btn-prev" onclick="tisPage.prev()">Previous</button>
+        <button class="btn btn-default" id="tis-btn-next" onclick="tisPage.next()">Next</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Floating Bulk Action Bar -->
+<div class="tis-bulk-bar" id="tis-bulk-bar">
+  <span id="tis-bulk-count" style="font-weight:700; font-size:14px; letter-spacing: 0.5px;">0 items selected</span>
+  <div style="display:flex; gap:12px; align-items: center;">
+    <button class="tis-btn-bulk tis-btn-bulk-accent" id="tis-btn-auto-enable" onclick="tisApp.bulkAutoEnable()">
+      &#9889; Auto-Enable TOC
+    </button>
+    <button class="tis-btn-bulk" onclick="tisApp.openBulkModal()">&#9881; Bulk Configure</button>
+    <div style="width: 1px; height: 20px; background: rgba(255,255,255,0.2); margin: 0 4px;"></div>
+    <button class="tis-btn-bulk" style="background:transparent; border-color:transparent;" onclick="tisApp.clearSelection()">&#10005; Clear</button>
   </div>
 </div>
 
@@ -470,11 +540,11 @@ select.tis-rule-input { cursor: pointer; }
 <div class="tis-modal-backdrop" id="tis-modal-backdrop" onclick="tisApp.handleBackdropClick(event)">
   <div class="tis-modal" onclick="event.stopPropagation()">
     <div class="tis-modal-head">
-      <div style="display:flex; flex-direction:column">
-        <div class="tis-modal-item-name" id="tis-modal-item-name" style="font-size:18px; font-weight:700">Item Name</div>
-        <div id="tis-modal-item-meta" style="font-size:12px; color:var(--tis-muted)">Item Code</div>
+      <div style="display:flex; flex-direction:column; gap: 4px;">
+        <div class="tis-modal-item-name" id="tis-modal-item-name" style="font-size:20px; font-weight:800; color: var(--tis-text);">Item Name</div>
+        <div id="tis-modal-item-meta" style="font-size:13px; font-weight: 500; color:var(--tis-muted)">Item Code</div>
       </div>
-      <button class="btn btn-modal-close" onclick="tisApp.closeModal()">&times;</button>
+      <button class="btn-modal-close" onclick="tisApp.closeModal()">&times;</button>
     </div>
     
     <div class="tis-modal-tabs">
@@ -485,6 +555,7 @@ select.tis-rule-input { cursor: pointer; }
       <button class="tis-modal-tab" data-tab="rules" onclick="tisApp.switchTab(&quot;rules&quot;, this)">Buffer Rules</button>
     </div>
 
+    <!-- Modal Body (flex container for nested scroll) -->
     <div class="tis-modal-body">
       <div class="tis-modal-form-area" id="tis-modal-form">
         <div class="tis-tab-pane tis-active" id="tis-tab-enable"></div>
@@ -495,18 +566,19 @@ select.tis-rule-input { cursor: pointer; }
       </div>
       <div class="tis-modal-help-panel" id="tis-help-panel">
         <div id="tis-help-default">
-          <p style="font-weight:600; margin-bottom:10px">Field Help</p>
-          <p class="text-muted">Select an input field or click the info icon to see detailed explanations and formulas.</p>
+          <div style="width: 40px; height: 40px; background: #e0e7ff; color: var(--tis-primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; margin-bottom: 16px; font-weight: bold;">?</div>
+          <h4 style="font-weight:700; margin:0 0 8px 0; color: var(--tis-text); font-size: 15px;">Field Help</h4>
+          <p class="text-muted" style="line-height: 1.6; color: var(--tis-muted);">Select an input field or click the info icon (ⓘ) to see detailed explanations, formulas, and examples.</p>
         </div>
         <div id="tis-help-content"></div>
       </div>
     </div>
 
     <div class="tis-modal-foot">
-      <span id="tis-save-status" style="font-size:12px"></span>
-      <div style="display:flex; gap:10px">
-        <button class="btn btn-default btn-sm" id="tis-open-item-btn" onclick="tisApp.openInItemMaster()">View Item Master</button>
-        <button class="btn btn-primary btn-sm" id="tis-save-btn" onclick="tisApp.saveModal()">Save Changes</button>
+      <span id="tis-save-status" style="font-size:13px; color: var(--tis-green); font-weight: 500;"></span>
+      <div style="display:flex; gap:12px">
+        <button class="btn btn-default" id="tis-open-item-btn" onclick="tisApp.openInItemMaster()">View Item Master</button>
+        <button class="btn btn-primary" id="tis-save-btn" onclick="tisApp.saveModal()">Save Changes</button>
       </div>
     </div>
   </div>
@@ -514,117 +586,119 @@ select.tis-rule-input { cursor: pointer; }
 
 <!-- Bulk Configure Modal -->
 <div class="tis-modal-backdrop" id="tis-bulk-backdrop" onclick="tisApp.handleBulkBackdropClick(event)">
-  <div class="tis-modal" onclick="event.stopPropagation()" style="max-width: 600px;">
+  <div class="tis-modal" onclick="event.stopPropagation()" style="max-width: 650px;">
     <div class="tis-modal-head">
-      <div style="display:flex; flex-direction:column">
-        <div style="font-size:18px; font-weight:700">Bulk Configuration</div>
-        <div id="tis-bulk-subtitle" style="font-size:12px; color:var(--tis-muted)">0 items selected</div>
+      <div style="display:flex; flex-direction:column; gap: 4px;">
+        <div style="font-size:20px; font-weight:800; color: var(--tis-text);">Bulk Configuration</div>
+        <div id="tis-bulk-subtitle" style="font-size:13px; font-weight: 500; color:var(--tis-primary)">0 items selected</div>
       </div>
-      <button class="btn btn-modal-close" onclick="tisApp.closeBulkModal()">&times;</button>
+      <button class="btn-modal-close" onclick="tisApp.closeBulkModal()">&times;</button>
     </div>
     
-    <div class="tis-modal-form-area" style="padding: 24px;">
-      <div style="background: var(--control-bg, #eff6ff); border: 1px solid var(--tis-border); border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 13px;">
-        ℹ Check <strong>Apply</strong> next to each field you want to update. Unchecked fields remain untouched.
-      </div>
-      
-      <div id="tis-bulk-fields-container">
-        <!-- Field 1: TOC Enable -->
-        <div class="tis-bulk-field-row" id="tis-bfr-enable">
-          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-             <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;enable&quot;, this.checked)">
-             <span style="font-size:9px; font-weight:700; color:var(--tis-muted)">APPLY</span>
+    <div class="tis-modal-body">
+        <div class="tis-modal-form-area" style="padding: 30px; background: #f8fafc;">
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 16px; margin-bottom: 24px; font-size: 13px; color: #1e40af; line-height: 1.5;">
+            <strong style="font-size: 14px;">ℹ How to use:</strong><br> Check <strong>APPLY</strong> next to each field you want to mass-update. Fields left unchecked will remain completely untouched on the selected items.
           </div>
-          <div class="tis-bulk-field-body">
-            <div class="tis-bulk-field-label">TOC Enable</div>
-            <div style="display:flex; gap:16px;">
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-enable" value="1"> Enabled
-              </label>
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-enable" value="0"> Disabled
-              </label>
+          
+          <div id="tis-bulk-fields-container" style="display: flex; flex-direction: column; gap: 12px;">
+            <!-- Field 1: TOC Enable -->
+            <div class="tis-bulk-field-row" id="tis-bfr-enable">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;enable&quot;, this.checked)">
+                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">TOC Buffer Management</div>
+                <div style="display:flex; gap:20px;">
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-enable" value="1" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Enabled
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-enable" value="0" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Disabled
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Field 2: Replenishment Mode -->
+            <div class="tis-bulk-field-row" id="tis-bfr-mode">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;mode&quot;, this.checked)">
+                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">Replenishment Mode</div>
+                <div style="display:flex; gap:20px; flex-wrap:wrap;">
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-mode" value="Purchase" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Purchase
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-mode" value="Manufacture" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Manufacture
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-mode" value="Monitor" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Monitor
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Field 3: ADU Period -->
+            <div class="tis-bulk-field-row" id="tis-bfr-adu-period">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;adu_period&quot;, this.checked)">
+                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">ADU Calculation Period</div>
+                <select class="tis-select" id="tis-bulk-adu-period">
+                  <option value="Last 30 Days">Last 30 Days</option>
+                  <option value="Last 90 Days" selected>Last 90 Days</option>
+                  <option value="Last 180 Days">Last 180 Days</option>
+                  <option value="Last 365 Days">Last 365 Days</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Field 4: Custom ADU -->
+            <div class="tis-bulk-field-row" id="tis-bfr-custom-adu">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;custom_adu&quot;, this.checked)">
+                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">Custom ADU Override</div>
+                <input type="number" class="tis-input" id="tis-bulk-custom-adu" step="0.01" placeholder="Leave empty to use auto-calculated values">
+              </div>
+            </div>
+
+            <!-- Field 5: BOM Check -->
+            <div class="tis-bulk-field-row" id="tis-bfr-bom-check">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;bom_availability&quot;, this.checked)">
+                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">Check BOM Component Availability</div>
+                <div style="display:flex; gap:20px;">
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-bom-check" value="1" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Enabled
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-bom-check" value="0" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Disabled
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-
-        <!-- Field 2: Replenishment Mode -->
-        <div class="tis-bulk-field-row" id="tis-bfr-mode">
-          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-             <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;mode&quot;, this.checked)">
-             <span style="font-size:9px; font-weight:700; color:var(--tis-muted)">APPLY</span>
-          </div>
-          <div class="tis-bulk-field-body">
-            <div class="tis-bulk-field-label">Replenishment Mode</div>
-            <div style="display:flex; gap:12px; flex-wrap:wrap;">
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-mode" value="Purchase"> Purchase
-              </label>
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-mode" value="Manufacture"> Manufacture
-              </label>
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-mode" value="Monitor"> Monitor
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Field 3: ADU Period -->
-        <div class="tis-bulk-field-row" id="tis-bfr-adu-period">
-          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-             <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;adu_period&quot;, this.checked)">
-             <span style="font-size:9px; font-weight:700; color:var(--tis-muted)">APPLY</span>
-          </div>
-          <div class="tis-bulk-field-body">
-            <div class="tis-bulk-field-label">ADU Calculation Period</div>
-            <select class="tis-select" id="tis-bulk-adu-period">
-              <option value="Last 30 Days">Last 30 Days</option>
-              <option value="Last 90 Days" selected>Last 90 Days</option>
-              <option value="Last 180 Days">Last 180 Days</option>
-              <option value="Last 365 Days">Last 365 Days</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Field 4: Custom ADU -->
-        <div class="tis-bulk-field-row" id="tis-bfr-custom-adu">
-          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-             <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;custom_adu&quot;, this.checked)">
-             <span style="font-size:9px; font-weight:700; color:var(--tis-muted)">APPLY</span>
-          </div>
-          <div class="tis-bulk-field-body">
-            <div class="tis-bulk-field-label">Custom ADU Override</div>
-            <input type="number" class="tis-input" id="tis-bulk-custom-adu" step="0.01" placeholder="Leave empty to use auto-calculated">
-          </div>
-        </div>
-
-        <!-- Field 5: BOM Check -->
-        <div class="tis-bulk-field-row" id="tis-bfr-bom-check">
-          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-             <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;bom_availability&quot;, this.checked)">
-             <span style="font-size:9px; font-weight:700; color:var(--tis-muted)">APPLY</span>
-          </div>
-          <div class="tis-bulk-field-body">
-            <div class="tis-bulk-field-label">Check BOM Availability</div>
-            <div style="display:flex; gap:16px;">
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-bom-check" value="1"> Enabled
-              </label>
-              <label style="display:flex; align-items:center; gap:6px; font-weight:500; font-size:13px; cursor:pointer;">
-                <input type="radio" name="bulk-bom-check" value="0"> Disabled
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <div class="tis-modal-foot">
-      <span id="tis-bulk-status" style="font-size:12px"></span>
-      <div style="display:flex; gap:10px">
-        <button class="btn btn-default btn-sm" onclick="tisApp.closeBulkModal()">Cancel</button>
-        <button class="btn btn-primary btn-sm" id="tis-bulk-save-btn" onclick="tisApp.saveBulk()">Apply to Selected</button>
+      <span id="tis-bulk-status" style="font-size:13px"></span>
+      <div style="display:flex; gap:12px">
+        <button class="btn btn-default" onclick="tisApp.closeBulkModal()">Cancel</button>
+        <button class="btn btn-primary" id="tis-bulk-save-btn" onclick="tisApp.saveBulk()">Apply to Selected Items</button>
       </div>
     </div>
   </div>

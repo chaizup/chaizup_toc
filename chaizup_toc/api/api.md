@@ -4,11 +4,30 @@ All Python-callable API methods exposed to the Frappe frontend (JS `frappe.call`
 
 ```
 api/
-├── toc_api.py       ← Core buffer queries, DAF management, Number Cards
-├── kitting_api.py   ← Kitting report — demand/supply/BOM analysis + one-click actions
-├── permissions.py   ← App-level and DocType-level permission helpers
-└── demo_data.py     ← Admin-only test data creation/deletion
+├── toc_api.py                 ← Core buffer queries, DAF management, Number Cards
+├── kitting_api.py             ← Kitting report — demand/supply/BOM analysis + one-click actions
+├── pipeline_api.py            ← Supply Chain Tracker — 7-stage pipeline + tracker views
+├── wo_kitting_api.py          ← WO Kitting Planner — 17 endpoints + DeepSeek AI integration
+├── production_overview_api.py ← Production Overview page — 13 endpoints (overview/AI/charts)
+├── permissions.py             ← App-level and DocType-level permission helpers
+└── demo_data.py               ← Admin-only test data creation/deletion
 ```
+
+## Critical SQL Schema Note — Work Order qty column
+
+`tabWork Order` stores "Qty To Manufacture" in a column named `qty` — the long
+form `qty_to_manufacture` is only the field LABEL, not the column. Using the
+long form in SQL raises `OperationalError 1054`. Convention across this folder:
+
+```sql
+SELECT qty AS qty_to_manufacture FROM `tabWork Order` ...
+```
+
+so Python `wo.qty_to_manufacture` and output dict keys stay descriptive while
+SQL stays valid. (See `production_overview_api.py` header DANGER ZONE.)
+
+> **Do not confuse with `tabProduction Plan Item`** — that doctype really does
+> expose a `qty_to_manufacture` column. The schemas differ.
 
 ---
 
