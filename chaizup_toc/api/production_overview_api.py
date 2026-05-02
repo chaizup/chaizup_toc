@@ -84,6 +84,7 @@ def get_production_overview(
     wo_statuses=None,
     so_statuses=None,
     pp_statuses=None,
+    po_statuses=None,
     stock_mode="physical",
     planning_mode=0,
 ):
@@ -106,10 +107,13 @@ def get_production_overview(
         so_statuses = frappe.parse_json(so_statuses) or _DEFAULT_SO_STATUSES
     if isinstance(pp_statuses, str):
         pp_statuses = frappe.parse_json(pp_statuses) or _DEFAULT_PP_STATUSES
+    if isinstance(po_statuses, str):
+        po_statuses = frappe.parse_json(po_statuses) or _DEFAULT_PO_STATUSES
 
     wo_statuses  = wo_statuses  or _DEFAULT_WO_STATUSES
     so_statuses  = so_statuses  or _DEFAULT_SO_STATUSES
     pp_statuses  = pp_statuses  or _DEFAULT_PP_STATUSES
+    po_statuses  = po_statuses  or _DEFAULT_PO_STATUSES
     warehouses   = warehouses   or []
 
     today_date   = getdate(today())
@@ -142,7 +146,7 @@ def get_production_overview(
     # ═══════════════════════════════════════════════════════
     qualifying_items = _get_qualifying_items(
         wo_statuses, so_statuses, curr_month, curr_year,
-        prev_month, prev_year, company
+        prev_month, prev_year, company, pp_statuses=pp_statuses,
     )
     if not qualifying_items:
         return {"items": [], "summary": _empty_summary(), "period": period}
@@ -180,22 +184,24 @@ def get_production_overview(
     # ═══════════════════════════════════════════════════════
     uom_map          = _get_uom_conversions(all_codes)
     sub_asm_map      = _get_sub_assembly_info(all_codes, wo_statuses)
-    wo_count_map     = _get_wo_counts(all_codes, wo_statuses)
-    planned_qty_map  = _get_planned_qty(all_codes, wo_statuses)
-    actual_qty_map   = _get_actual_qty(all_codes, curr_month, curr_year)
-    prev_order_map   = _get_so_qty(all_codes, so_statuses, prev_month, prev_year)
-    curr_order_map   = _get_so_qty(all_codes, so_statuses, curr_month, curr_year)
-    dispatch_map     = _get_dispatch_qty(all_codes, curr_month, curr_year)
-    prev_dispatch_map= _get_dispatch_qty(all_codes, prev_month, prev_year)
-    projection_map   = _get_projection_qty(all_codes, curr_month_name, curr_year)
-    total_sales_map  = _get_total_sales_qty(all_codes, curr_month, curr_year)
+    wo_count_map     = _get_wo_counts(all_codes, wo_statuses, warehouses)
+    planned_info_map = _get_planned_qty(all_codes, wo_statuses, warehouses)
+    actual_qty_map   = _get_actual_qty(all_codes, curr_month, curr_year, warehouses)
+    prev_order_map   = _get_so_qty(all_codes, so_statuses, prev_month, prev_year, warehouses)
+    curr_order_map   = _get_so_qty(all_codes, so_statuses, curr_month, curr_year, warehouses)
+    dispatch_map     = _get_dispatch_qty(all_codes, curr_month, curr_year, warehouses)
+    prev_dispatch_map= _get_dispatch_qty(all_codes, prev_month, prev_year, warehouses)
+    projection_map   = _get_projection_qty(all_codes, curr_month_name, curr_year, warehouses)
+    total_sales_map  = _get_total_sales_qty(all_codes, curr_month, curr_year, warehouses)
     stock_map        = _get_stock(all_codes, warehouses, stock_mode)
     bom_map          = _get_active_bom(all_codes)
     shortage_map     = _get_shortage_summary(all_codes, bom_map, stock_map)
     possible_map     = _get_possible_qty(all_codes, bom_map, stock_map)
     cost_summary_map = _get_cost_summary(all_codes, curr_month, curr_year, bom_map)
     pp_count_map     = _get_active_pp_count(all_codes, pp_statuses)
-    has_open_so_map  = _get_has_open_so_map(all_codes, so_statuses)
+    has_open_so_map  = _get_has_open_so_map(all_codes, so_statuses, warehouses)
+    # Total pending SO (any month) — used by Excel Simple Report sheet + AI ctx.
+    total_pending_so_map = _get_all_pending_so_qty(all_codes, so_statuses, warehouses)
 
     # ═══════════════════════════════════════════════════════
     # STEP 4 — Assemble output rows
@@ -204,23 +210,49 @@ def get_production_overview(
     for r in item_rows:
         code = r.item_code
         uoms = uom_map.get(code, [])
-        plan  = flt(planned_qty_map.get(code, 0))
-        act   = flt(actual_qty_map.get(code, 0))
+        pinfo = planned_info_map.get(code, {})
+        plan         = flt(pinfo.get("planned", 0))
+        pending_wo   = flt(pinfo.get("pending", 0))
+        act          = flt(actual_qty_map.get(code, 0))
         prev_o = flt(prev_order_map.get(code, 0))
         curr_o = flt(curr_order_map.get(code, 0))
         disp  = flt(dispatch_map.get(code, 0))
         prev_disp = flt(prev_dispatch_map.get(code, 0))
         proj  = flt(projection_map.get(code, 0))
         total_s = flt(total_sales_map.get(code, 0))
+        stock_qty = flt(stock_map.get(code, 0))
         proj_vs = round(total_s / proj, 3) if proj > 0 else 0
 
         # Coverage = how much of the current-month sales is "covered" by the
         # combined demand inputs (Sales Projection + Previous Month carryover).
-        # Anchored at total_curr_sales so that >=100% means inputs exceed
-        # actual demand and <100% means demand will outstrip planning inputs.
         coverage_input = proj + prev_o
         coverage_pct   = round((coverage_input / total_s) * 100, 1) if total_s > 0 else 0
 
+        # Target Production — the higher of (Sales Projection) and (Total
+        # current month order). Whichever is greater drives what must be made.
+        # Per spec: "if the sales projection is greater so the projection
+        # will be target, if order is greater then the order qty will be the
+        # production target."
+        target_production = max(proj, total_s)
+
+        # % Target Achieved — based on the user formula:
+        #   Total order pending qty − (total pending qty of work orders + stock)
+        # This is the *gap*. Positive = under-supplied, negative = over-supplied.
+        # Achievement is the inverse of gap, normalised to target_production:
+        #   gap        = max(curr_o - (pending_wo + stock), 0)
+        #   achieved   = max(target - gap, 0)
+        #   target_achieved_pct = achieved / target * 100
+        # Computed warehouse-scoped because curr_o, pending_wo, and stock are
+        # already filtered by the user-selected warehouse list.
+        gap_qty = max(curr_o - (pending_wo + stock_qty), 0)
+        achieved_qty = max(target_production - gap_qty, 0)
+        target_achieved_pct = (
+            round(achieved_qty / target_production * 100, 1)
+            if target_production > 0 else 0
+        )
+
+        # Item type still computed and returned (used by AI context + Excel)
+        # but the FRONTEND no longer renders the column (per user request).
         item_type = _classify_item_type(r, sub_asm_map.get(code, {}).get("is_sub_assembly", False))
 
         items_out.append({
@@ -233,6 +265,7 @@ def get_production_overview(
             "sub_assembly_wos":  sub_asm_map.get(code, {}).get("wo_list", []),
             "open_wo_count":     wo_count_map.get(code, 0),
             "planned_qty":       plan,
+            "pending_wo_qty":    pending_wo,
             "actual_qty":        act,
             "prev_month_order":  prev_o,
             "curr_month_order":  curr_o,
@@ -243,7 +276,11 @@ def get_production_overview(
             "projection_vs_sales": proj_vs,
             "coverage_pct":      coverage_pct,
             "coverage_input":    coverage_input,
-            "stock":             flt(stock_map.get(code, 0)),
+            "target_production": target_production,
+            "target_gap":        gap_qty,
+            "target_achieved_qty": achieved_qty,
+            "target_achieved_pct": target_achieved_pct,
+            "stock":             stock_qty,
             "has_shortage":      shortage_map.get(code, {}).get("has_shortage", False),
             "shortage_components": shortage_map.get(code, {}).get("short_components", []),
             "possible_qty":      flt(possible_map.get(code, 0)),
@@ -252,20 +289,49 @@ def get_production_overview(
             "cost_summary":      cost_summary_map.get(code, {}),
             "pp_count":          pp_count_map.get(code, 0),
             "has_open_so":       has_open_so_map.get(code, False),
+            "total_pending_so":  flt(total_pending_so_map.get(code, 0)),
         })
 
     # ═══════════════════════════════════════════════════════
     # STEP 5 — Summary stats
     # ═══════════════════════════════════════════════════════
+    # Summary metrics — COUNTS only on the dashboard cards.
+    # Reason: items use heterogeneous UOMs (Pcs, Kg, Gram, Master Carton...);
+    # summing `qty` across UOMs would be mathematically meaningless.
+    # Total qty per UOM is exposed only on the Excel "UOM Comparison" sheet.
+    items_with_open_wos     = sum(1 for x in items_out if x.get("open_wo_count", 0) > 0)
+    items_with_active_pp    = sum(1 for x in items_out if x.get("pp_count", 0) > 0)
+    items_with_curr_so      = sum(1 for x in items_out if x.get("curr_month_order", 0) > 0)
+    items_dispatched        = sum(1 for x in items_out if x.get("curr_dispatch", 0) > 0)
+    items_with_projection   = sum(1 for x in items_out if x.get("curr_projection", 0) > 0)
+    items_target_hit        = sum(1 for x in items_out if x.get("target_achieved_pct", 0) >= 100)
+    items_blocked           = sum(
+        1 for x in items_out
+        if x.get("has_shortage") and x.get("possible_qty", 0) == 0
+    )
+    items_sub_assembly      = sum(1 for x in items_out if x.get("is_sub_assembly"))
+
     summary = {
-        "total_items":         len(items_out),
-        "items_with_shortage": sum(1 for x in items_out if x["has_shortage"]),
-        "items_no_shortage":   sum(1 for x in items_out if not x["has_shortage"]),
-        "total_planned_qty":   sum(x["planned_qty"] for x in items_out),
-        "total_actual_qty":    sum(x["actual_qty"] for x in items_out),
-        "total_curr_orders":   sum(x["curr_month_order"] for x in items_out),
-        "total_dispatch":      sum(x["curr_dispatch"] for x in items_out),
-        "total_projection":    sum(x["curr_projection"] for x in items_out),
+        # === COUNTS — used on dashboard summary cards ============
+        "total_items":               len(items_out),
+        "items_with_shortage":       sum(1 for x in items_out if x["has_shortage"]),
+        "items_no_shortage":         sum(1 for x in items_out if not x["has_shortage"]),
+        "items_with_open_wos":       items_with_open_wos,
+        "items_with_active_pp":      items_with_active_pp,
+        "items_with_curr_so":        items_with_curr_so,
+        "items_dispatched":          items_dispatched,
+        "items_with_projection":     items_with_projection,
+        "items_target_hit":          items_target_hit,
+        "items_blocked":             items_blocked,
+        "items_sub_assembly":        items_sub_assembly,
+        # === Aggregate qty — for Excel summary sheet only ========
+        # Labelled in the Excel render with an explicit warning that mixed
+        # UOMs make these numbers context-dependent.
+        "total_planned_qty":         sum(x["planned_qty"]       for x in items_out),
+        "total_actual_qty":          sum(x["actual_qty"]        for x in items_out),
+        "total_curr_orders":         sum(x["curr_month_order"]  for x in items_out),
+        "total_dispatch":            sum(x["curr_dispatch"]     for x in items_out),
+        "total_projection":          sum(x["curr_projection"]   for x in items_out),
     }
 
     return {"items": items_out, "summary": summary, "period": period}
@@ -774,20 +840,67 @@ def get_export_data(company=None, month=None, year=None, warehouses=None,
 @frappe.whitelist()
 def export_excel(company=None, month=None, year=None, warehouses=None,
                  wo_statuses=None, so_statuses=None, pp_statuses=None,
-                 stock_mode="physical"):
+                 po_statuses=None, stock_mode="physical"):
     """
-    Server-side Excel export with three sheets and basic colour coding.
-    Frappe's `build_xlsx_response` writes the file directly into the HTTP
-    response, so JS just needs `window.location = "/api/method/..."`.
+    Server-side Excel export — six sheets, fully formatted, Google-Sheets-import friendly.
+
+    Sheets:
+      1. Cover           - title + period + filters applied + how to read this workbook
+      2. Overview        - the main item table with description, all qtys, alt-row
+                           shading, autofilter on every column, frozen panes, conditional
+                           tinting (red = shortage, pink = open SO)
+      3. UOM Comparison  - one row per (item, metric, UOM) so a planner can look up
+                           any qty in any UOM. Stock UOM rows are highlighted.
+      4. Item Master     - reference catalogue: item_code / name / group / stock_uom /
+                           description / standard_rate / valuation_rate / TOC flags /
+                           is_purchase_item / is_stock_item / disabled, plus a list of
+                           every UOM conversion in `Conversions` column.
+      5. Group Pivot     - pivot-style aggregate: per Item Group, count of items with
+                           open WO/SO/projection/dispatch/shortage/blocked. Hand-rolled
+                           rather than a real pivot so Google Sheets imports cleanly.
+      6. Shortage Drivers- procurement priority list: components causing shortages,
+                           how many parents they block, total shortage qty + UOM.
+
+    Google Sheets compatibility:
+      - openpyxl AutoFilter is preserved on import.
+      - Pre-aggregated "pivot-style" sheet replaces a real pivot table (real pivots
+        are sometimes flattened during import).
+      - Alt-row shading uses static fills (not table styles) so the colours survive.
+      - Frozen panes are honoured by Google Sheets.
     """
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
+    # IMPORTANT: parse JSON-encoded params BEFORE rendering them on the Cover
+    # sheet. The URL form sends `wo_statuses=["In Process","Not Started"]`
+    # as a string; iterating it as-is renders character-by-character.
+    # `get_production_overview` parses internally too, but we need parsed
+    # lists here for the cover-sheet "filters applied" rendering.
+    def _as_list(v, default):
+        if v is None or v == "":
+            return list(default)
+        if isinstance(v, str):
+            parsed = frappe.parse_json(v)
+            if isinstance(parsed, list):
+                return parsed
+            # Single-string fallthrough — wrap in a 1-elem list
+            return [parsed] if parsed not in (None, "") else list(default)
+        if isinstance(v, list):
+            return list(v)
+        return list(default)
+
+    warehouses_list = _as_list(warehouses, [])
+    wo_list         = _as_list(wo_statuses, _DEFAULT_WO_STATUSES)
+    so_list         = _as_list(so_statuses, _DEFAULT_SO_STATUSES)
+    pp_list         = _as_list(pp_statuses, _DEFAULT_PP_STATUSES)
+    po_list         = _as_list(po_statuses, _DEFAULT_PO_STATUSES)
+
     result = get_production_overview(
         company=company, month=month, year=year,
-        warehouses=warehouses, wo_statuses=wo_statuses,
-        so_statuses=so_statuses, pp_statuses=pp_statuses,
+        warehouses=warehouses_list, wo_statuses=wo_list,
+        so_statuses=so_list, pp_statuses=pp_list,
+        po_statuses=po_list,
         stock_mode=stock_mode,
     )
     items   = result.get("items", [])
@@ -796,63 +909,385 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
 
     wb = Workbook()
 
-    HEAD_FILL  = PatternFill("solid", fgColor="4F46E5")
-    HEAD_FONT  = Font(bold=True, color="FFFFFF", size=11)
-    SUB_FILL   = PatternFill("solid", fgColor="EEF2FF")
-    OK_FILL    = PatternFill("solid", fgColor="D1FAE5")
-    WARN_FILL  = PatternFill("solid", fgColor="FEF3C7")
-    ERR_FILL   = PatternFill("solid", fgColor="FEE2E2")
-    SO_FILL    = PatternFill("solid", fgColor="FFF1F2")
-    THIN       = Side(border_style="thin", color="E2E8F0")
-    BORDER     = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-    CENTRE     = Alignment(horizontal="center", vertical="center")
+    # ── Style palette (Tiger / Indigo theme — matches the page) ──────────
+    HEAD_FILL    = PatternFill("solid", fgColor="4F46E5")
+    HEAD_FONT    = Font(bold=True, color="FFFFFF", size=11)
+    SUB_HDR_FILL = PatternFill("solid", fgColor="0F172A")
+    SUB_HDR_FONT = Font(bold=True, color="FFFFFF", size=10)
+    ALT_FILL     = PatternFill("solid", fgColor="F8FAFC")  # zebra row
+    SUB_FILL     = PatternFill("solid", fgColor="EEF2FF")
+    OK_FILL      = PatternFill("solid", fgColor="D1FAE5")
+    WARN_FILL    = PatternFill("solid", fgColor="FEF3C7")
+    ERR_FILL     = PatternFill("solid", fgColor="FEE2E2")
+    SO_FILL      = PatternFill("solid", fgColor="FFF1F2")
+    COVER_TITLE_FONT = Font(bold=True, size=18, color="4F46E5")
+    NOTE_FONT    = Font(italic=True, color="64748B", size=9)
+    THIN         = Side(border_style="thin", color="E2E8F0")
+    BORDER       = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+    CENTRE       = Alignment(horizontal="center", vertical="center")
+    LEFT_WRAP    = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
-    def _fmt_header(ws, row, headers):
+    def _fmt_header(ws, row, headers, fill=HEAD_FILL, font=HEAD_FONT):
         for col_idx, h in enumerate(headers, start=1):
             cell = ws.cell(row=row, column=col_idx, value=h)
-            cell.fill      = HEAD_FILL
-            cell.font      = HEAD_FONT
+            cell.fill      = fill
+            cell.font      = font
             cell.alignment = CENTRE
             cell.border    = BORDER
 
-    def _autosize(ws, headers, sample_count=15):
+    def _autosize(ws, headers, sample_count=20, max_w=42):
         for col_idx, h in enumerate(headers, start=1):
             max_len = len(str(h))
             for row in range(2, min(2 + sample_count, ws.max_row + 1)):
                 v = ws.cell(row=row, column=col_idx).value
                 if v is not None:
-                    max_len = max(max_len, len(str(v)))
-            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 42)
+                    max_len = max(max_len, min(len(str(v)), max_w + 5))
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, max_w)
 
-    # ── Sheet 1: Overview ─────────────────────────────────────────────
-    ws1 = wb.active
-    ws1.title = "Overview"
+    def _alt_shade(ws, start_row, end_row, n_cols):
+        # Zebra striping — every even row gets the alt fill.
+        for r in range(start_row, end_row + 1):
+            if (r - start_row) % 2 == 1:
+                for c in range(1, n_cols + 1):
+                    cell = ws.cell(row=r, column=c)
+                    if cell.fill is None or cell.fill.fgColor is None or cell.fill.fgColor.rgb in (None, "00000000"):
+                        cell.fill = ALT_FILL
+
+    def _set_autofilter(ws, n_rows, n_cols, header_row=1):
+        if n_rows <= header_row:
+            return
+        ws.auto_filter.ref = (
+            f"A{header_row}:{get_column_letter(n_cols)}{n_rows}"
+        )
+
+    # ── Bulk fetch Item Master fields for sheet 4 ────────────────────────
+    item_codes = [it["item_code"] for it in items]
+    master_rows = []
+    if item_codes:
+        codes_sql = _sql_in(item_codes)
+        master_rows = frappe.db.sql(f"""
+            SELECT name, item_name, item_group, stock_uom, description,
+                   COALESCE(standard_rate, 0)             AS standard_rate,
+                   COALESCE(valuation_rate, 0)            AS valuation_rate,
+                   COALESCE(custom_toc_auto_manufacture,0) AS auto_manufacture,
+                   COALESCE(custom_toc_auto_purchase, 0)   AS auto_purchase,
+                   COALESCE(is_purchase_item, 0)           AS is_purchase_item,
+                   COALESCE(is_stock_item, 0)              AS is_stock_item,
+                   COALESCE(disabled, 0)                   AS disabled
+            FROM `tabItem`
+            WHERE name IN {codes_sql}
+            ORDER BY item_group, name
+        """, as_dict=True)
+    master_by_code = {r.name: r for r in master_rows}
+    uom_by_code    = {it["item_code"]: (it.get("uom_conversions") or []) for it in items}
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 1 — COVER (filters applied, how to read the workbook)
+    # ────────────────────────────────────────────────────────────────────
+    ws_cover = wb.active
+    ws_cover.title = "Cover"
+    ws_cover["A1"] = f"Production Overview — {period.get('month_name','')} {period.get('year','')}"
+    ws_cover["A1"].font = COVER_TITLE_FONT
+    ws_cover.merge_cells("A1:E1")
+    ws_cover["A2"] = (
+        "All quantities are in stock UOM unless noted. Per-UOM breakdown lives "
+        "on the UOM Comparison sheet. Counts on the dashboard cards are item "
+        "counts (not aggregated qty)."
+    )
+    ws_cover["A2"].font = NOTE_FONT
+    ws_cover.merge_cells("A2:E2")
+    ws_cover.row_dimensions[2].height = 28
+
+    _fmt_header(ws_cover, 4, ["Filter", "Value"], fill=SUB_HDR_FILL, font=SUB_HDR_FONT)
+    cover_rows = [
+        ("Company",        company or "(all)"),
+        ("Period",         f"{period.get('month_name','')} {period.get('year','')}"),
+        ("Warehouses",     ", ".join(warehouses_list) if warehouses_list else "(all)"),
+        ("WO Statuses",    ", ".join(wo_list)         if wo_list         else "(none)"),
+        ("SO Statuses",    ", ".join(so_list)         if so_list         else "(none)"),
+        ("PP Statuses",    ", ".join(pp_list)         if pp_list         else "(none)"),
+        ("PO Statuses",    ", ".join(po_list)         if po_list         else "(none)"),
+        ("Stock View",     stock_mode),
+        ("Generated At",   getdate(today()).strftime("%Y-%m-%d")),
+    ]
+    for i, (k, v) in enumerate(cover_rows, start=5):
+        ws_cover.cell(row=i, column=1, value=k).border = BORDER
+        c = ws_cover.cell(row=i, column=2, value=str(v))
+        c.border = BORDER
+        c.alignment = LEFT_WRAP
+
+    _fmt_header(ws_cover, len(cover_rows) + 7, ["Item Counts", "Value"], fill=SUB_HDR_FILL, font=SUB_HDR_FONT)
+    cnt_rows = [
+        ("Total Items shown",                summary.get("total_items", 0)),
+        ("Items with Shortage",              summary.get("items_with_shortage", 0)),
+        ("Items with NO Shortage",           summary.get("items_no_shortage", 0)),
+        ("Items with Open Work Orders",      summary.get("items_with_open_wos", 0)),
+        ("Items in Active Production Plans", summary.get("items_with_active_pp", 0)),
+        ("Items with Curr Month SO",         summary.get("items_with_curr_so", 0)),
+        ("Items Dispatched this Month",      summary.get("items_dispatched", 0)),
+        ("Items with Sales Projection",      summary.get("items_with_projection", 0)),
+        ("Items at >= 100% Target",          summary.get("items_target_hit", 0)),
+        ("BLOCKED items (short + 0 possible)", summary.get("items_blocked", 0)),
+        ("Sub-assembly items",               summary.get("items_sub_assembly", 0)),
+    ]
+    for i, (k, v) in enumerate(cnt_rows, start=len(cover_rows) + 8):
+        ws_cover.cell(row=i, column=1, value=k).border = BORDER
+        c = ws_cover.cell(row=i, column=2, value=v)
+        c.border = BORDER
+        c.alignment = Alignment(horizontal="right")
+    ws_cover.column_dimensions["A"].width = 36
+    ws_cover.column_dimensions["B"].width = 32
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 2 — SHEET GUIDE (use cases for every sheet, the workbook map)
+    # ────────────────────────────────────────────────────────────────────
+    ws_guide = wb.create_sheet("Sheet Guide")
+    ws_guide["A1"] = "Sheet Guide — what each tab in this workbook is for"
+    ws_guide["A1"].font = COVER_TITLE_FONT
+    ws_guide.merge_cells("A1:D1")
+    ws_guide["A2"] = (
+        "Use this guide to know which sheet to open for each question. "
+        "Every data sheet has the indigo header row with AutoFilter enabled."
+    )
+    ws_guide["A2"].font = NOTE_FONT
+    ws_guide.merge_cells("A2:D2")
+    ws_guide.row_dimensions[2].height = 30
+
+    guide_headers = ["Sheet", "Purpose", "Use Cases (real-world)", "Key Columns / Notes"]
+    _fmt_header(ws_guide, 4, guide_headers, fill=SUB_HDR_FILL, font=SUB_HDR_FONT)
+    guide_rows = [
+        (
+            "Cover",
+            "Title, applied filters, item-count summary.",
+            "First place to look — confirms WHAT you exported (which Company, "
+            "Period, Warehouses, Statuses, Stock View) and the headline "
+            "counts of items in each state.",
+            "Filter rows + Item Counts table.",
+        ),
+        (
+            "Sheet Guide",
+            "(this sheet) Workbook map.",
+            "When you forget which sheet has which data — look here.",
+            "—",
+        ),
+        (
+            "Simple Report",
+            "One-line-per-item planner snapshot. Pending SO vs WO vs stock vs "
+            "target vs shortage.",
+            "Daily quick-look for the production planner. \"Can I cover the "
+            "pending orders with what I have + what's already in WO, or do I "
+            "need to start more?\". The two SHORTAGE columns answer that "
+            "directly: Shortage vs Physical Stock = pure firefight; Shortage "
+            "vs (Stock + Pending WO) = remaining gap after open WOs land.",
+            "Item Code | Item Name | Stock UOM | Total Pending SO | "
+            "Open WO Pending | Sales Projection | Stock on Hand (Physical) | "
+            "Target Production | Target Calc | Shortage vs Physical | "
+            "Shortage vs Stock+WO.",
+        ),
+        (
+            "Overview",
+            "Full 30-column item table — same columns visible on the page.",
+            "When you need every metric. Use AutoFilter to slice by item "
+            "group / has shortage / curr SO etc. Description column lets "
+            "you read what the item actually is.",
+            "Frozen pane on Item Name (C2). Conditional tints: red = has "
+            "shortage, pink = open SO. Alt rows for scan readability.",
+        ),
+        (
+            "UOM Comparison",
+            "Same qty viewed in EVERY UOM the item supports.",
+            "When stock UOM is Gram but you bought in Kg — look up the Kg "
+            "row. Or when sales is in Pcs but you produce in Cartons — see "
+            "both. Stock UOM rows highlighted in indigo.",
+            "Item Code | Field (Planned/Produced/SO/Dispatch/Projection/"
+            "Stock/Possible/Target) | Stock UOM Qty | UOM | Factor | "
+            "Converted Qty.",
+        ),
+        (
+            "Item Master",
+            "Reference catalogue — the item dictionary.",
+            "When you need item description, valuation rate, TOC flags, or "
+            "the FULL list of UOM conversions for an item. Useful for "
+            "cross-checking the costing or item-master setup.",
+            "Item Code | Name | Group | Stock UOM | Description | Standard "
+            "Rate | Valuation Rate | TOC Auto-Manufacture | TOC Auto-"
+            "Purchase | Is Purchase | Is Stock | Disabled | All UOM "
+            "Conversions (single string).",
+        ),
+        (
+            "Group Pivot",
+            "Pre-aggregated counts per Item Group.",
+            "When you want a one-page management summary by group: how many "
+            "items in each group have shortage / open WO / curr SO / are "
+            "blocked. TOTAL row at the bottom.",
+            "Item Group | Total Items | With Shortage | With Open WO | "
+            "With Active PP | With Curr SO | Dispatched | With Projection | "
+            "Target Hit | Blocked | Sub-Assembly Count.",
+        ),
+        (
+            "Shortage Drivers",
+            "Procurement priority list.",
+            "When components are blocking production — this sheet says which "
+            "components to chase first. Rows tinted RED if the component "
+            "blocks 5+ parents, AMBER if 2–4. Buying these first closes the "
+            "biggest production logjam.",
+            "Component Item | Item Name | UOM | # Parents Blocked | Total "
+            "Shortage Qty.",
+        ),
+    ]
+    for r, (s, p, uc, k) in enumerate(guide_rows, start=5):
+        cells = [
+            ws_guide.cell(row=r, column=1, value=s),
+            ws_guide.cell(row=r, column=2, value=p),
+            ws_guide.cell(row=r, column=3, value=uc),
+            ws_guide.cell(row=r, column=4, value=k),
+        ]
+        for c in cells:
+            c.border = BORDER
+            c.alignment = LEFT_WRAP
+        cells[0].font = Font(bold=True, color="4F46E5", size=11)
+        if (r - 5) % 2 == 1:
+            for c in cells:
+                c.fill = ALT_FILL
+        ws_guide.row_dimensions[r].height = 60
+    ws_guide.column_dimensions["A"].width = 20
+    ws_guide.column_dimensions["B"].width = 36
+    ws_guide.column_dimensions["C"].width = 60
+    ws_guide.column_dimensions["D"].width = 56
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 3 — SIMPLE REPORT (planner one-liner per item)
+    # ────────────────────────────────────────────────────────────────────
+    # Spec (2026-05-01 #8): Item name, stock UOM, total pending SO (per
+    # filter), total open WO pending qty, total projection, total physical
+    # stock, target production (with formula in a header row note),
+    # shortage vs physical stock, shortage vs (stock + pending WO).
+    #
+    # Why a separate sheet: the full Overview has 30 columns. The planner
+    # asks "do I need to start production today?" — that's answered in 9
+    # columns. This sheet exposes only those 9.
+    #
+    # Anchor for shortage: TARGET PRODUCTION (max(Projection, Total Sales)).
+    # Two variants:
+    #   Shortage vs Physical Stock        = max(Target − Stock, 0)
+    #   Shortage vs (Stock + Pending WO)  = max(Target − (Stock + Pending WO), 0)
+    # First answers "can I cover today with what I have?".
+    # Second answers "after open WOs land, what is left?".
+
+    # Recompute physical stock independent of stock_mode (so this sheet is
+    # always strict physical, even if user picked Physical+Expected on the page).
+    physical_stock_map = _get_stock(item_codes, warehouses, "physical")
+
+    ws_simple = wb.create_sheet("Simple Report")
+
+    # Pre-header row with the formulas in plain English. Helps a layman planner.
+    ws_simple["A1"] = "Simple Report — pending demand vs supply per item"
+    ws_simple["A1"].font = COVER_TITLE_FONT
+    ws_simple.merge_cells("A1:K1")
+    ws_simple["A2"] = (
+        "Total Pending SO  = sum of pending qty across ALL pending Sales Orders that match your SO Status filter (any month). "
+        "Open WO Pending Qty = SUM(Work Order.qty − produced_qty) on open WOs. "
+        "Total Projection  = qty_in_stock_uom from this month's Sales Projection. "
+        "Stock on Hand (Physical) = Bin.actual_qty (this report uses PHYSICAL only, regardless of Stock View). "
+        "Target Production = max(Sales Projection, Total Curr Month Sales). "
+        "Shortage vs Physical Stock = max(Target − Stock, 0). "
+        "Shortage vs Stock + Pending WO = max(Target − (Stock + Pending WO), 0)."
+    )
+    ws_simple["A2"].font = NOTE_FONT
+    ws_simple["A2"].alignment = LEFT_WRAP
+    ws_simple.merge_cells("A2:K2")
+    ws_simple.row_dimensions[2].height = 56
+
+    simple_headers = [
+        "Item Code", "Item Name", "Item Group", "Stock UOM",
+        "Total Pending SO",
+        "Open WO Pending Qty",
+        "Total Projection",
+        "Stock on Hand (Physical)",
+        "Target Production",
+        "Shortage vs Physical Stock",
+        "Shortage vs (Stock + Pending WO)",
+    ]
+    _fmt_header(ws_simple, 4, simple_headers)
+    for r, item in enumerate(items, start=5):
+        code = item["item_code"]
+        target  = flt(item.get("target_production", 0))
+        stock   = flt(physical_stock_map.get(code, 0))
+        wo_pend = flt(item.get("pending_wo_qty", 0))
+        short_phys  = max(target - stock, 0)
+        short_total = max(target - (stock + wo_pend), 0)
+        row = [
+            code,
+            item.get("item_name", ""),
+            item.get("item_group", ""),
+            item.get("stock_uom", ""),
+            flt(item.get("total_pending_so", 0)),
+            wo_pend,
+            flt(item.get("curr_projection", 0)),
+            stock,
+            target,
+            round(short_phys, 3),
+            round(short_total, 3),
+        ]
+        for col_idx, val in enumerate(row, start=1):
+            cell = ws_simple.cell(row=r, column=col_idx, value=val)
+            cell.border = BORDER
+            if col_idx >= 5 and isinstance(val, (int, float)):
+                cell.alignment = Alignment(horizontal="right")
+        # Tinting: red if any shortage, alt-row otherwise
+        if short_total > 0:
+            for c in range(1, len(simple_headers) + 1):
+                ws_simple.cell(row=r, column=c).fill = ERR_FILL
+        elif short_phys > 0:
+            for c in range(1, len(simple_headers) + 1):
+                ws_simple.cell(row=r, column=c).fill = WARN_FILL
+        elif (r - 5) % 2 == 1:
+            for c in range(1, len(simple_headers) + 1):
+                ws_simple.cell(row=r, column=c).fill = ALT_FILL
+    ws_simple.freeze_panes = "C5"
+    _autosize(ws_simple, simple_headers, max_w=30)
+    # AutoFilter on the data table only (rows 4..end). Header row is row 4.
+    if ws_simple.max_row >= 5:
+        ws_simple.auto_filter.ref = (
+            f"A4:{get_column_letter(len(simple_headers))}{ws_simple.max_row}"
+        )
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 4 — OVERVIEW (the data table)
+    # ────────────────────────────────────────────────────────────────────
+    ws1 = wb.create_sheet("Overview")
     headers = [
-        "Item Code", "Item Name", "Item Group", "Type", "Stock UOM",
+        "Item Code", "Item Name", "Description", "Item Group", "Stock UOM",
         "Sub-Assembly", "Has Open SO", "Open WOs", "Active PPs",
-        "Planned Qty", "Produced",
+        "Planned Qty", "Pending WO Qty", "Produced",
         "Prev Month SO", "Curr Month SO",
         "Prev Month Dispatch", "Curr Month Dispatch",
         "Sales Projection", "Total Curr Sales",
         "Proj vs Sales %", "Coverage %",
+        "Target Production", "Target Gap", "% Target Achieved",
         "Stock on Hand", "Possible Qty",
         "Has Shortage", "Active BOM",
-        "BOM Std Cost", "Actual Cost", "Variance %",
+        "BOM Std Cost (per unit)", "Actual Cost (per unit)", "Variance %",
     ]
     _fmt_header(ws1, 1, headers)
     for i, item in enumerate(items, start=2):
+        master = master_by_code.get(item["item_code"]) or {}
         row = [
-            item["item_code"], item["item_name"], item.get("item_group", ""),
-            item["item_type"], item["stock_uom"],
+            item["item_code"], item["item_name"], (master.get("description") or "")[:500],
+            item.get("item_group", ""),
+            item["stock_uom"],
             "Yes" if item["is_sub_assembly"] else "No",
             "Yes" if item.get("has_open_so") else "No",
             item["open_wo_count"], item.get("pp_count", 0),
-            item["planned_qty"], item["actual_qty"],
+            item["planned_qty"], item.get("pending_wo_qty", 0), item["actual_qty"],
             item["prev_month_order"], item["curr_month_order"],
             item.get("prev_dispatch", 0), item["curr_dispatch"],
             item["curr_projection"], item["total_curr_sales"],
             round(item["projection_vs_sales"] * 100, 1) if item["projection_vs_sales"] else 0,
             item.get("coverage_pct", 0),
+            item.get("target_production", 0),
+            item.get("target_gap", 0),
+            item.get("target_achieved_pct", 0),
             item["stock"], item["possible_qty"],
             "Yes" if item["has_shortage"] else "No",
             item.get("active_bom", ""),
@@ -865,32 +1300,45 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
             cell.border = BORDER
             if col_idx >= 8 and isinstance(val, (int, float)):
                 cell.alignment = Alignment(horizontal="right")
-        # Row tinting
         if item["has_shortage"]:
             for col_idx in range(1, len(headers) + 1):
                 ws1.cell(row=i, column=col_idx).fill = ERR_FILL
         elif item.get("has_open_so"):
             for col_idx in range(1, len(headers) + 1):
                 ws1.cell(row=i, column=col_idx).fill = SO_FILL
+    # Zebra rows on the rest (skip already-tinted shortage/SO rows)
+    for i, item in enumerate(items, start=2):
+        if not item["has_shortage"] and not item.get("has_open_so") and (i - 2) % 2 == 1:
+            for c in range(1, len(headers) + 1):
+                ws1.cell(row=i, column=c).fill = ALT_FILL
     ws1.freeze_panes = "C2"
-    _autosize(ws1, headers)
+    _autosize(ws1, headers, max_w=36)
+    _set_autofilter(ws1, ws1.max_row, len(headers))
 
-    # ── Sheet 2: UOM Comparison ───────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 3 — UOM COMPARISON
+    # ────────────────────────────────────────────────────────────────────
     ws2 = wb.create_sheet("UOM Comparison")
-    uom_headers = ["Item Code", "Item Name", "Stock UOM", "Field", "Stock UOM Qty", "UOM", "Factor", "Converted Qty"]
+    uom_headers = ["Item Code", "Item Name", "Item Group", "Stock UOM",
+                   "Field", "Stock UOM Qty", "UOM", "Factor", "Converted Qty"]
     _fmt_header(ws2, 1, uom_headers)
     fields = [
         ("Planned Qty",     "planned_qty"),
         ("Produced",        "actual_qty"),
+        ("Prev Month SO",   "prev_month_order"),
         ("Curr Month SO",   "curr_month_order"),
         ("Curr Dispatch",   "curr_dispatch"),
         ("Sales Projection","curr_projection"),
         ("Stock on Hand",   "stock"),
         ("Possible Qty",    "possible_qty"),
+        ("Target Production","target_production"),
     ]
     r = 2
     for item in items:
         uom_list = item.get("uom_conversions") or [{"uom": item["stock_uom"], "factor": 1.0}]
+        # Always include stock UOM as factor 1 row even if conversions exist
+        if item["stock_uom"] and not any((u.get("uom") == item["stock_uom"]) for u in uom_list):
+            uom_list = [{"uom": item["stock_uom"], "factor": 1.0}] + list(uom_list)
         for label, key in fields:
             qty = flt(item.get(key, 0))
             for u in uom_list:
@@ -898,8 +1346,9 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
                 if f <= 0:
                     continue
                 ws2.append([
-                    item["item_code"], item["item_name"], item["stock_uom"],
-                    label, qty, u.get("uom") or item["stock_uom"], f,
+                    item["item_code"], item["item_name"], item.get("item_group", ""),
+                    item["stock_uom"], label, qty,
+                    u.get("uom") or item["stock_uom"], f,
                     round(qty / f, 4),
                 ])
                 for col_idx in range(1, len(uom_headers) + 1):
@@ -907,37 +1356,162 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
                 if u.get("uom") == item["stock_uom"]:
                     for col_idx in range(1, len(uom_headers) + 1):
                         ws2.cell(row=r, column=col_idx).fill = SUB_FILL
+                elif (r % 2) == 1:
+                    for col_idx in range(1, len(uom_headers) + 1):
+                        ws2.cell(row=r, column=col_idx).fill = ALT_FILL
                 r += 1
     ws2.freeze_panes = "B2"
     _autosize(ws2, uom_headers)
+    _set_autofilter(ws2, ws2.max_row, len(uom_headers))
 
-    # ── Sheet 3: Summary ──────────────────────────────────────────────
-    ws3 = wb.create_sheet("Summary")
-    ws3["A1"] = f"Production Overview — {period.get('month_name','')} {period.get('year','')}"
-    ws3["A1"].font = Font(bold=True, size=14, color="0F172A")
-    ws3.merge_cells("A1:D1")
-
-    summary_rows = [
-        ("Total Items",          summary.get("total_items", 0)),
-        ("With Shortage",        summary.get("items_with_shortage", 0)),
-        ("No Shortage",          summary.get("items_no_shortage", 0)),
-        ("Total Planned Qty",    summary.get("total_planned_qty", 0)),
-        ("Total Actual Qty",     summary.get("total_actual_qty", 0)),
-        ("Total Curr Orders",    summary.get("total_curr_orders", 0)),
-        ("Total Dispatch",       summary.get("total_dispatch", 0)),
-        ("Total Projection",     summary.get("total_projection", 0)),
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 4 — ITEM MASTER (reference catalogue)
+    # ────────────────────────────────────────────────────────────────────
+    ws_master = wb.create_sheet("Item Master")
+    master_headers = [
+        "Item Code", "Item Name", "Item Group", "Stock UOM", "Description",
+        "Standard Rate (INR)", "Valuation Rate (INR)",
+        "TOC Auto-Manufacture", "TOC Auto-Purchase",
+        "Is Purchase Item", "Is Stock Item", "Disabled",
+        "All UOM Conversions",
     ]
-    _fmt_header(ws3, 3, ["Metric", "Value"])
-    for i, (k, v) in enumerate(summary_rows, start=4):
-        ws3.cell(row=i, column=1, value=k).border = BORDER
-        c = ws3.cell(row=i, column=2, value=v)
-        c.border = BORDER
-        c.alignment = Alignment(horizontal="right")
-    ws3.column_dimensions["A"].width = 28
-    ws3.column_dimensions["B"].width = 18
+    _fmt_header(ws_master, 1, master_headers)
+    r = 2
+    for code in item_codes:
+        m   = master_by_code.get(code, {})
+        uom = uom_by_code.get(code, [])
+        uom_str = "; ".join(f"{u.get('uom')} (×{flt(u.get('factor'))})" for u in uom if u.get("uom"))
+        if not uom_str and m.get("stock_uom"):
+            uom_str = f"{m.get('stock_uom')} (×1)"
+        row = [
+            code, m.get("item_name", ""), m.get("item_group", ""),
+            m.get("stock_uom", ""), (m.get("description") or "")[:1000],
+            flt(m.get("standard_rate", 0)), flt(m.get("valuation_rate", 0)),
+            "Yes" if cint(m.get("auto_manufacture", 0)) else "No",
+            "Yes" if cint(m.get("auto_purchase", 0))    else "No",
+            "Yes" if cint(m.get("is_purchase_item", 0)) else "No",
+            "Yes" if cint(m.get("is_stock_item", 0))    else "No",
+            "Yes" if cint(m.get("disabled", 0))         else "No",
+            uom_str,
+        ]
+        for col_idx, val in enumerate(row, start=1):
+            cell = ws_master.cell(row=r, column=col_idx, value=val)
+            cell.border = BORDER
+            if col_idx == 5 or col_idx == 13:
+                cell.alignment = LEFT_WRAP
+        if (r - 2) % 2 == 1:
+            for c in range(1, len(master_headers) + 1):
+                ws_master.cell(row=r, column=c).fill = ALT_FILL
+        r += 1
+    ws_master.freeze_panes = "B2"
+    _autosize(ws_master, master_headers, max_w=44)
+    _set_autofilter(ws_master, ws_master.max_row, len(master_headers))
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 5 — GROUP PIVOT (pre-aggregated, Google-Sheets-friendly)
+    # ────────────────────────────────────────────────────────────────────
+    ws_pivot = wb.create_sheet("Group Pivot")
+    pivot_headers = [
+        "Item Group", "Total Items", "With Shortage",
+        "With Open WO", "With Active PP", "With Curr SO",
+        "Dispatched", "With Projection",
+        "Target Hit (>=100%)", "Blocked", "Sub-Assembly Count",
+    ]
+    _fmt_header(ws_pivot, 1, pivot_headers)
+    by_group = {}
+    for it in items:
+        g = it.get("item_group") or "(no group)"
+        b = by_group.setdefault(g, {
+            "total":0, "shortage":0, "wo":0, "pp":0, "curr_so":0,
+            "disp":0, "proj":0, "hit":0, "blocked":0, "sub":0
+        })
+        b["total"]    += 1
+        if it["has_shortage"]:                          b["shortage"] += 1
+        if it.get("open_wo_count", 0) > 0:              b["wo"]       += 1
+        if it.get("pp_count", 0) > 0:                   b["pp"]       += 1
+        if it.get("curr_month_order", 0) > 0:           b["curr_so"]  += 1
+        if it.get("curr_dispatch", 0) > 0:              b["disp"]     += 1
+        if it.get("curr_projection", 0) > 0:            b["proj"]     += 1
+        if it.get("target_achieved_pct", 0) >= 100:     b["hit"]      += 1
+        if it.get("has_shortage") and it.get("possible_qty", 0) == 0:
+            b["blocked"] += 1
+        if it.get("is_sub_assembly"):                   b["sub"]      += 1
+
+    pivot_sorted = sorted(by_group.items(), key=lambda kv: kv[1]["total"], reverse=True)
+    for r, (g, b) in enumerate(pivot_sorted, start=2):
+        row = [g, b["total"], b["shortage"], b["wo"], b["pp"],
+               b["curr_so"], b["disp"], b["proj"], b["hit"], b["blocked"], b["sub"]]
+        for col_idx, val in enumerate(row, start=1):
+            cell = ws_pivot.cell(row=r, column=col_idx, value=val)
+            cell.border = BORDER
+            if col_idx > 1:
+                cell.alignment = Alignment(horizontal="right")
+        if (r - 2) % 2 == 1:
+            for c in range(1, len(pivot_headers) + 1):
+                ws_pivot.cell(row=r, column=c).fill = ALT_FILL
+    # Total row (bold, indigo bg)
+    total_r = ws_pivot.max_row + 1
+    totals = ["TOTAL"]
+    for k in ("total","shortage","wo","pp","curr_so","disp","proj","hit","blocked","sub"):
+        totals.append(sum(b[k] for _, b in pivot_sorted))
+    for col_idx, val in enumerate(totals, start=1):
+        cell = ws_pivot.cell(row=total_r, column=col_idx, value=val)
+        cell.fill = SUB_HDR_FILL
+        cell.font = SUB_HDR_FONT
+        cell.border = BORDER
+        cell.alignment = Alignment(horizontal="right" if col_idx > 1 else "left")
+    ws_pivot.freeze_panes = "B2"
+    _autosize(ws_pivot, pivot_headers)
+    _set_autofilter(ws_pivot, ws_pivot.max_row - 1, len(pivot_headers))  # exclude TOTAL row
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 6 — SHORTAGE DRIVERS (procurement priority)
+    # ────────────────────────────────────────────────────────────────────
+    ws_short = wb.create_sheet("Shortage Drivers")
+    sd_headers = ["Component Item", "Item Name", "UOM",
+                  "# Parents Blocked", "Total Shortage Qty"]
+    _fmt_header(ws_short, 1, sd_headers)
+    drv = {}
+    for it in items:
+        for c in (it.get("shortage_components") or []):
+            code = c.get("item_code")
+            if not code:
+                continue
+            d = drv.setdefault(code, {
+                "name": c.get("item_name") or master_by_code.get(code, {}).get("item_name", ""),
+                "uom":  c.get("uom") or master_by_code.get(code, {}).get("stock_uom", ""),
+                "blocks": 0,
+                "total_short": 0.0,
+            })
+            d["blocks"]      += 1
+            d["total_short"] += flt(c.get("shortage", 0))
+    drv_sorted = sorted(drv.items(),
+                        key=lambda t: (t[1]["blocks"], t[1]["total_short"]),
+                        reverse=True)
+    for r, (code, v) in enumerate(drv_sorted, start=2):
+        row = [code, v["name"], v["uom"], v["blocks"], round(v["total_short"], 3)]
+        for col_idx, val in enumerate(row, start=1):
+            cell = ws_short.cell(row=r, column=col_idx, value=val)
+            cell.border = BORDER
+            if col_idx >= 4:
+                cell.alignment = Alignment(horizontal="right")
+        if (r - 2) % 2 == 1:
+            for c in range(1, len(sd_headers) + 1):
+                ws_short.cell(row=r, column=c).fill = ALT_FILL
+        if v["blocks"] >= 5:
+            for c in range(1, len(sd_headers) + 1):
+                ws_short.cell(row=r, column=c).fill = ERR_FILL
+        elif v["blocks"] >= 2:
+            for c in range(1, len(sd_headers) + 1):
+                ws_short.cell(row=r, column=c).fill = WARN_FILL
+    ws_short.freeze_panes = "B2"
+    _autosize(ws_short, sd_headers)
+    _set_autofilter(ws_short, ws_short.max_row, len(sd_headers))
 
     # ── Save into Frappe response ─────────────────────────────────────
-    fname = f"production_overview_{period.get('month_name','')}_{period.get('year','')}.xlsx"
+    fname = (
+        f"production_overview_{period.get('month_name','')}_{period.get('year','')}.xlsx"
+    )
     from io import BytesIO
     bio = BytesIO()
     wb.save(bio)
@@ -953,63 +1527,239 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
 
 @frappe.whitelist()
 def get_chart_data(company=None, month=None, year=None, warehouses=None,
-                   wo_statuses=None, so_statuses=None, stock_mode="physical"):
+                   wo_statuses=None, so_statuses=None, pp_statuses=None,
+                   po_statuses=None, stock_mode="physical"):
     """
-    Aggregated data for pie + bar charts in Tab 3.
+    Aggregated data for the Charts tab — production-team-meaningful insights.
+
+    Returned series (each keyed for Chart.js consumption):
+
+      shortage_pie         pie  — items with vs without shortage
+      bar_orders           bar  — top 10 by current-month order, planned/dispatch overlay
+      bar_projection       bar  — projection vs actual sales for top 10 by projection
+      bar_wo_by_group      bar  — open WO count per item group (top 10)
+
+      bar_priority_action  bar  — top 10 items by Target Gap. Each bar shows what
+                                  is blocking shipment: shortfall after stock + pending WOs.
+                                  This is "today's priority action board".
+      bar_daily_need       bar  — top 10 items with the largest remaining production
+                                  need this month (target − produced). For each item,
+                                  also returns a `daily_need` value (remaining ÷ working
+                                  days left in the month) so the production manager
+                                  can size each day's batch.
+      readiness_pie        pie  — production readiness mix: Ready (possible_qty > 0
+                                  and demand exists) / Partial / Blocked / No demand.
+      bar_coverage_health  bar  — distribution of items across coverage% buckets
+                                  (<50, 50-99, 100-149, ≥150). Shows how well
+                                  planning inputs (Projection + Prev SO) cover
+                                  current month sales.
+      bar_shortage_drivers bar  — top 10 component items causing shortages, ranked
+                                  by how many parent items they block. Procurement
+                                  priority list.
+      summary              dict — counts/sums copied from Overview tab for the
+                                  metric cards above the charts.
     """
+    import calendar as _cal
+    from datetime import date as _date
+
     result = get_production_overview(
         company=company, month=month, year=year,
         warehouses=warehouses, wo_statuses=wo_statuses,
-        so_statuses=so_statuses, stock_mode=stock_mode
+        so_statuses=so_statuses, pp_statuses=pp_statuses,
+        po_statuses=po_statuses, stock_mode=stock_mode,
     )
     items = result.get("items", [])
+    period = result.get("period", {})
 
-    # Pie 1: Item type distribution
+    # ── Working days remaining for daily-need calc ───────────────────────
+    today_d  = getdate(today())
+    p_month  = cint(period.get("month_num") or today_d.month)
+    p_year   = cint(period.get("year")      or today_d.year)
+    last_day = _cal.monthrange(p_year, p_month)[1]
+    if today_d.year == p_year and today_d.month == p_month:
+        start_day = today_d.day
+    else:
+        start_day = 1
+    working_days_left = 0
+    for d in range(start_day, last_day + 1):
+        wd = _date(p_year, p_month, d).weekday()  # 0=Mon..6=Sun
+        if wd < 6:                                  # exclude Sunday
+            working_days_left += 1
+    if working_days_left < 1:
+        working_days_left = 1
+
+    # ── Existing pies / bars ──────────────────────────────────────────────
     type_counts = {}
     for item in items:
         t = item["item_type"]
         type_counts[t] = type_counts.get(t, 0) + 1
-
-    # Pie 2: Shortage distribution
     shortage_yes = sum(1 for x in items if x["has_shortage"])
     shortage_no  = len(items) - shortage_yes
 
-    # Bar 1: Top 10 items by Curr Month Order qty
     top_order = sorted(items, key=lambda x: x["curr_month_order"], reverse=True)[:10]
     bar_orders = {
-        "labels":  [x["item_code"] for x in top_order],
-        "planned": [x["planned_qty"] for x in top_order],
-        "actual":  [x["actual_qty"] for x in top_order],
-        "orders":  [x["curr_month_order"] for x in top_order],
-        "dispatch":[x["curr_dispatch"] for x in top_order],
+        "labels":     [x["item_code"]        for x in top_order],
+        "item_names": [x.get("item_name","") for x in top_order],
+        "planned":    [x["planned_qty"]      for x in top_order],
+        "actual":     [x["actual_qty"]       for x in top_order],
+        "orders":     [x["curr_month_order"] for x in top_order],
+        "dispatch":   [x["curr_dispatch"]    for x in top_order],
     }
 
-    # Bar 2: Projection vs Dispatch (top 10 by projection)
     top_proj = sorted(items, key=lambda x: x["curr_projection"], reverse=True)[:10]
     bar_proj = {
-        "labels":     [x["item_code"] for x in top_proj],
-        "projection": [x["curr_projection"] for x in top_proj],
+        "labels":     [x["item_code"]        for x in top_proj],
+        "item_names": [x.get("item_name","") for x in top_proj],
+        "projection": [x["curr_projection"]  for x in top_proj],
         "sales":      [x["total_curr_sales"] for x in top_proj],
-        "stock":      [x["stock"] for x in top_proj],
+        "stock":      [x["stock"]            for x in top_proj],
     }
 
-    # Bar 3: WO count per item group
     group_wo = {}
     for item in items:
         g = item["item_group"] or "Other"
         group_wo[g] = group_wo.get(g, 0) + item["open_wo_count"]
     group_wo_sorted = sorted(group_wo.items(), key=lambda x: x[1], reverse=True)[:10]
 
+    # ── NEW: Priority Action Board ────────────────────────────────────────
+    # Top 10 items by Target Gap (descending). Bar split into:
+    #   covered_by_stock  (green)     = min(target, stock)
+    #   covered_by_wo     (blue)      = pending WO qty contribution after stock
+    #   gap               (red)       = remaining = target − stock − pending_wo
+    # = the daily punch list. Manager looks at this first thing each morning.
+    items_with_gap = [x for x in items if (x.get("target_gap") or 0) > 0]
+    top_priority   = sorted(items_with_gap,
+                            key=lambda x: x.get("target_gap") or 0,
+                            reverse=True)[:10]
+    bar_priority = {
+        "labels":         [x["item_code"]                 for x in top_priority],
+        "item_names":     [x.get("item_name","")          for x in top_priority],
+        "target":         [x.get("target_production",0)   for x in top_priority],
+        "stock":          [min(flt(x.get("target_production",0)), flt(x.get("stock",0))) for x in top_priority],
+        "wo_pending":     [
+            min(flt(x.get("pending_wo_qty",0)),
+                max(flt(x.get("target_production",0)) - flt(x.get("stock",0)), 0))
+            for x in top_priority
+        ],
+        "gap":            [x.get("target_gap",0)          for x in top_priority],
+        "achieved_pct":   [x.get("target_achieved_pct",0) for x in top_priority],
+        "stock_uoms":     [x.get("stock_uom","")          for x in top_priority],
+    }
+
+    # ── NEW: Daily Production Need ────────────────────────────────────────
+    # Remaining = max(target − produced, 0). Daily = Remaining ÷ working_days_left.
+    # Top 10 items by Remaining. Drives "what to make today" sizing.
+    items_with_remaining = []
+    for x in items:
+        rem = max(flt(x.get("target_production",0)) - flt(x.get("actual_qty",0)), 0)
+        if rem > 0:
+            items_with_remaining.append((x, rem))
+    items_with_remaining.sort(key=lambda t: t[1], reverse=True)
+    top_daily = items_with_remaining[:10]
+    bar_daily_need = {
+        "labels":          [x["item_code"]            for x, _ in top_daily],
+        "item_names":      [x.get("item_name","")     for x, _ in top_daily],
+        "remaining":       [round(rem, 3)             for _, rem in top_daily],
+        "daily_need":      [round(rem / working_days_left, 3) for _, rem in top_daily],
+        "produced":        [x.get("actual_qty",0)     for x, _ in top_daily],
+        "target":          [x.get("target_production",0) for x, _ in top_daily],
+        "achieved_pct":    [x.get("target_achieved_pct",0) for x, _ in top_daily],
+        "stock_uoms":      [x.get("stock_uom","")     for x, _ in top_daily],
+        "working_days_left": working_days_left,
+    }
+
+    # ── NEW: Production Readiness pie ─────────────────────────────────────
+    # Ready    = possible_qty > 0 AND has demand (curr_so or projection or target>0)
+    # Partial  = possible_qty > 0 but possible_qty < target
+    # Blocked  = possible_qty = 0 AND has_shortage
+    # No-demand= no curr_so, no projection, no target
+    ready = partial = blocked = no_demand = 0
+    for x in items:
+        target = flt(x.get("target_production", 0))
+        possible = flt(x.get("possible_qty", 0))
+        has_short = x.get("has_shortage", False)
+        if target <= 0 and flt(x.get("curr_month_order",0)) <= 0:
+            no_demand += 1
+        elif possible <= 0 and has_short:
+            blocked += 1
+        elif possible >= target and target > 0:
+            ready += 1
+        else:
+            partial += 1
+    readiness_pie = {
+        "Ready":     ready,
+        "Partial":   partial,
+        "Blocked":   blocked,
+        "No Demand": no_demand,
+    }
+
+    # ── NEW: Coverage Health distribution ─────────────────────────────────
+    # Bucket items by coverage_pct so the manager sees how planning inputs
+    # (Projection + Prev SO carryover) line up with this month's actual sales.
+    cov_buckets = {"<50%": 0, "50–99%": 0, "100–149%": 0, "≥150%": 0, "No Sales": 0}
+    for x in items:
+        if not flt(x.get("total_curr_sales", 0)):
+            cov_buckets["No Sales"] += 1
+            continue
+        c = flt(x.get("coverage_pct", 0))
+        if   c <  50:  cov_buckets["<50%"]    += 1
+        elif c <  100: cov_buckets["50–99%"]  += 1
+        elif c <  150: cov_buckets["100–149%"] += 1
+        else:          cov_buckets["≥150%"]   += 1
+    bar_coverage_health = {
+        "labels": list(cov_buckets.keys()),
+        "values": list(cov_buckets.values()),
+    }
+
+    # ── NEW: Shortage Drivers — components blocking the most parents ──────
+    # For each row, every short_components entry contributes 1 vote to that
+    # component's "blocks" score. Rank top 10 — that's the procurement
+    # priority list. Useful even if a component has small qty short for
+    # one item but small qty short for many items.
+    short_drivers = {}
+    for it in items:
+        for c in (it.get("shortage_components") or []):
+            code = c.get("item_code")
+            if not code:
+                continue
+            d = short_drivers.setdefault(code, {
+                "blocks": 0,
+                "item_name": c.get("item_name") or "",
+                "uom": c.get("uom") or "",
+                "total_short": 0.0,
+            })
+            d["blocks"]      += 1
+            d["total_short"] += flt(c.get("shortage", 0))
+    drivers_sorted = sorted(short_drivers.items(),
+                            key=lambda t: (t[1]["blocks"], t[1]["total_short"]),
+                            reverse=True)[:10]
+    bar_shortage_drivers = {
+        "labels":     [code for code, _ in drivers_sorted],
+        "item_names": [v["item_name"]  for _, v in drivers_sorted],
+        "blocks":     [v["blocks"]     for _, v in drivers_sorted],
+        "total_short":[round(v["total_short"], 3) for _, v in drivers_sorted],
+        "uoms":       [v["uom"]        for _, v in drivers_sorted],
+    }
+
     return {
-        "type_pie":     type_counts,
-        "shortage_pie": {"Yes": shortage_yes, "No": shortage_no},
-        "bar_orders":   bar_orders,
-        "bar_projection": bar_proj,
+        "type_pie":            type_counts,
+        "shortage_pie":        {"Yes": shortage_yes, "No": shortage_no},
+        "bar_orders":          bar_orders,
+        "bar_projection":      bar_proj,
         "bar_wo_by_group": {
             "labels": [x[0] for x in group_wo_sorted],
             "values": [x[1] for x in group_wo_sorted],
         },
-        "summary":      result.get("summary", {}),
+        # NEW production-team series
+        "bar_priority_action":  bar_priority,
+        "bar_daily_need":       bar_daily_need,
+        "readiness_pie":        readiness_pie,
+        "bar_coverage_health":  bar_coverage_health,
+        "bar_shortage_drivers": bar_shortage_drivers,
+        # Meta
+        "working_days_left":    working_days_left,
+        "summary":              result.get("summary", {}),
+        "period":               period,
     }
 
 
@@ -1213,62 +1963,96 @@ def _build_wh_filter(warehouses):
     return f"AND warehouse IN {sql}", {}
 
 
+def _wh_clause(warehouses, column_expr):
+    """
+    Reusable helper: return ' AND <column_expr> IN (...)' if warehouses set,
+    otherwise the empty string. Caller embeds inside an existing WHERE.
+    `column_expr` is the SQL expression naming the warehouse column
+    (e.g. 'wo.fg_warehouse', 'soi.warehouse').
+    """
+    if not warehouses:
+        return ""
+    return f" AND {column_expr} IN {_sql_in(warehouses)}"
+
+
 def _get_qualifying_items(wo_statuses, so_statuses, curr_month, curr_year,
-                          prev_month, prev_year, company):
-    """Return set of item_codes that qualify for the overview."""
+                          prev_month, prev_year, company, pp_statuses=None):
+    """
+    Return set of item_codes that qualify for the overview dashboard.
+
+    Per the user-supplied 2026-05-01 spec, EXACTLY four conditions qualify:
+
+      (1) `custom_toc_auto_manufacture = 1` on Item master (TOC App flag).
+      (2) Item is the `production_item` of an open Work Order
+          OR appears in `tabProduction Plan Item.item_code` of an open
+          Production Plan.
+      (3) Sub-assembly proper: the item has its own open Work Order AND is
+          consumed by a parent Work Order via a shared Production Plan
+          (= "will be used in a parent WO but the item itself has its own
+          open WO"). Independent BOM components are NOT included.
+      (4) Item has at least one OPEN PENDING Sales Order line (no month
+          filter — any pending SO surfaces the item).
+
+    Dropped (per spec — these were broader and cluttered the dashboard):
+      - Items only present in Sales Projection.
+      - Items used purely as BOM components without their own open WO.
+    """
     codes = set()
     wo_sql = _sql_in(wo_statuses)
     so_clause = _so_status_clause(so_statuses)
+    pp_statuses = pp_statuses or _DEFAULT_PP_STATUSES
+    pp_sql = _sql_in(pp_statuses)
 
-    # 1. Auto TOC manufacture items
+    # (1) Auto TOC manufacture items
     rows = frappe.db.sql_list("""
         SELECT name FROM `tabItem`
         WHERE disabled = 0 AND custom_toc_auto_manufacture = 1
     """)
     codes.update(rows)
 
-    # 2. Items in open Work Orders
+    # (2a) Items in open Work Orders
     rows = frappe.db.sql_list(f"""
         SELECT DISTINCT production_item FROM `tabWork Order`
         WHERE docstatus = 1 AND status IN {wo_sql}
     """)
     codes.update(rows)
 
-    # 3. Items in open Sales Orders (curr + prev month)
+    # (2b) Items in open Production Plans
+    rows = frappe.db.sql_list(f"""
+        SELECT DISTINCT ppi.item_code
+        FROM `tabProduction Plan Item` ppi
+        JOIN `tabProduction Plan` pp ON pp.name = ppi.parent
+        WHERE pp.docstatus = 1 AND pp.status IN {pp_sql}
+    """)
+    codes.update(rows)
+
+    # (3) Sub-assembly proper — child WO + same-PP parent that consumes it.
+    #     Implements: "will be used in WO but that item itself has WO".
+    rows = frappe.db.sql_list(f"""
+        SELECT DISTINCT child.production_item
+        FROM `tabWork Order` child
+        WHERE child.docstatus = 1 AND child.status IN {wo_sql}
+          AND IFNULL(child.production_plan, '') != ''
+          AND EXISTS (
+              SELECT 1
+              FROM `tabWork Order` parent
+              JOIN `tabBOM Item` bi ON bi.parent = parent.bom_no
+              WHERE parent.production_plan = child.production_plan
+                AND parent.docstatus = 1
+                AND parent.production_item != child.production_item
+                AND bi.item_code = child.production_item
+          )
+    """)
+    codes.update(rows)
+
+    # (4) Items with open pending Sales Order line (any month).
+    #     Pending = stock_qty − delivered_qty * conversion_factor > 0.
     rows = frappe.db.sql_list(f"""
         SELECT DISTINCT soi.item_code
         FROM `tabSales Order Item` soi
         JOIN `tabSales Order` so ON so.name = soi.parent
         WHERE {so_clause}
-          AND (
-            (MONTH(soi.delivery_date) = {curr_month} AND YEAR(soi.delivery_date) = {curr_year})
-            OR
-            (MONTH(soi.delivery_date) = {prev_month} AND YEAR(soi.delivery_date) = {prev_year})
-          )
-    """)
-    codes.update(rows)
-
-    # 4. Items in current Sales Projection
-    month_name = _MONTH_NAMES[curr_month - 1]
-    rows = frappe.db.sql_list(f"""
-        SELECT DISTINCT spi.item
-        FROM `tabSales Projected Items` spi
-        JOIN `tabSales Projection` sp ON sp.name = spi.parent
-        WHERE sp.projection_month = {frappe.db.escape(month_name)}
-          AND sp.projection_year = {curr_year}
-          AND sp.docstatus IN (0, 1)
-    """)
-    codes.update(rows)
-
-    # 5. Sub-assemblies in active BOMs
-    rows = frappe.db.sql_list("""
-        SELECT DISTINCT bi.item_code
-        FROM `tabBOM Item` bi
-        JOIN `tabBOM` b ON b.name = bi.parent
-        WHERE b.is_active = 1 AND b.docstatus = 1
-          AND bi.item_code IN (
-              SELECT name FROM `tabItem` WHERE disabled = 0
-          )
+          AND (soi.stock_qty - IFNULL(soi.delivered_qty,0) * IFNULL(soi.conversion_factor,1)) > 0
     """)
     codes.update(rows)
 
@@ -1457,23 +2241,297 @@ def get_active_production_plans(item_code, pp_statuses=None):
     return {"item_code": item_code, "plans": _get_pp_list(item_code, pp_statuses)}
 
 
-def _get_wo_counts(item_codes, wo_statuses):
+@frappe.whitelist()
+def get_pp_tree(pp_name):
+    """
+    Hierarchical PP tree for the click-into-PP-id modal. Layers:
+      - Each Work Order in the plan (from `tabWork Order.production_plan`).
+      - Each WO's BOM components (one level — typical FG → SFG/RM/PM split).
+      - For each component, ERPNext-native supply/demand snapshot:
+          * required           : qty needed from BOM × WO qty
+          * consumed           : Stock Entry Detail.qty already consumed for this WO
+          * remaining          : max(required - consumed, 0)
+          * stock              : Bin.actual_qty (sum across all warehouses, since
+                                 PP doesn't pin a warehouse on the component side)
+          * supply_from_po     : Σ open Purchase Order Item qty (purchased items)
+          * supply_from_wo     : Σ open Work Order pending qty (manufactured items)
+          * supply_from_mr     : Σ open Material Request qty (RM-side)
+          * shortage           : max(remaining - stock - supply_from_po
+                                       - supply_from_wo - supply_from_mr, 0)
+      - Items resolved to manufactured vs purchased via
+        `Item.is_purchase_item`, `Item.default_material_request_type`,
+        or active default BOM presence.
+
+    Performance note: bulk-fetches all component data with single SQL calls.
+    """
+    if not pp_name or not frappe.db.exists("Production Plan", pp_name):
+        return {"pp_name": pp_name, "found": False, "work_orders": []}
+
+    pp_doc_meta = frappe.db.get_value("Production Plan", pp_name,
+        ["status", "posting_date", "company", "for_warehouse"], as_dict=True) or {}
+
+    # Step 1: WOs of this plan
+    wo_rows = frappe.db.sql("""
+        SELECT name, production_item, qty AS qty_to_manufacture, produced_qty,
+               status, bom_no, fg_warehouse, planned_start_date
+        FROM `tabWork Order`
+        WHERE production_plan = %s AND docstatus = 1
+        ORDER BY planned_start_date, name
+    """, pp_name, as_dict=True)
+
+    # Step 2: collect all component item_codes across all WO BOMs
+    bom_set = list({w.bom_no for w in wo_rows if w.bom_no})
+    components_by_bom = {}
+    if bom_set:
+        bom_in = _sql_in(bom_set)
+        rows = frappe.db.sql(f"""
+            SELECT bi.parent AS bom_no, bi.item_code, bi.item_name,
+                   bi.stock_qty AS qty_per_unit, bi.stock_uom AS uom
+            FROM `tabBOM Item` bi
+            WHERE bi.parent IN {bom_in}
+            ORDER BY bi.parent, bi.idx
+        """, as_dict=True)
+        for r in rows:
+            components_by_bom.setdefault(r.bom_no, []).append({
+                "item_code":    r.item_code,
+                "item_name":    r.item_name,
+                "qty_per_unit": flt(r.qty_per_unit),
+                "uom":          r.uom or "",
+            })
+
+    all_comp_codes = sorted({c["item_code"] for comps in components_by_bom.values() for c in comps})
+
+    # Step 3: bulk fetch supply data for all components
+    consumed_by_wo_item = {}  # {(wo, item_code): qty}
+    if wo_rows:
+        wo_names = _sql_in([w.name for w in wo_rows])
+        if all_comp_codes:
+            comp_in = _sql_in(all_comp_codes)
+            rows = frappe.db.sql(f"""
+                SELECT se.work_order AS wo, sed.item_code, SUM(sed.qty) AS qty
+                FROM `tabStock Entry Detail` sed
+                JOIN `tabStock Entry` se ON se.name = sed.parent
+                WHERE se.docstatus = 1
+                  AND se.work_order IN {wo_names}
+                  AND sed.item_code IN {comp_in}
+                  AND sed.is_finished_item = 0
+                GROUP BY se.work_order, sed.item_code
+            """, as_dict=True)
+            for r in rows:
+                consumed_by_wo_item[(r.wo, r.item_code)] = flt(r.qty)
+
+    stock_map = _get_stock(all_comp_codes, [], "physical")
+    item_meta = {}
+    if all_comp_codes:
+        comp_in = _sql_in(all_comp_codes)
+        meta_rows = frappe.db.sql(f"""
+            SELECT name, item_name, stock_uom,
+                   COALESCE(is_purchase_item, 0)     AS is_purchase_item,
+                   COALESCE(custom_toc_auto_manufacture, 0) AS auto_manufacture,
+                   default_material_request_type
+            FROM `tabItem`
+            WHERE name IN {comp_in}
+        """, as_dict=True)
+        item_meta = {r.name: r for r in meta_rows}
+
+        # Open POs
+        po_rows = frappe.db.sql(f"""
+            SELECT poi.item_code,
+                   SUM(GREATEST(poi.stock_qty - IFNULL(poi.received_qty,0)
+                       * IFNULL(poi.conversion_factor,1), 0)) AS qty
+            FROM `tabPurchase Order Item` poi
+            JOIN `tabPurchase Order` po ON po.name = poi.parent
+            WHERE po.docstatus = 1
+              AND po.status NOT IN ('Closed','Completed','Cancelled','Delivered')
+              AND poi.item_code IN {comp_in}
+            GROUP BY poi.item_code
+        """, as_dict=True)
+        po_supply_map = {r.item_code: flt(r.qty) for r in po_rows}
+
+        # Open MRs (Material Request)
+        mr_rows = frappe.db.sql(f"""
+            SELECT mri.item_code,
+                   SUM(GREATEST(mri.stock_qty - IFNULL(mri.ordered_qty,0)
+                       * IFNULL(mri.conversion_factor,1), 0)) AS qty
+            FROM `tabMaterial Request Item` mri
+            JOIN `tabMaterial Request` mr ON mr.name = mri.parent
+            WHERE mr.docstatus = 1
+              AND mr.status NOT IN ('Stopped','Cancelled','Issued','Received')
+              AND mri.item_code IN {comp_in}
+            GROUP BY mri.item_code
+        """, as_dict=True)
+        mr_supply_map = {r.item_code: flt(r.qty) for r in mr_rows}
+
+        # Open WOs producing these components (i.e. they are SFG made elsewhere)
+        wo_supply_rows = frappe.db.sql(f"""
+            SELECT production_item AS item_code,
+                   SUM(GREATEST(qty - IFNULL(produced_qty,0), 0)) AS qty
+            FROM `tabWork Order`
+            WHERE docstatus = 1
+              AND status IN ('Not Started','In Process','Material Transferred')
+              AND production_item IN {comp_in}
+            GROUP BY production_item
+        """, as_dict=True)
+        wo_supply_map = {r.item_code: flt(r.qty) for r in wo_supply_rows}
+
+        # Open WO names (for "show work orders" detail)
+        wo_detail_rows = frappe.db.sql(f"""
+            SELECT name, production_item, qty, produced_qty, status, fg_warehouse
+            FROM `tabWork Order`
+            WHERE docstatus = 1
+              AND status IN ('Not Started','In Process','Material Transferred')
+              AND production_item IN {comp_in}
+            ORDER BY production_item, planned_start_date
+        """, as_dict=True)
+        wo_detail_by_item = {}
+        for r in wo_detail_rows:
+            wo_detail_by_item.setdefault(r.production_item, []).append({
+                "wo_name":      r.name,
+                "qty":          flt(r.qty),
+                "produced_qty": flt(r.produced_qty),
+                "pending":      flt(r.qty) - flt(r.produced_qty),
+                "status":       r.status,
+                "fg_warehouse": r.fg_warehouse or "",
+            })
+
+        # Open PO names (for "show po list" detail)
+        po_detail_rows = frappe.db.sql(f"""
+            SELECT poi.parent AS po, poi.item_code, poi.stock_qty,
+                   poi.received_qty, poi.conversion_factor, poi.uom, poi.warehouse,
+                   po.transaction_date, po.schedule_date, po.supplier
+            FROM `tabPurchase Order Item` poi
+            JOIN `tabPurchase Order` po ON po.name = poi.parent
+            WHERE po.docstatus = 1
+              AND po.status NOT IN ('Closed','Completed','Cancelled','Delivered')
+              AND poi.item_code IN {comp_in}
+            ORDER BY poi.item_code, po.schedule_date
+        """, as_dict=True)
+        po_detail_by_item = {}
+        for r in po_detail_rows:
+            pending = flt(r.stock_qty) - flt(r.received_qty) * flt(r.conversion_factor or 1)
+            if pending <= 0:
+                continue
+            po_detail_by_item.setdefault(r.item_code, []).append({
+                "po_name":      r.po,
+                "supplier":     r.supplier or "",
+                "pending_qty":  pending,
+                "uom":          r.uom or "",
+                "warehouse":    r.warehouse or "",
+                "schedule":     str(r.schedule_date or ""),
+            })
+
+        # Open MR names
+        mr_detail_rows = frappe.db.sql(f"""
+            SELECT mri.parent AS mr, mri.item_code, mri.stock_qty,
+                   mri.ordered_qty, mri.conversion_factor, mri.uom, mri.warehouse,
+                   mr.transaction_date, mr.material_request_type
+            FROM `tabMaterial Request Item` mri
+            JOIN `tabMaterial Request` mr ON mr.name = mri.parent
+            WHERE mr.docstatus = 1
+              AND mr.status NOT IN ('Stopped','Cancelled','Issued','Received')
+              AND mri.item_code IN {comp_in}
+            ORDER BY mri.item_code, mr.transaction_date DESC
+        """, as_dict=True)
+        mr_detail_by_item = {}
+        for r in mr_detail_rows:
+            pending = flt(r.stock_qty) - flt(r.ordered_qty) * flt(r.conversion_factor or 1)
+            if pending <= 0:
+                continue
+            mr_detail_by_item.setdefault(r.item_code, []).append({
+                "mr_name":      r.mr,
+                "type":         r.material_request_type or "",
+                "pending_qty":  pending,
+                "uom":          r.uom or "",
+                "warehouse":    r.warehouse or "",
+            })
+    else:
+        po_supply_map = mr_supply_map = wo_supply_map = {}
+        po_detail_by_item = mr_detail_by_item = wo_detail_by_item = {}
+
+    # Step 4: build the tree
+    out_wos = []
+    for w in wo_rows:
+        comps = components_by_bom.get(w.bom_no, [])
+        wo_qty = flt(w.qty_to_manufacture)
+        produced = flt(w.produced_qty)
+        comp_out = []
+        for c in comps:
+            required = round(c["qty_per_unit"] * wo_qty, 3)
+            consumed = flt(consumed_by_wo_item.get((w.name, c["item_code"]), 0))
+            remaining = max(required - consumed, 0)
+            stock = flt(stock_map.get(c["item_code"], 0))
+            po_qty = flt(po_supply_map.get(c["item_code"], 0))
+            mr_qty = flt(mr_supply_map.get(c["item_code"], 0))
+            wo_qty_inb = flt(wo_supply_map.get(c["item_code"], 0))
+            # Classify supply mode for "show WOs vs POs"
+            meta = item_meta.get(c["item_code"]) or {}
+            is_purchase = bool(cint(meta.get("is_purchase_item", 0)))
+            shortage = max(remaining - stock - po_qty - mr_qty - wo_qty_inb, 0)
+            comp_out.append({
+                "item_code":         c["item_code"],
+                "item_name":         c["item_name"],
+                "uom":               c["uom"],
+                "qty_per_unit":      c["qty_per_unit"],
+                "required":          required,
+                "consumed":          consumed,
+                "remaining":         remaining,
+                "stock":             stock,
+                "supply_from_po":    po_qty,
+                "supply_from_wo":    wo_qty_inb,
+                "supply_from_mr":    mr_qty,
+                "shortage":          round(shortage, 3),
+                "is_purchase":       is_purchase,
+                "supply_pos":        po_detail_by_item.get(c["item_code"], [])[:10],
+                "supply_wos":        wo_detail_by_item.get(c["item_code"], [])[:10],
+                "supply_mrs":        mr_detail_by_item.get(c["item_code"], [])[:10],
+            })
+        out_wos.append({
+            "wo_name":            w.name,
+            "production_item":    w.production_item,
+            "bom_no":             w.bom_no,
+            "qty_to_manufacture": wo_qty,
+            "produced_qty":       produced,
+            "remaining_qty":      max(wo_qty - produced, 0),
+            "status":             w.status,
+            "fg_warehouse":       w.fg_warehouse or "",
+            "planned_start_date": str(w.planned_start_date or ""),
+            "components":         comp_out,
+        })
+
+    return {
+        "pp_name":      pp_name,
+        "found":        True,
+        "status":       pp_doc_meta.get("status"),
+        "company":      pp_doc_meta.get("company"),
+        "for_warehouse": pp_doc_meta.get("for_warehouse"),
+        "posting_date": str(pp_doc_meta.get("posting_date") or ""),
+        "work_orders":  out_wos,
+    }
+
+
+def _get_wo_counts(item_codes, wo_statuses, warehouses=None):
     if not item_codes:
         return {}
     codes_sql = _sql_in(item_codes)
     wo_sql    = _sql_in(wo_statuses)
+    wh_clause = _wh_clause(warehouses, "fg_warehouse")
     rows = frappe.db.sql(f"""
         SELECT production_item, COUNT(*) AS cnt
         FROM `tabWork Order`
         WHERE docstatus = 1 AND status IN {wo_sql}
           AND production_item IN {codes_sql}
+          {wh_clause}
         GROUP BY production_item
     """, as_dict=True)
     return {r.production_item: r.cnt for r in rows}
 
 
-def _get_planned_qty(item_codes, wo_statuses):
-    """Sum of planned manufacturing qty for open WOs.
+def _get_planned_qty(item_codes, wo_statuses, warehouses=None):
+    """Sum of planned manufacturing qty for open WOs (warehouse-scoped).
+
+    The warehouse here is `Work Order.fg_warehouse` — where the finished
+    item is targeted to land. Matches what the user means by "warehouse
+    target" on this report.
 
     DANGER: ERPNext Work Order's "Qty To Manufacture" column is named `qty`
     in the database (label only is "Qty To Manufacture"). Do NOT use
@@ -1485,21 +2543,35 @@ def _get_planned_qty(item_codes, wo_statuses):
         return {}
     codes_sql = _sql_in(item_codes)
     wo_sql    = _sql_in(wo_statuses)
+    wh_clause = _wh_clause(warehouses, "fg_warehouse")
     rows = frappe.db.sql(f"""
-        SELECT production_item, SUM(qty) AS total
+        SELECT production_item,
+               SUM(qty) AS total,
+               SUM(IFNULL(produced_qty, 0)) AS produced,
+               SUM(GREATEST(qty - IFNULL(produced_qty, 0), 0)) AS pending_wo_qty
         FROM `tabWork Order`
         WHERE docstatus = 1 AND status IN {wo_sql}
           AND production_item IN {codes_sql}
+          {wh_clause}
         GROUP BY production_item
     """, as_dict=True)
-    return {r.production_item: flt(r.total) for r in rows}
+    out = {}
+    for r in rows:
+        out[r.production_item] = {
+            "planned":   flt(r.total),
+            "produced":  flt(r.produced),
+            "pending":   flt(r.pending_wo_qty),
+        }
+    return out
 
 
-def _get_actual_qty(item_codes, month, year):
-    """Sum of finished item qty from Manufacture STEs in the given month."""
+def _get_actual_qty(item_codes, month, year, warehouses=None):
+    """Sum of finished item qty from Manufacture STEs in the given month.
+    Warehouse filter is `t_warehouse` (target warehouse for the FG)."""
     if not item_codes:
         return {}
     codes_sql = _sql_in(item_codes)
+    wh_clause = _wh_clause(warehouses, "sed.t_warehouse")
     rows = frappe.db.sql(f"""
         SELECT sed.item_code, SUM(sed.transfer_qty) AS total
         FROM `tabStock Entry Detail` sed
@@ -1510,16 +2582,19 @@ def _get_actual_qty(item_codes, month, year):
           AND MONTH(se.posting_date) = {cint(month)}
           AND YEAR(se.posting_date) = {cint(year)}
           AND sed.item_code IN {codes_sql}
+          {wh_clause}
         GROUP BY sed.item_code
     """, as_dict=True)
     return {r.item_code: flt(r.total) for r in rows}
 
 
-def _get_so_qty(item_codes, so_statuses, month, year):
+def _get_so_qty(item_codes, so_statuses, month, year, warehouses=None):
     """
     Sum of pending qty in stock_uom from open SOs with delivery_date in given month.
 
-    Uses ERPNext-native UOM convention:
+    Warehouse scoping uses BOTH `soi.warehouse` (line-level) AND
+    `so.set_warehouse` (header-level), so legacy SOs that only set the header
+    warehouse still match. ERPNext-native UOM:
       pending_stock = soi.stock_qty - delivered_qty * conversion_factor
     (matches `production_plan_engine.py` and `wo_kitting_api.py`.)
     """
@@ -1527,6 +2602,12 @@ def _get_so_qty(item_codes, so_statuses, month, year):
         return {}
     codes_sql = _sql_in(item_codes)
     so_clause = _so_status_clause(so_statuses)
+    wh_clause = ""
+    if warehouses:
+        wh_in = _sql_in(warehouses)
+        wh_clause = (
+            f" AND (COALESCE(NULLIF(soi.warehouse,''), so.set_warehouse) IN {wh_in})"
+        )
     rows = frappe.db.sql(f"""
         SELECT soi.item_code,
                SUM(soi.stock_qty - IFNULL(soi.delivered_qty,0) * IFNULL(soi.conversion_factor,1)) AS total
@@ -1536,17 +2617,53 @@ def _get_so_qty(item_codes, so_statuses, month, year):
           AND MONTH(soi.delivery_date) = {cint(month)}
           AND YEAR(soi.delivery_date) = {cint(year)}
           AND soi.item_code IN {codes_sql}
+          {wh_clause}
         GROUP BY soi.item_code
     """, as_dict=True)
     return {r.item_code: flt(r.total) for r in rows}
 
 
-def _get_has_open_so_map(item_codes, so_statuses):
-    """Returns {item_code: True} for items with at least one pending SO line (any month)."""
+def _get_all_pending_so_qty(item_codes, so_statuses, warehouses=None):
+    """
+    Sum of TOTAL pending SO qty (no month filter) per item, in stock UOM.
+    Used by the Excel "Simple Report" sheet — the planner wants to see
+    every pending order regardless of delivery month.
+
+    pending_stock = stock_qty - delivered_qty * conversion_factor (clamped >= 0).
+    Filtered by selected SO statuses + warehouses (line OR header).
+    """
     if not item_codes:
         return {}
     codes_sql = _sql_in(item_codes)
     so_clause = _so_status_clause(so_statuses)
+    wh_clause = ""
+    if warehouses:
+        wh_in = _sql_in(warehouses)
+        wh_clause = f" AND (COALESCE(NULLIF(soi.warehouse,''), so.set_warehouse) IN {wh_in})"
+    rows = frappe.db.sql(f"""
+        SELECT soi.item_code,
+               SUM(GREATEST(soi.stock_qty - IFNULL(soi.delivered_qty,0)
+                   * IFNULL(soi.conversion_factor,1), 0)) AS total
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE {so_clause}
+          AND soi.item_code IN {codes_sql}
+          {wh_clause}
+        GROUP BY soi.item_code
+    """, as_dict=True)
+    return {r.item_code: flt(r.total) for r in rows}
+
+
+def _get_has_open_so_map(item_codes, so_statuses, warehouses=None):
+    """Returns {item_code: True} for items with at least one pending SO line."""
+    if not item_codes:
+        return {}
+    codes_sql = _sql_in(item_codes)
+    so_clause = _so_status_clause(so_statuses)
+    wh_clause = ""
+    if warehouses:
+        wh_in = _sql_in(warehouses)
+        wh_clause = f" AND (COALESCE(NULLIF(soi.warehouse,''), so.set_warehouse) IN {wh_in})"
     rows = frappe.db.sql(f"""
         SELECT DISTINCT soi.item_code
         FROM `tabSales Order Item` soi
@@ -1554,15 +2671,18 @@ def _get_has_open_so_map(item_codes, so_statuses):
         WHERE {so_clause}
           AND soi.item_code IN {codes_sql}
           AND (soi.stock_qty - IFNULL(soi.delivered_qty,0) * IFNULL(soi.conversion_factor,1)) > 0
+          {wh_clause}
     """)
     return {r[0]: True for r in rows}
 
 
-def _get_dispatch_qty(item_codes, month, year):
-    """Sum of stock_qty from submitted Delivery Notes in given month."""
+def _get_dispatch_qty(item_codes, month, year, warehouses=None):
+    """Sum of stock_qty from submitted Delivery Notes in given month
+    (warehouse-scoped via Delivery Note Item.warehouse)."""
     if not item_codes:
         return {}
     codes_sql = _sql_in(item_codes)
+    wh_clause = _wh_clause(warehouses, "dni.warehouse")
     rows = frappe.db.sql(f"""
         SELECT dni.item_code, SUM(dni.stock_qty) AS total
         FROM `tabDelivery Note Item` dni
@@ -1571,16 +2691,19 @@ def _get_dispatch_qty(item_codes, month, year):
           AND MONTH(dn.posting_date) = {cint(month)}
           AND YEAR(dn.posting_date) = {cint(year)}
           AND dni.item_code IN {codes_sql}
+          {wh_clause}
         GROUP BY dni.item_code
     """, as_dict=True)
     return {r.item_code: flt(r.total) for r in rows}
 
 
-def _get_projection_qty(item_codes, month_name, year):
-    """Sum of qty_in_stock_uom from current Sales Projection."""
+def _get_projection_qty(item_codes, month_name, year, warehouses=None):
+    """Sum of qty_in_stock_uom from current Sales Projection
+    (Sales Projection is warehouse-scoped via `source_warehouse`)."""
     if not item_codes:
         return {}
     codes_sql = _sql_in(item_codes)
+    wh_clause = _wh_clause(warehouses, "sp.source_warehouse")
     rows = frappe.db.sql(f"""
         SELECT spi.item, SUM(spi.qty_in_stock_uom) AS total
         FROM `tabSales Projected Items` spi
@@ -1589,20 +2712,24 @@ def _get_projection_qty(item_codes, month_name, year):
           AND sp.projection_year = {cint(year)}
           AND sp.docstatus IN (0, 1)
           AND spi.item IN {codes_sql}
+          {wh_clause}
         GROUP BY spi.item
     """, as_dict=True)
     return {r.item: flt(r.total) for r in rows}
 
 
-def _get_total_sales_qty(item_codes, month, year):
+def _get_total_sales_qty(item_codes, month, year, warehouses=None):
     """
     Total sales qty (dispatched + pending) booked for the given month.
-    Submitted SOs only (docstatus = 1) — Drafts are not "sales" yet even if
-    the workflow says Confirmed; that's intentional and matches ERPNext semantics.
+    Submitted SOs only (docstatus = 1).
     """
     if not item_codes:
         return {}
     codes_sql = _sql_in(item_codes)
+    wh_clause = ""
+    if warehouses:
+        wh_in = _sql_in(warehouses)
+        wh_clause = f" AND (COALESCE(NULLIF(soi.warehouse,''), so.set_warehouse) IN {wh_in})"
     rows = frappe.db.sql(f"""
         SELECT soi.item_code, SUM(soi.stock_qty) AS total
         FROM `tabSales Order Item` soi
@@ -1611,6 +2738,7 @@ def _get_total_sales_qty(item_codes, month, year):
           AND MONTH(soi.delivery_date) = {cint(month)}
           AND YEAR(soi.delivery_date) = {cint(year)}
           AND soi.item_code IN {codes_sql}
+          {wh_clause}
         GROUP BY soi.item_code
     """, as_dict=True)
     return {r.item_code: flt(r.total) for r in rows}
@@ -1691,6 +2819,12 @@ def _get_shortage_summary(item_codes, bom_map, stock_map):
     """
     Shallow BOM walk — check if any component is short.
     Returns {item_code: {has_shortage: bool, short_components: [...]}}
+
+    Each short_component now carries `item_name` and `in_stock` so the
+    frontend can render a complete shortage line everywhere it appears
+    (overview hover preview, item detail modal, shortage modal). Per the
+    2026-05-01 spec: "where the system shows shortage materials, show
+    item name and current stock too — not just item code."
     """
     result = {}
     for code in item_codes:
@@ -1707,8 +2841,10 @@ def _get_shortage_summary(item_codes, bom_map, stock_map):
             if in_stk < req_qty:
                 short.append({
                     "item_code": comp["item_code"],
+                    "item_name": comp.get("item_name", ""),
                     "required":  req_qty,
                     "in_stock":  in_stk,
+                    "stock":     in_stk,   # alias — JS uses both names
                     "shortage":  round(req_qty - in_stk, 3),
                     "uom":       comp["uom"],
                 })
@@ -1848,17 +2984,23 @@ def _walk_bom_deep(bom_name, qty_to_produce, warehouses, stock_mode, depth=0, ma
                               max_depth=max_depth, depth=depth)
 
 
-def _get_open_docs_for_item(item_code):
-    """Returns open POs and MRs for a component item (for stage badge)."""
+def _get_open_docs_for_item(item_code, po_statuses=None):
+    """Returns open POs and MRs for a component item (for stage badge).
+
+    `po_statuses` defaults to the user-configurable pending list — if not
+    supplied, falls back to the module-level default. We never hardcode the
+    universe of statuses anywhere; this matches the user-supplied filter.
+    """
     docs = []
-    # Open POs
-    po_rows = frappe.db.sql("""
+    po_statuses = po_statuses or _DEFAULT_PO_STATUSES
+    po_sql = _sql_in(po_statuses)
+    po_rows = frappe.db.sql(f"""
         SELECT poi.parent AS doc, 'Purchase Order' AS type,
                poi.qty, poi.received_qty, poi.uom
         FROM `tabPurchase Order Item` poi
         JOIN `tabPurchase Order` po ON po.name = poi.parent
         WHERE po.docstatus = 1
-          AND po.status IN ('To Receive and Bill', 'To Receive', 'Partially Received')
+          AND po.status IN {po_sql}
           AND poi.item_code = %s
         LIMIT 5
     """, item_code, as_dict=True)
@@ -1870,13 +3012,15 @@ def _get_open_docs_for_item(item_code):
         "uom":  r.uom,
     } for r in po_rows])
 
-    # Open MRs
+    # Open MRs — keep the canonical "open" definition (Submitted +
+    # Partially Ordered). If the user later wants this configurable too,
+    # accept an `mr_statuses` arg here.
     mr_rows = frappe.db.sql("""
         SELECT mri.parent AS doc, mri.qty, mri.uom
         FROM `tabMaterial Request Item` mri
         JOIN `tabMaterial Request` mr ON mr.name = mri.parent
         WHERE mr.docstatus = 1
-          AND mr.status IN ('Submitted', 'Partially Ordered')
+          AND mr.status IN ('Submitted', 'Partially Ordered', 'Pending')
           AND mri.item_code = %s
         LIMIT 5
     """, item_code, as_dict=True)

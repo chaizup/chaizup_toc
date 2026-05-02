@@ -59,7 +59,13 @@ class ProductionOverview {
         this._selWh     = [];     // [] = all warehouses
         this._selWo     = [];     // populated by get_default_statuses
         this._selSo     = [];
+        this._selPo     = [];     // PO Status filter
         this._planMode  = false;
+        this._planSubmode = "independent";  // "independent" | "priority"
+        // Sort + search
+        this._sortKey   = "";       // header click sets this
+        this._sortDir   = "asc";    // "asc" | "desc"
+        this._searchTxt = "";       // universal search substring (lowercased)
         // AI state
         this._aiModel   = "deepseek-chat";
         this._aiContext = null;
@@ -71,12 +77,129 @@ class ProductionOverview {
         this._init();
     }
 
+    // Doctype hyperlink helper — used across the page so every doc id is a
+    // hyperlink that opens /app/<route>/<name> in a new tab. The affordance is
+    // the same everywhere so users learn it once.
+    _dl(doctype, name, label) {
+        if (!name) return "";
+        const route = String(doctype).toLowerCase().replace(/\s+/g, "-");
+        const display = label != null ? label : name;
+        return `<a class="por-doclink" target="_blank" rel="noopener noreferrer"
+                  href="/app/${route}/${encodeURIComponent(name)}"
+                  title="Open ${this._esc(doctype)} ${this._esc(name)} in a new tab">${this._esc(display)}</a>`;
+    }
+
     // ── Init ─────────────────────────────────────────────────────────────
     async _init() {
         this._setupFullHeight();
+        this._setupTooltips();   // custom hover-tip — must run before any HTML renders
         await this._loadDefaults();
         this._bindEvents();
         this._initAIPanel();
+    }
+
+    // ── Custom Tooltip System ─────────────────────────────────────────────
+    // Why custom: native `title=` tooltips have a 700ms+ browser delay AND
+    // are visually inconsistent across OS. The user reported "tooltips not
+    // working". Reality is they DID fire — just very late. This replaces the
+    // native tooltip with an instant, styled, multi-line popover.
+    //
+    // Mechanism:
+    //   - Single global `#por-tooltip` div appended to <body>.
+    //   - Delegated `mouseover` on `#por-root` reads `[title]` or `[data-tip]`
+    //     of the hovered element, hides the native title (by moving it to
+    //     `data-orig-title` so it can be restored), and shows the custom tip.
+    //   - `mousemove` repositions, `mouseout` hides.
+    //   - All existing `title="..."` attributes work without HTML edits.
+    _setupTooltips() {
+        const root = document.getElementById("por-root");
+        if (!root) return;
+        let tip = document.getElementById("por-tooltip");
+        if (!tip) {
+            tip = document.createElement("div");
+            tip.id = "por-tooltip";
+            tip.className = "por-tooltip";
+            tip.style.display = "none";
+            document.body.appendChild(tip);
+        }
+
+        const showTip = (target, x, y) => {
+            // Suppress native browser tooltip by stashing the title.
+            if (target.hasAttribute("title")) {
+                const orig = target.getAttribute("title");
+                if (orig) {
+                    target.setAttribute("data-orig-title", orig);
+                    target.removeAttribute("title");
+                }
+            }
+            const text = target.dataset.origTitle || target.dataset.tip || "";
+            if (!text) return;
+            // innerText preserves \n line breaks; CSS uses white-space:pre-wrap
+            tip.innerText = text;
+            tip.style.display = "block";
+            this._positionTip(tip, x, y);
+        };
+
+        const hideTip = (target) => {
+            tip.style.display = "none";
+            if (target && target.dataset && target.dataset.origTitle) {
+                target.setAttribute("title", target.dataset.origTitle);
+                delete target.dataset.origTitle;
+            }
+        };
+
+        // mouseover bubbles, so a single delegated handler covers everything.
+        root.addEventListener("mouseover", (e) => {
+            const el = e.target.closest("[title], [data-tip]");
+            if (!el || !root.contains(el)) return;
+            showTip(el, e.clientX, e.clientY);
+        });
+        root.addEventListener("mousemove", (e) => {
+            if (tip.style.display === "block") {
+                this._positionTip(tip, e.clientX, e.clientY);
+            }
+        });
+        root.addEventListener("mouseout", (e) => {
+            const el = e.target.closest("[title], [data-orig-title], [data-tip]");
+            if (!el) return;
+            // If still inside the same element (moving over a child), keep open.
+            if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+            hideTip(el);
+        });
+        // Also hide on scroll / blur so a stale tip never sticks
+        window.addEventListener("scroll", () => { tip.style.display = "none"; }, true);
+        window.addEventListener("blur",   () => { tip.style.display = "none"; });
+
+        this._tipEl = tip;
+    }
+
+    // Visual cue when filters change so user knows to click Load.
+    // Also marks chart/AI caches stale so the next view refetches.
+    _markFiltersDirty() {
+        this._chartsLoaded = false;
+        this._aiInsightLoaded = false;
+        const btn = document.getElementById("por-load-btn");
+        if (btn) {
+            btn.classList.add("por-load-pulse");
+            // Auto-stop pulse after 6s in case the user gets distracted
+            clearTimeout(this._pulseTo);
+            this._pulseTo = setTimeout(() => btn.classList.remove("por-load-pulse"), 6000);
+        }
+    }
+
+    _positionTip(tip, x, y) {
+        // Place 12 px below+right of cursor, but flip if it would overflow.
+        const margin = 8;
+        const w = tip.offsetWidth;
+        const h = tip.offsetHeight;
+        let left = x + 14;
+        let top  = y + 14;
+        if (left + w + margin > window.innerWidth)  left = window.innerWidth - w - margin;
+        if (top  + h + margin > window.innerHeight) top  = y - h - 14;
+        if (top < margin)  top = margin;
+        if (left < margin) left = margin;
+        tip.style.left = left + "px";
+        tip.style.top  = top  + "px";
     }
 
     _setupFullHeight() {
@@ -112,7 +235,7 @@ class ProductionOverview {
         monthSel.value = String(now.getMonth() + 1);
         yearInp.value  = String(now.getFullYear());
 
-        // ── WO/SO default statuses + warehouse list ────────────────────
+        // ── WO/SO/PO default statuses + warehouse list ──────────────────
         frappe.call({
             method: "chaizup_toc.api.production_overview_api.get_default_statuses",
             callback: (r) => {
@@ -120,10 +243,13 @@ class ProductionOverview {
                 const d = r.message;
                 this._selWo = [...(d.wo_statuses || [])];
                 this._selSo = [...(d.so_statuses || [])];
+                this._selPo = [...(d.po_statuses || [])];
                 this._populateMsPanel("por-wo-status-list", "por-wo-panel", "por-wo-label",
                     d.all_wo_statuses || [], this._selWo);
                 this._populateMsPanel("por-so-status-list", "por-so-panel", "por-so-label",
                     d.all_so_statuses || [], this._selSo);
+                this._populateMsPanel("por-po-status-list", "por-po-panel", "por-po-label",
+                    d.all_po_statuses || [], this._selPo);
             }
         });
 
@@ -145,9 +271,18 @@ class ProductionOverview {
     }
 
     // ── Event binding ─────────────────────────────────────────────────────
+    // EVERY DOM lookup here is null-guarded. Reason: if any one element is
+    // missing in a stale cached template, an unguarded lookup throws and the
+    // entire bootstrap aborts — page renders blank. Defensive null checks
+    // make the page degrade gracefully (the missing feature simply doesn't
+    // bind) instead of taking down everything.
     _bindEvents() {
+        const $on = (id, ev, fn) => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener(ev, fn);
+        };
         // Load button
-        document.getElementById("por-load-btn").addEventListener("click", () => this._loadData());
+        $on("por-load-btn", "click", () => this._loadData());
 
         // Tab switching
         document.querySelectorAll(".por-tab-btn").forEach(btn => {
@@ -155,46 +290,54 @@ class ProductionOverview {
         });
 
         // Planning mode toggle + sub-mode (Independent / Priority)
+        // All DOM lookups are null-guarded so a single missing element from a
+        // stale cached template never breaks the entire page bootstrap.
         const planToggle = document.getElementById("por-planning-toggle");
         const planSub    = document.getElementById("por-plan-submode");
-        planToggle.addEventListener("change", () => {
-            this._planMode = planToggle.checked;
-            document.getElementById("por-planning-lbl").textContent = this._planMode ? "On" : "Off";
-            // Show sub-mode selector only when Planning Mode is ON.
-            planSub.style.display = this._planMode ? "" : "none";
-            if (this._data) {
-                if (this._planMode && planSub.value === "priority") {
-                    this._recalcPriorityPossibleQty();
+        const planLbl    = document.getElementById("por-planning-lbl");
+        if (planToggle) {
+            planToggle.addEventListener("change", () => {
+                this._planMode = planToggle.checked;
+                if (planLbl) planLbl.textContent = this._planMode ? "On" : "Off";
+                if (planSub) planSub.style.display = this._planMode ? "" : "none";
+                if (this._data) {
+                    if (this._planMode && planSub && planSub.value === "priority") {
+                        this._recalcPriorityPossibleQty();
+                    }
+                    this._renderTable(this._currentVisibleItems());
                 }
-                this._renderTable(this._data.items);
-            }
-        });
-        planSub.addEventListener("change", () => {
-            this._planSubmode = planSub.value;  // "independent" | "priority"
-            if (this._data) {
-                if (this._planSubmode === "priority") this._recalcPriorityPossibleQty();
-                else this._restoreIndependentPossibleQty();
-                this._renderTable(this._data.items);
-            }
-        });
+            });
+        }
+        if (planSub) {
+            planSub.addEventListener("change", () => {
+                this._planSubmode = planSub.value;
+                if (this._data) {
+                    if (this._planSubmode === "priority") this._recalcPriorityPossibleQty();
+                    else this._restoreIndependentPossibleQty();
+                    this._renderTable(this._currentVisibleItems());
+                }
+            });
+        }
 
         // Select-all checkbox
-        document.getElementById("por-select-all").addEventListener("change", function () {
+        $on("por-select-all", "change", function () {
             document.querySelectorAll(".por-row-chk").forEach(c => c.checked = this.checked);
         });
 
         // Table delegation: item click, shortage view, cost, production plans
         const tbody = document.getElementById("por-tbody");
-        tbody.addEventListener("click", (e) => {
-            const ic   = e.target.closest(".por-ic");
-            const view = e.target.closest(".por-view-shortage");
-            const cost = e.target.closest(".por-cost-btn");
-            const pp   = e.target.closest(".por-pp-btn");
-            if (ic)   this._openItemModal(ic.dataset.code);
-            if (view) this._openShortageModal(view.dataset.code);
-            if (cost) this._openCostModal(cost.dataset.code);
-            if (pp)   this._openPpModal(pp.dataset.code);
-        });
+        if (tbody) {
+            tbody.addEventListener("click", (e) => {
+                const ic   = e.target.closest(".por-ic");
+                const view = e.target.closest(".por-view-shortage");
+                const cost = e.target.closest(".por-cost-btn");
+                const pp   = e.target.closest(".por-pp-btn");
+                if (ic)   this._openItemModal(ic.dataset.code);
+                if (view) this._openShortageModal(view.dataset.code);
+                if (cost) this._openCostModal(cost.dataset.code);
+                if (pp)   this._openPpModal(pp.dataset.code);
+            });
+        }
 
         // Multi-select dropdown open/close
         document.addEventListener("click", (e) => {
@@ -227,8 +370,83 @@ class ProductionOverview {
                 if (panelId === "por-wh-panel")  this._updateMsLabel("por-wh-panel", "por-wh-label");
                 if (panelId === "por-wo-panel")  this._updateMsLabel("por-wo-panel", "por-wo-label");
                 if (panelId === "por-so-panel")  this._updateMsLabel("por-so-panel", "por-so-label");
+                if (panelId === "por-po-panel")  this._updateMsLabel("por-po-panel", "por-po-label");
             }
         });
+
+        // Header click — column sort
+        const thead = document.querySelector("#por-table thead");
+        if (thead) {
+            thead.addEventListener("click", (e) => {
+                const th = e.target.closest("th.por-th-sortable");
+                if (!th) return;
+                const key = th.dataset.sort;
+                if (!key) return;
+                if (this._sortKey === key) {
+                    this._sortDir = this._sortDir === "asc" ? "desc" : "asc";
+                } else {
+                    this._sortKey = key;
+                    this._sortDir = "asc";
+                }
+                this._renderHeaderSortIndicators();
+                if (this._data) this._renderTable(this._currentVisibleItems());
+            });
+        }
+
+        // ── Filter change notifications ───────────────────────────────────
+        // When ANY filter (warehouse, statuses, stock mode, period) changes,
+        // we want two things:
+        //   (1) A toast telling the user what changed and that they need to
+        //       click Load to apply it across all tabs.
+        //   (2) The Load button visually pulses so the user notices.
+        //
+        // We also invalidate cached data on chart/AI panes so the next click
+        // refetches. The actual data fetch happens on Load click — auto
+        // refetch on every keystroke would hammer the server (785 items).
+        const _toastFilter = (label, value) => {
+            this._markFiltersDirty();
+            const v = String(value).slice(0, 60);
+            frappe.show_alert({
+                message: `<b>Filter changed:</b> ${this._esc(label)} → <code>${this._esc(v)}</code><br>
+                          <small>Click <b>Load</b> to apply across Overview, AI Advisor &amp; Charts.</small>`,
+                indicator: "blue",
+            }, 5);
+        };
+
+        const fcompany = document.getElementById("por-company");
+        if (fcompany) fcompany.addEventListener("change", () => _toastFilter("Company", fcompany.value));
+        const fmonth   = document.getElementById("por-month");
+        if (fmonth)   fmonth.addEventListener("change",   () => _toastFilter("Month", fmonth.options[fmonth.selectedIndex]?.text || fmonth.value));
+        const fyear    = document.getElementById("por-year");
+        if (fyear)    fyear.addEventListener("change",    () => _toastFilter("Year", fyear.value));
+        const fstock   = document.getElementById("por-stock-mode");
+        if (fstock)   fstock.addEventListener("change",   () => _toastFilter("Stock View", fstock.options[fstock.selectedIndex]?.text || fstock.value));
+
+        // Multi-selects update via the .por-ms-chk change handler above; piggy-back here.
+        document.addEventListener("change", (e) => {
+            if (!e.target.classList || !e.target.classList.contains("por-ms-chk")) return;
+            const panel = e.target.closest(".por-ms-panel");
+            const map = {
+                "por-wh-panel": "Warehouses",
+                "por-wo-panel": "WO Status",
+                "por-so-panel": "SO Status",
+                "por-po-panel": "PO Status",
+            };
+            const lbl = panel ? map[panel.id] : null;
+            if (lbl) _toastFilter(lbl, e.target.value + (e.target.checked ? " ✓" : " ✗"));
+        });
+
+        // Universal search
+        const search = document.getElementById("por-search");
+        if (search) {
+            search.addEventListener("input", () => {
+                this._searchTxt = (search.value || "").toLowerCase().trim();
+                if (this._data) this._renderTable(this._currentVisibleItems());
+            });
+            search.addEventListener("keydown", (e) => {
+                if (e.key === "Escape") { search.value = ""; this._searchTxt = ""; if (this._data) this._renderTable(this._currentVisibleItems()); }
+            });
+        }
 
         // Modal close via data-close-modal
         document.addEventListener("click", (e) => {
@@ -239,14 +457,22 @@ class ProductionOverview {
             if (overlay && e.target === overlay) this._closeModal(overlay.id);
         });
 
-        // Item group filter
-        document.getElementById("por-grp-filter").addEventListener("change", (e) => {
-            this._applyGroupFilter(e.target.value);
+        // PP modal — clicking the PP id opens the PP-Tree modal.
+        // (Bound globally because the PP modal body is rendered dynamically.)
+        document.addEventListener("click", (e) => {
+            const treeBtn = e.target.closest(".por-pp-tree-btn");
+            if (treeBtn) {
+                e.preventDefault();
+                this._openPpTreeModal(treeBtn.dataset.pp);
+            }
         });
 
+        // Item group filter
+        $on("por-grp-filter", "change", (e) => this._applyGroupFilter(e.target.value));
+
         // Export buttons
-        document.getElementById("por-export-csv").addEventListener("click", () => this._exportCSV());
-        document.getElementById("por-export-excel").addEventListener("click", () => this._exportExcel());
+        $on("por-export-csv",   "click", () => this._exportCSV());
+        $on("por-export-excel", "click", () => this._exportExcel());
     }
 
     // ── Tab switching ─────────────────────────────────────────────────────
@@ -270,8 +496,18 @@ class ProductionOverview {
         const month = document.getElementById("por-month").value;
         const year  = document.getElementById("por-year").value;
 
+        // Stop the filter-changed pulse — user is acting on it now.
+        const btn = document.getElementById("por-load-btn");
+        if (btn) btn.classList.remove("por-load-pulse");
+        clearTimeout(this._pulseTo);
+
+        // Invalidate caches on EVERY tab so the next view is fresh.
+        this._chartsLoaded     = false;
+        this._aiInsightLoaded  = false;
+
         this._selWo = this._getSelectedMs("por-wo-status-list");
         this._selSo = this._getSelectedMs("por-so-status-list");
+        this._selPo = this._getSelectedMs("por-po-status-list");
         this._selWh = this._getSelectedMs("por-wh-list");
 
         this._showState("loading");
@@ -285,6 +521,7 @@ class ProductionOverview {
                 warehouses: JSON.stringify(this._selWh),
                 wo_statuses: JSON.stringify(this._selWo),
                 so_statuses: JSON.stringify(this._selSo),
+                po_statuses: JSON.stringify(this._selPo),
                 stock_mode: document.getElementById("por-stock-mode").value,
                 planning_mode: this._planMode ? 1 : 0,
             },
@@ -292,8 +529,16 @@ class ProductionOverview {
                 if (!r.message) { this._showState("empty"); return; }
                 this._data   = r.message;
                 this._period = r.message.period;
-                this._chartsLoaded = false;
+                this._chartsLoaded    = false;
+                this._aiInsightLoaded = false;
                 this._render(r.message);
+                // Confirmation toast — tells the user the filter applied across all tabs.
+                const itemCount = (r.message.items || []).length;
+                frappe.show_alert({
+                    message: `Loaded <b>${itemCount}</b> items for <b>${this._esc(this._period?.month_name || "")} ${this._esc(this._period?.year || "")}</b>.<br>
+                              <small>All tabs (Overview, AI Advisor, Charts) will use this dataset.</small>`,
+                    indicator: "green",
+                }, 5);
                 // Auto-fetch AI insight in background
                 if (this._aiModel) this._fetchAutoInsight();
             },
@@ -325,38 +570,101 @@ class ProductionOverview {
         // Item group filter
         this._buildGroupFilter(items);
 
+        // Universal search box becomes visible after first load
+        const sw = document.getElementById("por-search-wrap");
+        if (sw) sw.style.display = "block";
+
         // Export buttons
         document.getElementById("por-export-csv").style.display   = "inline-flex";
         document.getElementById("por-export-excel").style.display = "inline-flex";
     }
 
+    // Returns items array filtered by current group + search, in current sort order.
+    _currentVisibleItems() {
+        if (!this._data || !this._data.items) return [];
+        let items = this._data.items.slice();
+        // Group filter (selected via #por-grp-filter)
+        const grp = document.getElementById("por-grp-filter");
+        const gv = grp ? grp.value : "";
+        if (gv) items = items.filter(i => (i.item_group || "") === gv);
+        // Search
+        if (this._searchTxt) {
+            const q = this._searchTxt;
+            items = items.filter(i => {
+                const blob = [
+                    i.item_code, i.item_name, i.item_group, i.active_bom,
+                    (i.sub_assembly_wos || []).map(p => p.production_plan).join(" "),
+                ].join(" ").toLowerCase();
+                return blob.indexOf(q) !== -1;
+            });
+        }
+        // Sort
+        if (this._sortKey) {
+            const k = this._sortKey;
+            const dir = this._sortDir === "asc" ? 1 : -1;
+            items.sort((a, b) => {
+                const va = a[k]; const vb = b[k];
+                // String sort vs number sort
+                if (typeof va === "number" || typeof vb === "number") {
+                    return ((va || 0) - (vb || 0)) * dir;
+                }
+                if (typeof va === "boolean") return ((va ? 1 : 0) - (vb ? 1 : 0)) * dir;
+                return String(va || "").localeCompare(String(vb || "")) * dir;
+            });
+        }
+        return items;
+    }
+
+    _renderHeaderSortIndicators() {
+        document.querySelectorAll("#por-table thead th.por-th-sortable").forEach(th => {
+            th.classList.remove("por-sort-asc", "por-sort-desc");
+            if (th.dataset.sort === this._sortKey) {
+                th.classList.add(this._sortDir === "asc" ? "por-sort-asc" : "por-sort-desc");
+            }
+        });
+    }
+
     _renderSummary(s) {
-        document.getElementById("por-s-total").textContent    = s.total_items;
-        document.getElementById("por-s-shortage").textContent = s.items_with_shortage;
-        document.getElementById("por-s-ok").textContent       = s.items_no_shortage;
-        document.getElementById("por-s-planned").textContent  = this._formatNum(s.total_planned_qty);
-        document.getElementById("por-s-orders").textContent   = this._formatNum(s.total_curr_orders);
-        document.getElementById("por-s-dispatch").textContent = this._formatNum(s.total_dispatch);
-        document.getElementById("por-summary-strip").style.display = "flex";
+        // EVERY number on these cards is an ITEM COUNT — never a qty.
+        // Mixing UOMs across items would make sums meaningless.
+        const set = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = (v == null ? "0" : v);
+        };
+        set("por-s-total",      s.total_items || 0);
+        set("por-s-shortage",   s.items_with_shortage || 0);
+        set("por-s-ok",         s.items_no_shortage || 0);
+        set("por-s-planned",    s.items_with_open_wos || 0);
+        set("por-s-orders",     s.items_with_curr_so || 0);
+        set("por-s-dispatch",   s.items_dispatched || 0);
+        set("por-s-blocked",    s.items_blocked || 0);
+        set("por-s-target-hit", s.items_target_hit || 0);
+        const strip = document.getElementById("por-summary-strip");
+        if (strip) strip.style.display = "flex";
     }
 
     _renderTable(items) {
         const tbody = document.getElementById("por-tbody");
-        tbody.innerHTML = items.map(item => this._buildRow(item)).join("");
+        // Priority Mode recompute is row-order-sensitive — apply BEFORE building
+        // rows. After this call, item.possible_qty reflects priority simulation.
+        if (this._planMode && this._planSubmode === "priority") {
+            this._recalcPriorityPossibleQty(items);
+        }
+        tbody.innerHTML = items.map((item, idx) => this._buildRow(item, idx + 1)).join("");
         // Count badge
         document.getElementById("por-vis-count").textContent = items.length;
         document.getElementById("por-count-badge").style.display = "block";
     }
 
-    _buildRow(item) {
+    _buildRow(item, seqNum) {
         const code   = this._esc(item.item_code);
         const name   = this._esc(item.item_name);
         const group  = this._esc(item.item_group || "");
         const uom    = item.stock_uom || "";
         const conv   = item.uom_conversions || [];
         const pm     = this._planMode;
-
-        const typeBadge = this._typeBadgeHtml(item.item_type);
+        const seqHtml = `<span class="por-seq${pm && this._planSubmode === "priority" ? " priority" : ""}"
+                            title="Priority sequence — row #${seqNum} of the current sort order. In Priority Planning Mode, earlier rows take precedence in the stock pool.">${seqNum}</span>`;
 
         // Sub-Asm chip with hover-list of parent WOs (with shortage qty)
         let subAsmHtml = `<span style="color:var(--por-sl-300);font-size:11px;">—</span>`;
@@ -365,12 +673,12 @@ class ProductionOverview {
             const rows = parents.length
                 ? parents.slice(0, 8).map(p => `
                     <div class="por-subasm-row">
-                      <span style="font-family:monospace;color:var(--por-brand);">${this._esc(p.wo_name)}</span>
-                      <span style="color:var(--por-muted);"> ← parent: ${this._esc(p.parent_item || "?")}</span>
+                      ${this._dl("Work Order", p.wo_name)}
+                      <span style="color:var(--por-muted);"> &lt;- parent: ${this._esc(p.parent_item || "?")}</span>
                       <div style="font-size:10px;color:var(--por-sl-700);">
                         Need <strong>${this._formatNum(p.required_qty || 0)}</strong> ${this._esc(uom)}
                         for parent qty ${this._formatNum(p.parent_qty || 0)}
-                        (PP: <span style="font-family:monospace;">${this._esc(p.production_plan || "")}</span>)
+                        (PP: ${this._dl("Production Plan", p.production_plan || "")})
                       </div>
                     </div>`).join("")
                 : `<div style="color:var(--por-muted);">No parent WO mapping found.</div>`;
@@ -406,14 +714,53 @@ class ProductionOverview {
                     ? `<span class="por-cov-mid" title="${covTip} = ${cov}% — partially covered.">${cov}%</span>`
                     : `<span class="por-cov-lo" title="${covTip} = ${cov}% — under-planned.">${cov}%</span>`;
 
+        // Shortage cell — hover lists top short components with item code +
+        // name + current stock (per 2026-05-01 spec). Click View for the
+        // by-WO breakdown modal.
+        let shortPreview = "Active BOM has component shortages. Click View for breakdown.";
+        if (item.has_shortage && (item.shortage_components || []).length) {
+            shortPreview = "Top short components (item code | name | required vs current stock):\n";
+            for (const c of item.shortage_components) {
+                const stk = c.in_stock != null ? c.in_stock : (c.stock || 0);
+                shortPreview += `\n${c.item_code}  ${c.item_name || ""}  need ${this._formatNum(c.required)} ${c.uom || ""}  |  stock ${this._formatNum(stk)}  |  short ${this._formatNum(c.shortage)}`;
+            }
+            shortPreview += "\n\nClick View for the full by-Work-Order breakdown.";
+        }
         const shortageHtml = item.has_shortage
-            ? `<span class="por-short-warn" title="Active BOM has component shortages. Click View for breakdown."><i class="fa-solid fa-triangle-exclamation"></i> Short</span>
-               <button class="por-btn por-btn-err por-btn-sm por-view-shortage" style="margin-left:4px;" data-code="${code}"><i class="fa-solid fa-eye"></i> View</button>`
-            : `<span class="por-short-ok" title="All active-BOM components have sufficient stock for the current possible qty."><i class="fa-solid fa-circle-check"></i> OK</span>`;
+            ? `<span class="por-short-warn" title="${this._esc(shortPreview)}"><i class="fa-solid fa-triangle-exclamation"></i> Short</span>
+               <button class="por-btn por-btn-err por-btn-sm por-view-shortage" style="margin-left:4px;" data-code="${code}"
+                       title="Open the full by-Work-Order shortage modal."><i class="fa-solid fa-eye"></i> View</button>`
+            : `<span class="por-short-ok" title="All active-BOM components have sufficient stock for the current Possible Qty. Source: tabBOM Item required vs Bin.actual_qty."><i class="fa-solid fa-circle-check"></i> OK</span>`;
 
+        // Active BOM as hyperlink (opens in new tab)
         const bomHtml = item.active_bom
-            ? `<span class="por-bom-lnk" title="${this._esc(item.active_bom)}">${this._esc(item.active_bom.length > 20 ? item.active_bom.slice(0,18) + "…" : item.active_bom)}</span>`
+            ? this._dl("BOM", item.active_bom,
+                item.active_bom.length > 22 ? item.active_bom.slice(0, 20) + "..." : item.active_bom)
             : `<span class="por-no-bom" title="No active default BOM. Possible Qty and Shortage cannot be calculated.">No BOM</span>`;
+
+        // Target Production cell — show driving source pill (Projection vs Order)
+        const tgt = item.target_production || 0;
+        const tgtPill = item.curr_projection >= item.total_curr_sales
+            ? `<span class="por-target-pill por-target-proj" title="Projection drives the target this month.">Projection</span>`
+            : `<span class="por-target-pill por-target-order" title="Orders drive the target this month.">Order</span>`;
+        const tgtCalc = `Target = max(Projection ${this._formatNum(item.curr_projection)}, Total Sales ${this._formatNum(item.total_curr_sales)})`;
+        const tgtHtml = tgt > 0
+            ? `${this._fmtQ(tgt, conv, uom, tgtCalc)} <div style="margin-top:2px;">${tgtPill}</div>`
+            : `<span class="por-q por-q-zero" title="No demand or projection — no target.">0</span> <span class="por-q-uom">${this._esc(uom)}</span>`;
+
+        // % Target Achieved
+        const ach = item.target_achieved_pct || 0;
+        const achTip = `Gap = max(Curr SO ${this._formatNum(item.curr_month_order)} - (Pending WO ${this._formatNum(item.pending_wo_qty || 0)} + Stock ${this._formatNum(item.stock)}), 0)
+Achieved = max(Target ${this._formatNum(tgt)} - Gap ${this._formatNum(item.target_gap || 0)}, 0)
+Achieved % = Achieved / Target * 100 = ${ach}%
+Warehouse-scoped to your filter.`;
+        const achHtml = !tgt
+            ? `<span class="por-cov-na" title="No target this month.">--</span>`
+            : ach >= 90
+                ? `<span class="por-ach-hi" title="${achTip}">${ach}%</span>`
+                : ach >= 50
+                    ? `<span class="por-ach-mid" title="${achTip}">${ach}%</span>`
+                    : `<span class="por-ach-lo" title="${achTip}">${ach}%</span>`;
 
         // Production Plans cell — count chip + view button if any active PP
         const ppCount = item.pp_count || 0;
@@ -434,14 +781,23 @@ class ProductionOverview {
         const tipStock     = `Bin.${this._esc(document.getElementById("por-stock-mode").value === "expected" ? "actual_qty + ordered_qty + planned_qty" : "actual_qty")}`;
         const tipPossible  = "min(component_in_stock ÷ qty_per_unit) over all 1-level BOM components";
 
+        // Item code is now a hyperlink to /app/item/<code> AND triggers the
+        // detail modal on click of the chevron icon (data-code).
+        const itemHeaderHtml = `
+            <div style="display:flex;align-items:center;gap:6px;">
+              ${this._dl("Item", item.item_code, item.item_code)}
+              <button class="por-ic" data-code="${code}" title="Open the item-detail modal (open WOs, sub-asm chain, batch consumption)"
+                      style="border:none;background:transparent;cursor:pointer;color:var(--por-brand);">
+                <i class="fa-solid fa-circle-info" style="font-size:11px;"></i>
+              </button>
+            </div>
+            <span class="por-in" title="${name}">${name}</span>`;
+
         return `<tr data-code="${code}" data-group="${group}" data-has-so="${item.has_open_so ? "1" : "0"}" class="${item.has_open_so ? "por-has-so" : ""}">
           <td class="por-col-s por-col-chk"><input type="checkbox" class="por-row-chk" data-code="${code}"></td>
-          <td class="por-col-s por-col-item">
-            <span class="por-ic" data-code="${code}" title="Click for full item detail (open WOs, sub-asm chain, batch consumption)">${code}</span>
-            <span class="por-in" title="${name}">${name}</span>
-          </td>
-          <td>${typeBadge}</td>
-          <td><span class="por-grp-cell" title="${group}">${group || "—"}</span></td>
+          <td class="por-col-s por-col-item">${itemHeaderHtml}</td>
+          <td style="text-align:center;">${seqHtml}</td>
+          <td><span class="por-grp-cell" title="${group}">${group || "--"}</span></td>
           <td>${subAsmHtml}</td>
           <td style="text-align:center;">${woChip}</td>
           <td>${pm ? this._planInput(item.item_code, "planned_qty", item.planned_qty) : this._fmtQ(item.planned_qty, conv, uom, tipPlanned)}</td>
@@ -454,6 +810,8 @@ class ProductionOverview {
           <td>${this._fmtQ(item.total_curr_sales, conv, uom, tipTotalSales)}</td>
           <td>${pvsHtml}</td>
           <td>${covHtml}</td>
+          <td>${tgtHtml}</td>
+          <td>${achHtml}</td>
           <td>${this._fmtQ(item.stock, conv, uom, tipStock)}</td>
           <td class="por-shortage-cell">${shortageHtml}</td>
           <td>${this._fmtQ(item.possible_qty, conv, uom, tipPossible)}</td>
@@ -527,14 +885,10 @@ class ProductionOverview {
         document.getElementById("por-grp-filter-wrap").style.display = "block";
     }
 
-    _applyGroupFilter(group) {
-        let visible = 0;
-        document.querySelectorAll("#por-tbody tr").forEach(tr => {
-            const show = !group || tr.dataset.group === group;
-            tr.style.display = show ? "" : "none";
-            if (show) visible++;
-        });
-        document.getElementById("por-vis-count").textContent = visible;
+    _applyGroupFilter(_group) {
+        // Now goes through the unified visible-items pipeline so sort + search
+        // + group filter all stack consistently.
+        if (this._data) this._renderTable(this._currentVisibleItems());
     }
 
     // ── Show/hide state panels ─────────────────────────────────────────────
@@ -621,18 +975,38 @@ class ProductionOverview {
                     </td></tr>`;
                 }
 
-                // Component shortage summary
+                // Component shortage summary — show item code, NAME, and CURRENT
+                // STOCK so the user can act on the line without opening another
+                // modal. Per 2026-05-01 spec.
                 if (wo.components && wo.components.length > 0) {
                     const shortComps = wo.components.filter(c => c.shortage > 0);
                     if (shortComps.length > 0) {
-                        html += `<tr><td colspan="7" style="padding:4px 9px;background:#fff8f8;">
-                          <span style="font-size:11px;font-weight:600;color:var(--por-err-text);">
+                        html += `<tr><td colspan="7" style="padding:6px 9px;background:#fff8f8;">
+                          <div style="font-size:11px;font-weight:600;color:var(--por-err-text);margin-bottom:4px;">
                             <i class="fa-solid fa-triangle-exclamation"></i> ${shortComps.length} component(s) short:
-                          </span>
-                          ${shortComps.slice(0,5).map(c =>
-                              `<span style="font-size:11px;margin:0 4px;color:var(--por-err-text);">
-                                ${this._esc(c.item_code)}: need ${this._formatNum(c.required)}, have ${this._formatNum(c.in_stock)}
-                               </span>`).join(" | ")}
+                          </div>
+                          <table style="font-size:11px;border-collapse:collapse;width:100%;margin-top:2px;">
+                            <thead><tr style="background:rgba(239,68,68,0.06);">
+                              <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #fecaca;">Code</th>
+                              <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #fecaca;">Item Name</th>
+                              <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #fecaca;">Need</th>
+                              <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #fecaca;">Current Stock</th>
+                              <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #fecaca;">Short</th>
+                              <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #fecaca;">UOM</th>
+                            </tr></thead>
+                            <tbody>
+                            ${shortComps.slice(0,8).map(c => `
+                              <tr>
+                                <td style="padding:3px 6px;">${this._dl("Item", c.item_code)}</td>
+                                <td style="padding:3px 6px;color:var(--por-sl-700);">${this._esc(c.item_name || "")}</td>
+                                <td style="padding:3px 6px;text-align:right;font-family:monospace;">${this._formatNum(c.required)}</td>
+                                <td style="padding:3px 6px;text-align:right;font-family:monospace;">${this._formatNum(c.in_stock)}</td>
+                                <td style="padding:3px 6px;text-align:right;font-family:monospace;font-weight:700;color:var(--por-err-text);">${this._formatNum(c.shortage)}</td>
+                                <td style="padding:3px 6px;color:var(--por-muted);">${this._esc(c.uom || "")}</td>
+                              </tr>
+                            `).join("")}
+                            </tbody>
+                          </table>
                         </td></tr>`;
                     }
                 }
@@ -727,20 +1101,25 @@ class ProductionOverview {
             html += `<div class="por-sec-hdr" style="margin-top:14px;"><i class="fa-solid fa-hammer"></i> Breakdown by Work Order</div>`;
             for (const wo of by_wo) {
                 html += `<div style="font-size:11px;font-weight:600;color:var(--por-sl-700);margin:8px 0 4px;">
-                  WO: <span style="font-family:monospace;color:var(--por-brand);">${this._esc(wo.wo_name)}</span>
-                  — Qty: ${this._formatNum(wo.qty_to_manufacture)}
+                  WO: ${this._dl("Work Order", wo.wo_name)}
+                  Qty: ${this._formatNum(wo.qty_to_manufacture)}
                   <span class="por-wo-st por-wo-st-ip" style="margin-left:6px;">${this._esc(wo.status)}</span>
                 </div>`;
                 if (wo.short_components && wo.short_components.length > 0) {
                     html += `<table class="por-dtable" style="margin-bottom:8px;">
-                      <thead><tr><th>Component</th><th>Required</th><th>In Stock</th><th>Shortage</th></tr></thead>
+                      <thead><tr>
+                        <th>Code</th><th>Item Name</th><th>Required</th>
+                        <th>Current Stock</th><th>Shortage</th><th>UOM</th>
+                      </tr></thead>
                       <tbody>`;
                     for (const c of wo.short_components) {
                         html += `<tr>
-                          <td style="font-family:monospace;font-size:11px;">${this._esc(c.item_code)}</td>
-                          <td>${this._formatNum(c.required)} <span style="font-size:10px;color:var(--por-muted);">${this._esc(c.uom || "")}</span></td>
-                          <td>${this._formatNum(c.in_stock)}</td>
-                          <td style="color:var(--por-err-text);font-weight:700;">${this._formatNum(c.shortage)}</td>
+                          <td>${this._dl("Item", c.item_code)}</td>
+                          <td style="color:var(--por-sl-700);">${this._esc(c.item_name || "")}</td>
+                          <td style="font-family:monospace;">${this._formatNum(c.required)}</td>
+                          <td style="font-family:monospace;">${this._formatNum(c.in_stock)}</td>
+                          <td style="font-family:monospace;color:var(--por-err-text);font-weight:700;">${this._formatNum(c.shortage)}</td>
+                          <td style="font-size:10px;color:var(--por-muted);">${this._esc(c.uom || "")}</td>
                         </tr>`;
                     }
                     html += `</tbody></table>`;
@@ -925,7 +1304,12 @@ class ProductionOverview {
             html += `<div class="por-pp-card">
                 <div class="por-pp-card-hdr">
                   <i class="fa-solid fa-clipboard-list" style="color:var(--por-brand);"></i>
-                  <span style="font-family:monospace;">${this._esc(p.pp_name)}</span>
+                  <button class="por-pp-tree-btn" data-pp="${this._esc(p.pp_name)}"
+                          style="border:none;background:transparent;font-family:monospace;font-weight:700;color:var(--por-brand);cursor:pointer;padding:0;text-decoration:underline;"
+                          title="Click to open the Production Plan tree (parent + sub-assemblies + components + supply + shortage)">
+                    ${this._esc(p.pp_name)}
+                  </button>
+                  ${this._dl("Production Plan", p.pp_name, '<i class="fa-solid fa-arrow-up-right-from-square" style="font-size:10px;"></i>')}
                   <span class="por-wo-st por-wo-st-ip" title="Production Plan status">${this._esc(p.status)}</span>
                   <span style="color:var(--por-muted);font-weight:400;font-size:11px;">${this._esc(p.posting_date)}</span>
                   <span class="por-pp-tag por-pp-other" style="margin-left:auto;">Created by: ${this._esc(p.created_by)}</span>
@@ -948,12 +1332,12 @@ class ProductionOverview {
                         : `<span class="por-pp-tag por-pp-other">Other</span>`;
                     html += `<tr>
                         <td>${role}</td>
-                        <td><span style="font-family:monospace;color:var(--por-brand);">${this._esc(w.wo_name)}</span></td>
-                        <td>${this._esc(w.production_item)}</td>
+                        <td>${this._dl("Work Order", w.wo_name)}</td>
+                        <td>${this._dl("Item", w.production_item)}</td>
                         <td style="font-family:monospace;">${this._formatNum(w.planned_qty)}</td>
                         <td style="font-family:monospace;">${this._formatNum(w.produced_qty)}</td>
                         <td><span class="por-wo-st por-wo-st-ip">${this._esc(w.status)}</span></td>
-                        <td style="font-size:11px;">${this._esc(w.planned_start_date || "—")}</td>
+                        <td style="font-size:11px;">${this._esc(w.planned_start_date || "")}</td>
                       </tr>`;
                 }
                 html += `</tbody></table>`;
@@ -963,48 +1347,160 @@ class ProductionOverview {
         return html;
     }
 
-    // ── Planning Mode (Independent / Priority) ────────────────────────────
-    // Independent: each item checked against the FULL stock pool (the default
-    //              `possible_qty` from the API).
-    // Priority: items consume stock in row order; an item earlier in the list
-    //           takes precedence over later items competing for the same RM.
-    //           Pure client-side sim — server data unchanged.
-    _recalcPriorityPossibleQty() {
-        if (!this._data || !this._data.items) return;
-        // Persist the original possible_qty once so we can restore it.
-        this._data.items.forEach(it => {
-            if (it._origPossibleQty === undefined) {
-                it._origPossibleQty = it.possible_qty;
-            }
+    // ── Production Plan TREE Modal ────────────────────────────────────────
+    _openPpTreeModal(ppName) {
+        const modal = document.getElementById("por-pptree-modal");
+        const body  = document.getElementById("por-pptree-modal-body");
+        const title = document.getElementById("por-pptree-modal-title");
+        title.textContent = `Production Plan Tree: ${ppName}`;
+        body.innerHTML = `<div class="por-state-box"><div class="por-spinner"></div><p>Loading tree...</p></div>`;
+        modal.classList.add("open");
+
+        frappe.call({
+            method: "chaizup_toc.api.production_overview_api.get_pp_tree",
+            args: { pp_name: ppName },
+            callback: (r) => {
+                if (!r.message) { body.innerHTML = "<p>No tree data.</p>"; return; }
+                body.innerHTML = this._buildPpTreeHtml(r.message);
+            },
+            error: () => { body.innerHTML = "<p>Error loading tree.</p>"; },
         });
-        // Build a virtual stock pool from each item's shortage_components
-        // (already returned by the API). For each item in row order, deduct
-        // its consumed components and recompute the producible qty.
+    }
+
+    _buildPpTreeHtml(d) {
+        if (!d.found) {
+            return `<div class="por-state-box"><i class="fa-solid fa-inbox"></i>
+                    <p>Production Plan ${this._esc(d.pp_name)} not found.</p></div>`;
+        }
+        const wos = d.work_orders || [];
+        let html = `<div style="font-size:12px;color:var(--por-sl-700);margin-bottom:10px;">
+            <strong>${this._dl("Production Plan", d.pp_name)}</strong>
+            <span style="color:var(--por-muted);"> | ${this._esc(d.status || "")}</span>
+            <span style="color:var(--por-muted);"> | ${this._esc(d.posting_date || "")}</span>
+            ${d.for_warehouse ? `<span style="color:var(--por-muted);"> | warehouse: <strong>${this._esc(d.for_warehouse)}</strong></span>` : ""}
+        </div>`;
+
+        if (wos.length === 0) {
+            html += `<div style="color:var(--por-muted);">No Work Orders attached to this plan.</div>`;
+            return html;
+        }
+
+        html += `<div class="por-tree">`;
+        for (const w of wos) {
+            html += `<div class="por-tree-wo">
+              <div class="por-tree-wo-hdr">
+                <i class="fa-solid fa-hammer" style="color:var(--por-brand);"></i>
+                ${this._dl("Work Order", w.wo_name)}
+                <span class="por-pp-tag por-pp-other">${this._esc(w.production_item)}</span>
+                <span class="por-wo-st por-wo-st-ip">${this._esc(w.status)}</span>
+                <span style="color:var(--por-muted);font-size:11px;">
+                  Plan ${this._formatNum(w.qty_to_manufacture)} | Produced ${this._formatNum(w.produced_qty)} | Remaining ${this._formatNum(w.remaining_qty)}
+                </span>
+                <span style="margin-left:auto;color:var(--por-muted);font-size:11px;">
+                  ${w.fg_warehouse ? `to ${this._esc(w.fg_warehouse)}` : ""} | BOM: ${this._dl("BOM", w.bom_no)}
+                </span>
+              </div>`;
+
+            const comps = w.components || [];
+            if (comps.length === 0) {
+                html += `<div style="color:var(--por-muted);font-size:11px;padding:4px;">No BOM components.</div>`;
+            } else {
+                html += `<table class="por-tree-comp-tbl">
+                    <thead><tr>
+                      <th>Component</th><th>UOM</th><th>Required</th><th>Consumed</th>
+                      <th>Remaining</th><th>Stock</th>
+                      <th>Will Be Received</th><th>Shortage</th>
+                    </tr></thead><tbody>`;
+                for (const c of comps) {
+                    const isShort = c.shortage > 0;
+                    const willReceive = (c.supply_from_po || 0) + (c.supply_from_wo || 0) + (c.supply_from_mr || 0);
+                    const willTip = `PO: ${this._formatNum(c.supply_from_po)} | WO: ${this._formatNum(c.supply_from_wo)} | MR: ${this._formatNum(c.supply_from_mr)}`;
+                    html += `<tr class="${isShort ? 'por-tree-row-short' : ''}">
+                        <td>${this._dl("Item", c.item_code)}<div style="font-size:10px;color:var(--por-muted);">${this._esc(c.item_name || "")}</div></td>
+                        <td>${this._esc(c.uom || "")}</td>
+                        <td style="font-family:monospace;">${this._formatNum(c.required)}</td>
+                        <td style="font-family:monospace;">${this._formatNum(c.consumed)}</td>
+                        <td style="font-family:monospace;">${this._formatNum(c.remaining)}</td>
+                        <td style="font-family:monospace;">${this._formatNum(c.stock)}</td>
+                        <td style="font-family:monospace;" title="${willTip}">${this._formatNum(willReceive)}</td>
+                        <td style="font-family:monospace;font-weight:700;color:${isShort ? 'var(--por-err-text)' : 'var(--por-ok-text)'};">${this._formatNum(c.shortage)}</td>
+                      </tr>`;
+                    // Detail row — show WOs / POs / MRs depending on supply mode
+                    const supplyBits = [];
+                    if (c.supply_wos && c.supply_wos.length) {
+                        supplyBits.push(`<span class="por-tree-pill wo">Producing (open WOs):</span> `
+                            + c.supply_wos.map(s => `${this._dl("Work Order", s.wo_name)} <small>(${this._formatNum(s.pending)} ${this._esc(c.uom)})</small>`).join(" | "));
+                    }
+                    if (c.supply_pos && c.supply_pos.length) {
+                        supplyBits.push(`<span class="por-tree-pill po">Purchasing (open POs):</span> `
+                            + c.supply_pos.map(s => `${this._dl("Purchase Order", s.po_name)} <small>${this._esc(s.supplier || "")} ${this._formatNum(s.pending_qty)} ${this._esc(s.uom)} ${s.schedule ? "due " + s.schedule : ""}</small>`).join(" | "));
+                    }
+                    if (c.supply_mrs && c.supply_mrs.length) {
+                        supplyBits.push(`<span class="por-tree-pill mr">Material Requests:</span> `
+                            + c.supply_mrs.map(s => `${this._dl("Material Request", s.mr_name)} <small>(${this._formatNum(s.pending_qty)} ${this._esc(s.uom)})</small>`).join(" | "));
+                    }
+                    if (supplyBits.length) {
+                        html += `<tr class="por-tree-supply-row"><td colspan="8">${supplyBits.join("<br>")}</td></tr>`;
+                    }
+                }
+                html += `</tbody></table>`;
+            }
+            html += `</div>`;
+        }
+        html += `</div>`;
+        return html;
+    }
+
+    // ── Planning Mode — Independent vs Priority ───────────────────────────
+    // Inspired by WO Kitting Planner's Production Plan tab. Difference: that
+    // page applies on Work Orders; here we apply on ITEMS (one row = one item).
+    //
+    // Independent (default): each item is checked against the FULL stock pool
+    //                        independently — the canonical possible_qty from
+    //                        the API.
+    // Priority: items consume the pool in the visible row order. Earlier rows
+    //           get first claim. Determines whether each item is FULLY
+    //           producible, PARTIALLY producible, or NOT producible.
+    //
+    // We persist the original `possible_qty` once on each item as
+    // `_origPossibleQty`, so flipping back to Independent restores it.
+    _recalcPriorityPossibleQty(rowsToSimulate) {
+        if (!this._data || !this._data.items) return;
+        // Persist baseline + a per-component required-per-unit ratio derived
+        // from API shortage_components.
+        this._data.items.forEach(it => {
+            if (it._origPossibleQty === undefined) it._origPossibleQty = it.possible_qty;
+        });
         const pool = {};
-        const rows = this._data.items;
+        // If caller passes the visible (sorted/filtered) rows, simulate over
+        // that order. Otherwise fall back to global item order.
+        const rows = rowsToSimulate || this._data.items;
         for (const it of rows) {
             const comps = it.shortage_components || [];
-            // possibleQty bound = current pool ÷ qty_per_unit; we approximate
-            // qty_per_unit from required ÷ original possible_qty (if non-zero).
             let limit = it._origPossibleQty || 0;
+            // Calculate the binding component
             for (const c of comps) {
-                const have = pool[c.item_code];
-                const onHand = (have === undefined ? c.in_stock : have);
                 const reqPerUnit = (it._origPossibleQty > 0 && c.required > 0)
                     ? c.required / it._origPossibleQty : 0;
                 if (reqPerUnit > 0) {
+                    const onHand = (pool[c.item_code] === undefined ? c.in_stock : pool[c.item_code]);
                     limit = Math.min(limit, onHand / reqPerUnit);
                 }
             }
             limit = Math.max(0, Math.floor(limit));
             it.possible_qty = limit;
+            it._planning_status = (
+                limit >= (it._origPossibleQty || 0) && limit > 0 ? "full"
+                : limit > 0 ? "partial"
+                : "blocked"
+            );
             // Deduct from pool
             for (const c of comps) {
                 const reqPerUnit = (it._origPossibleQty > 0 && c.required > 0)
                     ? c.required / it._origPossibleQty : 0;
                 if (reqPerUnit > 0) {
-                    const have = pool[c.item_code];
-                    pool[c.item_code] = (have === undefined ? c.in_stock : have) - reqPerUnit * limit;
+                    const onHand = (pool[c.item_code] === undefined ? c.in_stock : pool[c.item_code]);
+                    pool[c.item_code] = onHand - reqPerUnit * limit;
                 }
             }
         }
@@ -1014,6 +1510,7 @@ class ProductionOverview {
         if (!this._data || !this._data.items) return;
         this._data.items.forEach(it => {
             if (it._origPossibleQty !== undefined) it.possible_qty = it._origPossibleQty;
+            delete it._planning_status;
         });
     }
 
@@ -1187,7 +1684,9 @@ class ProductionOverview {
         const ctx  = this._buildAIContext();
         this._aiContext = ctx;
         const body = document.getElementById("por-ai-insight-body");
-        body.innerHTML = `<div class="por-ai-typing"><i class="fa-solid fa-circle-notch fa-spin"></i> Generating briefing…</div>`;
+        if (body) {
+            body.innerHTML = `<div class="por-ai-typing"><i class="fa-solid fa-circle-notch fa-spin"></i> Generating briefing…</div>`;
+        }
 
         frappe.call({
             method: "chaizup_toc.api.production_overview_api.get_ai_overview_insight",
@@ -1195,12 +1694,14 @@ class ProductionOverview {
             callback: (r) => {
                 if (!r.message) return;
                 const { insight } = r.message;
-                body.innerHTML = insight || `<span class="por-ai-warn">No insight returned.</span>`;
-                document.getElementById("por-ai-data-pts").textContent =
+                if (body) body.innerHTML = insight || `<span class="por-ai-warn">No insight returned.</span>`;
+                const dp = document.getElementById("por-ai-data-pts");
+                if (dp) dp.textContent =
                     `Data: ${ctx.summary?.total_items || 0} items, ${ctx.items?.length || 0} sent to AI`;
+                this._aiInsightLoaded = true;
             },
             error: () => {
-                body.innerHTML = `<span class="por-ai-warn">AI unavailable. Check Error Log → POR AI.</span>`;
+                if (body) body.innerHTML = `<span class="por-ai-warn">AI unavailable. Check Error Log → POR AI.</span>`;
             },
         });
     }
@@ -1286,6 +1787,8 @@ class ProductionOverview {
             return;
         }
         const company = document.getElementById("por-company").value;
+        // Pass ALL filter values — the chart pane must reflect what the user
+        // selected. Same warehouse / status / stock-mode set as Overview tab.
         frappe.call({
             method: "chaizup_toc.api.production_overview_api.get_chart_data",
             args: {
@@ -1295,6 +1798,8 @@ class ProductionOverview {
                 warehouses:  JSON.stringify(this._selWh),
                 wo_statuses: JSON.stringify(this._selWo),
                 so_statuses: JSON.stringify(this._selSo),
+                pp_statuses: JSON.stringify(this._selPp || []),
+                po_statuses: JSON.stringify(this._selPo || []),
                 stock_mode:  document.getElementById("por-stock-mode").value,
             },
             callback: (r) => {
@@ -1309,53 +1814,166 @@ class ProductionOverview {
 
     _renderCharts(d) {
         const PIE_COLORS  = ["#4f46e5","#10b981","#f59e0b","#ef4444","#0ea5e9","#8b5cf6","#ec4899","#14b8a6"];
-        const CHART_DEFAULTS = { animation: { duration: 400 }, plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } } };
+        const CHART_DEFAULTS = {
+            animation: { duration: 400 },
+            plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } },
+        };
 
-        // ── Pie 1: Item type distribution
-        const typeD = d.type_pie || {};
-        this._makeChart("por-chart-type", "doughnut", {
-            labels: Object.keys(typeD),
-            datasets: [{ data: Object.values(typeD), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }]
+        // Helper — tooltip callback that prefixes item code with item_name
+        // when both arrays are present. Lets bar chart hover read like
+        // "CZPFG688 — PREMIUM DUST 50G ... Need 12,000".
+        const namedTooltip = (labels, names, uoms) => ({
+            callbacks: {
+                title(ctx) {
+                    const i = ctx[0].dataIndex;
+                    const code = labels[i] || "";
+                    const name = (names && names[i]) || "";
+                    return name ? `${code} — ${name}` : code;
+                },
+                label(ctx) {
+                    const u = (uoms && uoms[ctx.dataIndex]) ? " " + uoms[ctx.dataIndex] : "";
+                    const v = ctx.parsed.y != null ? ctx.parsed.y : ctx.parsed.x;
+                    return `${ctx.dataset.label}: ${Number(v).toLocaleString("en-IN")}${u}`;
+                },
+            }
+        });
+
+        // ── (1) Priority Action Board — top 10 by Target Gap, stacked ─────
+        const pri = d.bar_priority_action || {};
+        this._makeChart("por-chart-priority", "bar", {
+            labels: pri.labels || [],
+            datasets: [
+                { label: "Stock",      data: pri.stock      || [], backgroundColor: "rgba(16,185,129,.85)", stack: "s" },
+                { label: "Pending WO", data: pri.wo_pending || [], backgroundColor: "rgba(14,165,233,.85)", stack: "s" },
+                { label: "Gap (action)", data: pri.gap      || [], backgroundColor: "rgba(239,68,68,.9)",   stack: "s" },
+            ],
+        }, {
+            ...CHART_DEFAULTS,
+            indexAxis: "y",
+            scales: {
+                x: { stacked: true, beginAtZero: true, ticks: { font: { size: 10 } } },
+                y: { stacked: true, ticks: { font: { size: 10 } } },
+            },
+            plugins: { ...CHART_DEFAULTS.plugins, tooltip: namedTooltip(pri.labels, pri.item_names, pri.stock_uoms) },
+        });
+
+        // ── (2) Daily Production Need ──────────────────────────────────────
+        const dn = d.bar_daily_need || {};
+        const wd = (dn.working_days_left != null) ? dn.working_days_left : (d.working_days_left || 1);
+        this._makeChart("por-chart-daily-need", "bar", {
+            labels: dn.labels || [],
+            datasets: [
+                { label: "Remaining (this month)", data: dn.remaining || [], backgroundColor: "rgba(79,70,229,.75)" },
+                { label: `Daily Need (over ${wd} working days)`, data: dn.daily_need || [], backgroundColor: "rgba(245,158,11,.85)" },
+            ],
+        }, {
+            ...CHART_DEFAULTS,
+            indexAxis: "y",
+            scales: {
+                x: { beginAtZero: true, ticks: { font: { size: 10 } } },
+                y: { ticks: { font: { size: 10 } } },
+            },
+            plugins: { ...CHART_DEFAULTS.plugins, tooltip: namedTooltip(dn.labels, dn.item_names, dn.stock_uoms) },
+        });
+
+        // ── (3) Production Readiness pie ──────────────────────────────────
+        const rp = d.readiness_pie || {};
+        this._makeChart("por-chart-readiness", "doughnut", {
+            labels: ["Ready","Partial","Blocked","No Demand"],
+            datasets: [{
+                data: [rp["Ready"]||0, rp["Partial"]||0, rp["Blocked"]||0, rp["No Demand"]||0],
+                backgroundColor: ["#10b981","#f59e0b","#ef4444","#94a3b8"],
+                borderWidth: 2, borderColor: "#fff",
+            }],
         }, { ...CHART_DEFAULTS });
 
-        // ── Pie 2: Shortage
+        // ── (4) Shortage status (kept) ────────────────────────────────────
         const shortD = d.shortage_pie || {};
         this._makeChart("por-chart-shortage", "doughnut", {
             labels: ["With Shortage","No Shortage"],
-            datasets: [{ data: [shortD["Yes"] || 0, shortD["No"] || 0],
-                backgroundColor: ["#ef4444","#10b981"], borderWidth: 2, borderColor: "#fff" }]
+            datasets: [{
+                data: [shortD["Yes"]||0, shortD["No"]||0],
+                backgroundColor: ["#ef4444","#10b981"],
+                borderWidth: 2, borderColor: "#fff",
+            }],
         }, { ...CHART_DEFAULTS });
 
-        // ── Bar 1: Top orders
+        // ── (5) Coverage Health distribution ──────────────────────────────
+        const cv = d.bar_coverage_health || {};
+        this._makeChart("por-chart-coverage", "bar", {
+            labels: cv.labels || [],
+            datasets: [{
+                label: "Items",
+                data: cv.values || [],
+                backgroundColor: ["#ef4444","#f59e0b","#10b981","#0ea5e9","#94a3b8"],
+                borderRadius: 4,
+            }],
+        }, {
+            ...CHART_DEFAULTS,
+            scales: { y: { beginAtZero: true, precision: 0, ticks: { font: { size: 10 } } } },
+            plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
+        });
+
+        // ── (6) Shortage Drivers — procurement priority ───────────────────
+        const sd = d.bar_shortage_drivers || {};
+        this._makeChart("por-chart-shortage-drivers", "bar", {
+            labels: sd.labels || [],
+            datasets: [
+                { label: "Items Blocked",  data: sd.blocks || [],      backgroundColor: "rgba(239,68,68,.85)" },
+                { label: "Total Shortage", data: sd.total_short || [], backgroundColor: "rgba(245,158,11,.65)" },
+            ],
+        }, {
+            ...CHART_DEFAULTS,
+            indexAxis: "y",
+            scales: {
+                x: { beginAtZero: true, ticks: { font: { size: 10 } } },
+                y: { ticks: { font: { size: 10 } } },
+            },
+            plugins: { ...CHART_DEFAULTS.plugins, tooltip: namedTooltip(sd.labels, sd.item_names, sd.uoms) },
+        });
+
+        // ── (7) Top 10 by Curr Month SO (kept) ────────────────────────────
         const bo = d.bar_orders || {};
         this._makeChart("por-chart-orders", "bar", {
             labels: bo.labels || [],
             datasets: [
-                { label: "Curr Month SO", data: bo.orders || [], backgroundColor: "rgba(79,70,229,.7)", borderRadius: 3 },
-                { label: "Planned Qty",   data: bo.planned || [], backgroundColor: "rgba(16,185,129,.6)", borderRadius: 3 },
-                { label: "Dispatched",    data: bo.dispatch || [], backgroundColor: "rgba(245,158,11,.6)", borderRadius: 3 },
-            ]
-        }, { ...CHART_DEFAULTS, scales: { x: { ticks: { maxRotation: 45, font: { size: 10 } } } } });
+                { label: "Curr Month SO", data: bo.orders   || [], backgroundColor: "rgba(79,70,229,.75)",  borderRadius: 3 },
+                { label: "Planned Qty",   data: bo.planned  || [], backgroundColor: "rgba(16,185,129,.65)", borderRadius: 3 },
+                { label: "Dispatched",    data: bo.dispatch || [], backgroundColor: "rgba(245,158,11,.65)", borderRadius: 3 },
+            ],
+        }, {
+            ...CHART_DEFAULTS,
+            scales: { x: { ticks: { maxRotation: 45, font: { size: 10 } } } },
+            plugins: { ...CHART_DEFAULTS.plugins, tooltip: namedTooltip(bo.labels, bo.item_names) },
+        });
 
-        // ── Bar 2: Projection vs sales
+        // ── (8) Projection vs Sales (kept) ────────────────────────────────
         const bp = d.bar_projection || {};
         this._makeChart("por-chart-proj", "bar", {
             labels: bp.labels || [],
             datasets: [
-                { label: "Projection", data: bp.projection || [], backgroundColor: "rgba(14,165,233,.7)", borderRadius: 3 },
-                { label: "Actual Sales", data: bp.sales || [], backgroundColor: "rgba(16,185,129,.7)", borderRadius: 3 },
-            ]
-        }, { ...CHART_DEFAULTS, scales: { x: { ticks: { maxRotation: 45, font: { size: 10 } } } } });
+                { label: "Projection",   data: bp.projection || [], backgroundColor: "rgba(14,165,233,.75)", borderRadius: 3 },
+                { label: "Actual Sales", data: bp.sales      || [], backgroundColor: "rgba(16,185,129,.75)", borderRadius: 3 },
+            ],
+        }, {
+            ...CHART_DEFAULTS,
+            scales: { x: { ticks: { maxRotation: 45, font: { size: 10 } } } },
+            plugins: { ...CHART_DEFAULTS.plugins, tooltip: namedTooltip(bp.labels, bp.item_names) },
+        });
 
-        // ── Bar 3: WO count by group
+        // ── (9) WO count by group (kept) ──────────────────────────────────
         const bg = d.bar_wo_by_group || {};
         this._makeChart("por-chart-group", "bar", {
             labels: bg.labels || [],
             datasets: [{ label: "Open WO Count", data: bg.values || [],
-                backgroundColor: "rgba(245,158,11,.7)", borderRadius: 4 }]
-        }, { ...CHART_DEFAULTS, indexAxis: "y",
-            scales: { x: { beginAtZero: true, ticks: { font: { size: 11 } } },
-                      y: { ticks: { font: { size: 11 } } } } });
+                         backgroundColor: "rgba(245,158,11,.7)", borderRadius: 4 }],
+        }, {
+            ...CHART_DEFAULTS, indexAxis: "y",
+            scales: {
+                x: { beginAtZero: true, ticks: { font: { size: 11 } } },
+                y: { ticks: { font: { size: 11 } } },
+            },
+        });
     }
 
     _makeChart(canvasId, type, chartData, options) {
@@ -1417,6 +2035,7 @@ class ProductionOverview {
             warehouses:  JSON.stringify(this._selWh),
             wo_statuses: JSON.stringify(this._selWo),
             so_statuses: JSON.stringify(this._selSo),
+            po_statuses: JSON.stringify(this._selPo || []),
             stock_mode:  document.getElementById("por-stock-mode").value,
         });
         window.location.href =

@@ -11,7 +11,23 @@
     - ID prefix: por-   CSS class prefix: por-
     - Chart.js loaded from CDN below; check "typeof Chart" before rendering.
   DANGER:
-    - Single quotes inside onclick break Frappe JS template wrapping (SyntaxError).
+    - Single quotes ANYWHERE in HTML body break Frappe JS template wrapping.
+      Frappe wraps the entire HTML in a SINGLE-QUOTED JS string at page-script
+      generation time. Format (apostrophe-free description below):
+        frappe.templates[KEY] = STRING ;
+      Where STRING starts with a single quote and ends with a single quote.
+      A raw apostrophe ANYWHERE inside the body — event handler attribute,
+      title= tooltip, plain visible text — terminates that string mid-flight.
+      Result: the generated JS throws SyntaxError, eval fails, BLANK PAGE.
+      Pre-commit lint rule: zero raw apostrophes in this file.
+      Use HTML entities &apos; (apostrophe) and &quot; (quote-as-string-arg).
+      Note: HTML comments like THIS one ARE stripped by Frappe before the
+      wrap step, so apostrophes here would not break the page. But to keep
+      the lint rule simple (grep returns 0), avoid them in comments too.
+      Bug 2026-05-01 (Sync #4) — two raw apostrophes blanked the page:
+        (a) tooltip describing "Workflow: state" with literal quote marks
+        (b) tooltip text using a possessive form of "month"
+      Both replaced with &quot; / &apos;.
     - %} in CSS is parsed as Jinja2 block close. Always: width:40%;} not width:40%}.
   RESTRICT:
     - Do NOT add server-side rendering. All data via frappe.call().
@@ -711,6 +727,130 @@
 }
 .por-subasm-list .por-subasm-row:last-child { border-bottom:0; }
 
+/* Pulse animation on the Load button after a filter change — visual cue
+   that the user needs to click Load to apply the new filter across tabs. */
+@keyframes por-load-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(79,70,229,0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(79,70,229,0);  }
+  100% { box-shadow: 0 0 0 0 rgba(79,70,229,0);     }
+}
+.por-load-pulse {
+  animation: por-load-pulse 1.6s infinite;
+  border:1px solid #4f46e5 !important;
+}
+
+/* Custom global tooltip (replaces native title= delay tooltip).
+   Sits at document.body level via JS so z-index works above modals/header. */
+.por-tooltip {
+  position:fixed;
+  z-index:10000;
+  background:#0f172a;
+  color:#f8fafc;
+  padding:8px 11px;
+  border-radius:6px;
+  font-size:11px;
+  line-height:1.45;
+  font-family:"DM Sans",system-ui,sans-serif;
+  font-weight:400;
+  max-width:380px;
+  white-space:pre-wrap;
+  word-wrap:break-word;
+  pointer-events:none;
+  box-shadow:0 6px 20px rgba(0,0,0,0.18);
+  border:1px solid rgba(255,255,255,0.08);
+  letter-spacing:0.1px;
+}
+/* Subtle visual cue that an element is hover-explained */
+[data-tip], [title] { cursor:help; }
+.por-btn[title], .por-ic[title], .por-tab-btn[title], .por-th-sortable { cursor:pointer; }
+.por-tab-btn { cursor:pointer; }
+
+/* Sortable column headers */
+.por-th-sortable { cursor:pointer; user-select:none; position:relative; }
+.por-th-sortable:hover { background:var(--por-sl-200) !important; }
+.por-th-sortable.por-sort-asc::after  { content:" \25B2"; color:var(--por-brand); font-size:9px; }
+.por-th-sortable.por-sort-desc::after { content:" \25BC"; color:var(--por-brand); font-size:9px; }
+
+/* Doc-link styling — every doctype/name pair is a hyperlink that opens in
+   a new tab. Uniform style so users learn the affordance once. */
+.por-doclink {
+  font-family:"Geist Mono",monospace; font-size:11px;
+  color:var(--por-brand); text-decoration:none;
+  border-bottom:1px dotted transparent;
+}
+.por-doclink:hover { border-bottom-color:var(--por-brand); color:var(--por-brand-h); }
+.por-doclink::after {
+  content:" \2197"; font-size:9px; color:var(--por-sl-400); margin-left:1px;
+}
+
+/* Allow item name to wrap (full name visible). Override the earlier
+   single-line ellipsis truncation. */
+.por-in {
+  white-space:normal !important;
+  text-overflow:clip !important;
+  overflow:visible !important;
+  max-width:240px !important;
+  line-height:1.3;
+  word-break:break-word;
+}
+.por-col-item { min-width:240px !important; }
+
+/* Sequence column */
+.por-seq {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:24px; height:22px; padding:0 6px;
+  border-radius:99px;
+  font-family:"Geist Mono",monospace; font-size:11px; font-weight:700;
+  background:var(--por-sl-100); color:var(--por-sl-700);
+}
+.por-seq.priority { background:var(--por-brand); color:#fff; }
+
+/* Target Production / % achieved cells */
+.por-target-pill {
+  display:inline-flex; align-items:center; padding:1px 6px;
+  border-radius:99px; font-size:10px; font-weight:700;
+}
+.por-target-proj  { background:#e0f2fe; color:#0c4a6e; }
+.por-target-order { background:#fef3c7; color:#92400e; }
+.por-ach-hi  { color:var(--por-ok-text);   font-weight:700; }
+.por-ach-mid { color:var(--por-warn-text); font-weight:700; }
+.por-ach-lo  { color:var(--por-err-text);  font-weight:700; }
+
+/* Production-Plan tree modal */
+.por-tree { font-size:12px; }
+.por-tree-wo {
+  border:1px solid var(--por-sl-200); border-left:3px solid var(--por-brand);
+  border-radius:var(--por-r-md); margin-bottom:10px; padding:10px 12px;
+  background:var(--por-sl-50);
+}
+.por-tree-wo-hdr {
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  margin-bottom:6px;
+}
+.por-tree-comp-tbl {
+  width:100%; border-collapse:collapse; font-size:11px;
+  margin-top:4px; background:var(--por-surface);
+  border:1px solid var(--por-sl-200);
+}
+.por-tree-comp-tbl th {
+  background:var(--por-sl-100); padding:5px 8px; font-size:10px;
+  text-align:left; font-weight:700; color:var(--por-sl-700); white-space:nowrap;
+}
+.por-tree-comp-tbl td { padding:5px 8px; border-top:1px solid var(--por-sl-100); vertical-align:top; }
+.por-tree-comp-tbl tr.por-tree-row-short td { background:#fff5f5; }
+.por-tree-supply-row td {
+  background:var(--por-sl-50); padding:4px 9px;
+  font-size:10px; color:var(--por-sl-700);
+}
+.por-tree-pill {
+  display:inline-block; padding:1px 5px; margin:0 3px;
+  border-radius:3px; font-size:10px;
+  border:1px solid var(--por-sl-200); background:var(--por-surface);
+}
+.por-tree-pill.po { background:#fef3c7; color:#92400e; border-color:#fde68a; }
+.por-tree-pill.wo { background:#e0e7ff; color:#3730a3; border-color:#c7d2fe; }
+.por-tree-pill.mr { background:#fce7f3; color:#9d174d; border-color:#fbcfe8; }
+
 /* Native Frappe-style action button row in modal */
 .por-pp-card {
   border:1px solid var(--por-sl-200); border-radius:var(--por-r-md);
@@ -754,14 +894,16 @@
   <!-- ── Filter Bar ── -->
   <div class="por-filter-bar">
 
-    <div class="por-filter-grp">
+    <div class="por-filter-grp" title="Company filter — restricts data to the selected ERPNext Company. Affects every tab: Overview, AI Advisor, Charts, and Excel export.">
       <span class="por-filter-lbl">Company</span>
-      <select id="por-company" class="por-select" style="min-width:130px;"></select>
+      <select id="por-company" class="por-select" style="min-width:130px;"
+        title="Pick a Company. The whole dashboard reloads against this Company when you click Load."></select>
     </div>
 
-    <div class="por-filter-grp">
+    <div class="por-filter-grp" title="Reporting period — Month + Year. Sets which calendar month is treated as the &quot;current&quot; month for SO, Dispatch, Projection, Coverage and Target Production calculations. Affects all tabs.">
       <span class="por-filter-lbl">Month</span>
-      <select id="por-month" class="por-select" style="width:105px;">
+      <select id="por-month" class="por-select" style="width:105px;"
+        title="Pick the calendar month. Previous-month rows automatically use the month before this one.">
         <option value="1">January</option>
         <option value="2">February</option>
         <option value="3">March</option>
@@ -775,11 +917,20 @@
         <option value="11">November</option>
         <option value="12">December</option>
       </select>
-      <input type="number" id="por-year" class="por-input por-input-yr" min="2020" max="2040">
+      <input type="number" id="por-year" class="por-input por-input-yr" min="2020" max="2040"
+        title="4-digit year. Combined with Month to set the reporting period.">
     </div>
 
     <!-- Warehouses multi-select -->
-    <div class="por-filter-grp">
+    <div class="por-filter-grp" title="Warehouse filter (multi-select).
+Restricts EVERY quantity in the dashboard to these warehouses:
+  Stock on Hand    — Bin.actual_qty (or expected) for these warehouses
+  Planned Qty      — Work Order.fg_warehouse in selection
+  Produced         — Stock Entry t_warehouse in selection
+  Sales Order qty  — SO line warehouse OR header set_warehouse
+  Dispatch         — Delivery Note Item.warehouse in selection
+  Sales Projection — Sales Projection.source_warehouse in selection
+Empty selection = ALL warehouses.">
       <span class="por-filter-lbl">Warehouses</span>
       <div class="por-ms-wrap">
         <button class="por-ms-btn" id="por-wh-btn" data-ms-panel="por-wh-panel">
@@ -799,7 +950,10 @@
     </div>
 
     <!-- WO Status multi-select -->
-    <div class="por-filter-grp">
+    <div class="por-filter-grp" title="Statuses to treat as OPEN for Work Orders.
+Affects Open WO count, Planned Qty, Pending WO Qty, sub-assembly detection, and the Charts tab.
+Default excludes Completed/Stopped/Cancelled. Multi-select.
+Universe is dynamic — pulled from your actual Work Order data.">
       <span class="por-filter-lbl">WO Status</span>
       <div class="por-ms-wrap">
         <button class="por-ms-btn" id="por-wo-btn" data-ms-panel="por-wo-panel">
@@ -819,7 +973,7 @@
     </div>
 
     <!-- SO Status multi-select -->
-    <div class="por-filter-grp">
+    <div class="por-filter-grp" title="Statuses considered as PENDING for Sales Orders. Includes any custom workflow_state surfaced as &quot;Workflow: <state>&quot; entries, so you can mark Draft+Confirmed orders as pending.">
       <span class="por-filter-lbl">SO Status</span>
       <div class="por-ms-wrap">
         <button class="por-ms-btn" id="por-so-btn" data-ms-panel="por-so-panel">
@@ -838,10 +992,34 @@
       </div>
     </div>
 
+    <!-- PO Status multi-select -->
+    <div class="por-filter-grp" title="Statuses considered as PENDING for Purchase Orders (used in PP-Tree shortage/supply calculation). Dynamic — pulled from your actual PO data.">
+      <span class="por-filter-lbl">PO Status</span>
+      <div class="por-ms-wrap">
+        <button class="por-ms-btn" id="por-po-btn" data-ms-panel="por-po-panel">
+          <i class="fa-solid fa-cart-shopping" style="font-size:10px;"></i>
+          <span id="por-po-label">Default</span>
+          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+        </button>
+        <div class="por-ms-panel" id="por-po-panel">
+          <div class="por-ms-actions">
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-po-panel" data-val="all">All</button>
+            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-po-panel" data-val="none">None</button>
+          </div>
+          <div class="por-ms-divider"></div>
+          <div id="por-po-status-list"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Stock View -->
-    <div class="por-filter-grp">
+    <div class="por-filter-grp" title="Stock View — controls how Stock on Hand and Possible Qty are calculated.
+Physical Only           = Bin.actual_qty (what is physically there now).
+Physical + Expected     = actual + ordered (open POs) + planned (open WO output).
+Affects Overview table Stock cells, shortage calculation, AI context, and Charts.">
       <span class="por-filter-lbl">Stock View</span>
-      <select id="por-stock-mode" class="por-select" title="Physical = actual_qty only. Physical+Expected adds ordered_qty and planned_qty from Bin.">
+      <select id="por-stock-mode" class="por-select" title="Physical Only = actual qty.
+Physical + Expected adds open PO inbound + open WO planned output.">
         <option value="physical">Physical Only</option>
         <option value="expected">Physical + Expected</option>
       </select>
@@ -879,9 +1057,16 @@
       <i class="fa-solid fa-chart-pie"></i> Charts
     </button>
     <div style="flex:1;"></div>
+    <!-- Universal search (item code / item name / item group / BOM / PP id substring) -->
+    <div id="por-search-wrap" style="display:none;padding:0 6px;align-self:center;">
+      <input type="search" id="por-search" class="por-input"
+             placeholder="Search item code / name / group / BOM..."
+             style="height:24px;font-size:11px;width:240px;"
+             title="Universal search — case-insensitive substring match across Item Code, Item Name, Item Group, Active BOM, and Production Plan IDs visible on the row. Press Esc to clear.">
+    </div>
     <!-- Item group filter (shown after data loads) -->
     <div id="por-grp-filter-wrap" style="display:none;padding:0 6px;align-self:center;">
-      <select id="por-grp-filter" class="por-select" style="height:24px;font-size:11px;" title="Filter by item group">
+      <select id="por-grp-filter" class="por-select" style="height:24px;font-size:11px;" title="Filter rows by item group (full ERPNext name, no abbreviation).">
         <option value="">All Groups</option>
       </select>
     </div>
@@ -896,30 +1081,62 @@
   <div id="por-pane-overview">
 
     <!-- Summary cards (hidden until data loads) -->
+    <!-- Summary cards — every number here is an ITEM COUNT, not a qty.
+         Aggregating qty across items is meaningless because items use
+         different UOMs (Pcs / Kg / Gram / Master Carton...). For per-UOM
+         totals see the "UOM Comparison" sheet of the Excel export. -->
     <div class="por-summary-strip" id="por-summary-strip" style="display:none;">
-      <div class="por-sum-card info">
+      <div class="por-sum-card info"
+        title="TOTAL ITEMS — count of distinct items shown in the dashboard.
+A row in the table = 1 item. This is a COUNT, not a quantity.">
         <div class="por-sum-num" id="por-s-total">—</div>
-        <div class="por-sum-lbl">Total Items</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-hashtag" style="font-size:9px;"></i> Total Items (count)</div>
       </div>
-      <div class="por-sum-card err">
+      <div class="por-sum-card err"
+        title="ITEMS WITH SHORTAGE — count of items whose active BOM has at least one component short of stock.
+COUNT, not a quantity.
+Source: per-item BOM walk vs Bin.actual_qty (warehouse-scoped).">
         <div class="por-sum-num" id="por-s-shortage">—</div>
-        <div class="por-sum-lbl">With Shortage</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-triangle-exclamation" style="font-size:9px;"></i> With Shortage (count)</div>
       </div>
-      <div class="por-sum-card ok">
+      <div class="por-sum-card ok"
+        title="ITEMS WITHOUT SHORTAGE — count of items where every BOM component has sufficient stock for current Possible Qty.
+COUNT, not a quantity.">
         <div class="por-sum-num" id="por-s-ok">—</div>
-        <div class="por-sum-lbl">No Shortage</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-circle-check" style="font-size:9px;"></i> No Shortage (count)</div>
       </div>
-      <div class="por-sum-card brand">
+      <div class="por-sum-card brand"
+        title="ITEMS WITH OPEN WORK ORDERS — count of items that have at least one open WO (status filter applied).
+COUNT, not a quantity. To see total qty per UOM, export to Excel and look at the UOM Comparison sheet.
+Source: tabWork Order, filtered by WO Status + Warehouse.">
         <div class="por-sum-num" id="por-s-planned">—</div>
-        <div class="por-sum-lbl">Planned (WOs)</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-hammer" style="font-size:9px;"></i> Items w/ Open WO (count)</div>
       </div>
-      <div class="por-sum-card warn">
+      <div class="por-sum-card warn"
+        title="ITEMS WITH CURR MONTH SO — count of items that have at least one pending Sales Order line for this month.
+COUNT, not a quantity (qty would mix Kg + Pcs + Master Carton meaninglessly).
+Source: tabSales Order Item, filtered by SO Status + Warehouse.">
         <div class="por-sum-num" id="por-s-orders">—</div>
-        <div class="por-sum-lbl">Curr Month Orders</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-file-invoice" style="font-size:9px;"></i> w/ Curr Month SO (count)</div>
       </div>
-      <div class="por-sum-card ok">
+      <div class="por-sum-card ok"
+        title="ITEMS DISPATCHED THIS MONTH — count of items that had at least one Delivery Note line in the current month.
+COUNT, not a quantity.
+Source: tabDelivery Note Item.">
         <div class="por-sum-num" id="por-s-dispatch">—</div>
-        <div class="por-sum-lbl">Dispatched</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-truck" style="font-size:9px;"></i> Items Dispatched (count)</div>
+      </div>
+      <div class="por-sum-card err"
+        title="BLOCKED ITEMS — count of items that cannot start production right now: has component shortage AND Possible Qty = 0.
+COUNT, not a quantity. These are the immediate procurement priorities.">
+        <div class="por-sum-num" id="por-s-blocked">—</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-ban" style="font-size:9px;"></i> Blocked (count)</div>
+      </div>
+      <div class="por-sum-card ok"
+        title="TARGET ACHIEVED ≥ 100% — count of items that have already met or exceeded their Target Production for this month.
+COUNT, not a quantity.">
+        <div class="por-sum-num" id="por-s-target-hit">—</div>
+        <div class="por-sum-lbl"><i class="fa-solid fa-bullseye" style="font-size:9px;"></i> Target Hit (count)</div>
       </div>
     </div>
 
@@ -953,26 +1170,94 @@
               Item
               <span class="por-tip" title="Item code (click to view details) and item name">i</span>
             </th>
-            <th>Type <span class="por-tip" title="FG=Finished Goods, SFG=Semi-Finished (used in other BOMs), RM=Raw Material, PM=Packaging Material">i</span></th>
-            <th>Item Group <span class="por-tip" title="Full ERPNext item group name. Click filter above to scope view.">i</span></th>
-            <th>Sub-Asm <span class="por-tip" title="Item is a child of a parent Work Order (linked via Production Plan) AND has its own open WO. Independent BOM items are NOT marked as Sub-Asm.">i</span></th>
-            <th>Open WOs <span class="por-tip" title="Count of open Work Orders for this item, filtered by the WO Status multi-select. Click an item to see the WO list.">i</span></th>
-            <th>Planned Qty <span class="por-tip" title="Sum of `qty` across all open WOs in stock UOM. Tooltip on each cell shows all UOM conversions.">i</span></th>
-            <th>Produced <span class="por-tip" title="Sum of finished-item transfer_qty from Manufacture Stock Entries this month. In stock UOM with conversions.">i</span></th>
-            <th>Prev Month SO <span class="por-tip" title="Pending SO qty from the previous calendar month (by delivery_date). Carryover demand. Stock UOM = stock_qty − delivered_qty × conversion_factor.">i</span></th>
-            <th>Curr Month SO <span class="por-tip" title="Pending SO qty for the current calendar month (by delivery_date). Active customer demand. Stock UOM.">i</span></th>
-            <th>Prev Month Dispatch <span class="por-tip" title="Qty dispatched via Delivery Note in the previous calendar month (stock_qty). For carryover comparison.">i</span></th>
-            <th>Curr Month Dispatch <span class="por-tip" title="Qty dispatched via Delivery Note in the current calendar month (stock_qty).">i</span></th>
-            <th>Sales Projection <span class="por-tip" title="qty_in_stock_uom from the submitted Sales Projection document for this month and year (Sales Projected Items child).">i</span></th>
-            <th>Total Sales <span class="por-tip" title="All booked sales qty (delivered + pending) for the current month, submitted SOs only. Stock UOM.">i</span></th>
-            <th>Proj vs Sales % <span class="por-tip" title="Total Curr Sales ÷ Sales Projection × 100. &gt;100% means outperforming projection.">i</span></th>
-            <th>Coverage % <span class="por-tip" title="(Sales Projection + Prev Month SO carryover) ÷ Total Curr Sales × 100. ≥100% = demand fully covered by planning inputs; &lt;100% = under-planned.">i</span></th>
-            <th>Stock on Hand <span class="por-tip" title="Current stock. Physical = Bin.actual_qty. Physical+Expected = actual + ordered + planned qty.">i</span></th>
-            <th>Shortage <span class="por-tip" title="Whether the active BOM has any short components for `Possible Qty` units. Click View for breakdown by WO + sub-assembly.">i</span></th>
-            <th>Possible Qty <span class="por-tip" title="Max qty producible given current component stock and active BOM. Independent mode: each item against full pool. Priority mode: row order matters.">i</span></th>
-            <th>Active BOM <span class="por-tip" title="Default active submitted BOM used for shortage and cost calculations.">i</span></th>
-            <th>Production Plans <span class="por-tip" title="Click View Plan to see active Production Plans containing this item, including all parent + child Work Orders.">i</span></th>
-            <th>Cost <span class="por-tip" title="3-way cost (BOM Std vs Actual STE vs 6-month avg) plus per-UOM cost breakdown for every available UOM conversion.">i</span></th>
+            <th data-sort="seq" class="por-th-sortable">#
+              <span class="por-tip" title="Sequence number for Priority Planning Mode. The order you see is the priority order. Click to re-sort.
+Data source: client-side row index after sorting/filtering.">i</span></th>
+            <th data-sort="item_group" class="por-th-sortable">Item Group
+              <span class="por-tip" title="The category of the item (e.g. Finished Goods, Raw Material). Full ERPNext name, no abbreviation.
+Data source: tabItem.item_group.">i</span></th>
+            <th data-sort="is_sub_assembly" class="por-th-sortable">Sub-Asm
+              <span class="por-tip" title="Sub-Assembly = item has its own open Work Order AND is consumed by a parent Work Order, both linked via the same Production Plan.
+Independent BOM items (no parent PP link) are NOT marked Sub-Asm.
+Data source: tabWork Order.production_plan + tabBOM Item.">i</span></th>
+            <th data-sort="open_wo_count" class="por-th-sortable">Open WOs
+              <span class="por-tip" title="Number of OPEN Work Orders for this item.
+Open = status in (Not Started, In Process, Material Transferred). Completed and Stopped are excluded by default.
+Click the item code to see the list.
+Data source: tabWork Order, filtered by WO Status + Warehouse.">i</span></th>
+            <th data-sort="planned_qty" class="por-th-sortable">Planned Qty
+              <span class="por-tip" title="What the factory PLANS to produce — total Qty To Manufacture across all open Work Orders.
+Stock UOM. Hover any number to see every UOM conversion.
+Data source: tabWork Order.qty (filtered by WO Status + fg_warehouse).">i</span></th>
+            <th data-sort="actual_qty" class="por-th-sortable">Produced
+              <span class="por-tip" title="What the factory ACTUALLY produced this month — sum of finished-item transfer_qty on submitted Manufacture Stock Entries.
+Data source: tabStock Entry Detail (is_finished_item=1, type Manufacture), filtered by t_warehouse.">i</span></th>
+            <th data-sort="prev_month_order" class="por-th-sortable">Prev Month SO
+              <span class="por-tip" title="PENDING Sales Order qty for last month (by delivery_date) — carryover demand still owed to customers.
+Formula: stock_qty − delivered_qty × conversion_factor (in stock UOM).
+Data source: tabSales Order Item, filtered by SO Status + Warehouse.">i</span></th>
+            <th data-sort="curr_month_order" class="por-th-sortable">Curr Month SO
+              <span class="por-tip" title="PENDING Sales Order qty for THIS month — active customer demand.
+Same formula as Prev Month SO; only delivery_date filter differs.
+Data source: tabSales Order Item.">i</span></th>
+            <th data-sort="prev_dispatch" class="por-th-sortable">Prev Month Dispatch
+              <span class="por-tip" title="Actual deliveries that left the warehouse last month — stock_qty on submitted Delivery Notes.
+Useful to compare carryover SO vs actual movement.
+Data source: tabDelivery Note Item, filtered by warehouse.">i</span></th>
+            <th data-sort="curr_dispatch" class="por-th-sortable">Curr Month Dispatch
+              <span class="por-tip" title="Actual deliveries this month — stock_qty on submitted Delivery Notes.
+Data source: tabDelivery Note Item, filtered by warehouse.">i</span></th>
+            <th data-sort="curr_projection" class="por-th-sortable">Sales Projection
+              <span class="por-tip" title="Forecast for this month from the submitted Sales Projection document (qty_in_stock_uom).
+One Sales Projection per (month, year, source_warehouse).
+Data source: chaizup_toc Sales Projection / Sales Projected Items child.">i</span></th>
+            <th data-sort="total_curr_sales" class="por-th-sortable">Total Sales
+              <span class="por-tip" title="Total qty booked on Sales Orders this month — delivered + pending, submitted SOs only.
+Demand baseline.
+Data source: tabSales Order Item (docstatus=1).">i</span></th>
+            <th data-sort="projection_vs_sales" class="por-th-sortable">Proj vs Sales %
+              <span class="por-tip" title="Total Sales ÷ Sales Projection × 100.
+Greater than 100% = sales coming in faster than forecast (outperforming).
+Less than 100% = below projection.">i</span></th>
+            <th data-sort="coverage_pct" class="por-th-sortable">Coverage %
+              <span class="por-tip" title="(Sales Projection + Prev Month SO) ÷ Total Sales × 100.
+How much of this month&apos;s demand is already covered by planning inputs (forecast + carryover).
+Greater than 100% = inputs exceed demand (over-planned).
+Less than 100% = under-planned, expect shortfall.">i</span></th>
+            <th data-sort="target_production" class="por-th-sortable">Target Production
+              <span class="por-tip" title="What the plant SHOULD produce this month: max(Sales Projection, Total Sales).
+If projection is bigger, projection sets the target.
+If orders are bigger, orders set the target.
+Stock UOM with all conversions on hover.">i</span></th>
+            <th data-sort="target_achieved_pct" class="por-th-sortable">% Target Achieved
+              <span class="por-tip" title="How close the factory is to hitting Target Production for the selected warehouse.
+Gap = max(Curr Month SO − (Pending WO Qty + Stock on Hand), 0).
+Achievement = max(Target − Gap, 0) ÷ Target × 100.
+100% = demand fully supportable with current stock + open WOs.
+0% = no part of the demand can be fulfilled yet.
+All quantities are warehouse-scoped to the selected Warehouse filter.">i</span></th>
+            <th data-sort="stock" class="por-th-sortable">Stock on Hand
+              <span class="por-tip" title="Current physical inventory at the selected warehouses.
+Physical = Bin.actual_qty.
+Physical + Expected = actual + ordered (open POs) + planned (open WO output).">i</span></th>
+            <th data-sort="has_shortage" class="por-th-sortable">Shortage
+              <span class="por-tip" title="Yes/No flag — whether the active BOM has any short components for the current Possible Qty.
+Click View for the by-Work-Order + by-sub-assembly breakdown.">i</span></th>
+            <th data-sort="possible_qty" class="por-th-sortable">Possible Qty
+              <span class="por-tip" title="Max qty you can produce RIGHT NOW given current component stock + the active BOM.
+Independent mode (default): each item is checked against the FULL pool of stock independently.
+Priority mode: items consume the pool in row order. Earlier rows take precedence; leftover stock flows to later rows. Use the # column or click any header to set priority.">i</span></th>
+            <th data-sort="active_bom" class="por-th-sortable">Active BOM
+              <span class="por-tip" title="Default active submitted BOM used for shortage and cost calculations.
+Click the BOM name to open it in a new tab.
+Data source: tabBOM (is_active=1, is_default=1, docstatus=1).">i</span></th>
+            <th data-sort="pp_count" class="por-th-sortable">Production Plans
+              <span class="por-tip" title="Number of active Production Plans containing this item.
+Click View Plan, then click any PP id, to drill into the plan tree:
+parent WO -> sub-assembly WOs -> BOM components with required / consumed / stock / supply / shortage.">i</span></th>
+            <th>Cost
+              <span class="por-tip" title="Three-way cost: BOM Standard vs Actual Consumed (Stock Entry) vs 6-month Historical Average.
+Plus a per-UOM cost table — rupees per stock UOM AND per every available UOM conversion (Pcs / Kg / Master Carton...).">i</span></th>
           </tr>
         </thead>
         <tbody id="por-tbody"></tbody>
@@ -1071,24 +1356,126 @@
       <p>Load production data first to view charts.</p>
     </div>
     <div id="por-charts-content" class="por-charts-grid" style="display:none;">
-      <div class="por-chart-card">
-        <div class="por-chart-title"><i class="fa-solid fa-chart-pie" style="color:var(--por-brand);margin-right:5px;"></i>Item Type Distribution</div>
-        <canvas id="por-chart-type" class="por-chart-canvas"></canvas>
+
+      <!-- Daily Punch List — Priority Action Board (production manager opens this first) -->
+      <div class="por-chart-card wide">
+        <div class="por-chart-title">
+          <i class="fa-solid fa-flag" style="color:var(--por-err);margin-right:5px;"></i>
+          Today&apos;s Priority Action Board — Top 10 by Target Gap
+          <span class="por-tip" title="What to chase TODAY.
+Each bar = one item, ranked by how much demand cannot be met yet.
+Stacked layers (left to right):
+  Stock         — qty already on hand that covers part of Target
+  Pending WO    — qty in open Work Orders that will close more of the gap
+  Gap (red)     = max(Curr Month SO − (Stock + Pending WO), 0)
+                  If red is visible, that&apos;s the action item.
+Sorted: highest gap first. Source: Curr Month SO − (pending_wo + stock), warehouse-scoped.">i</span>
+        </div>
+        <canvas id="por-chart-priority" class="por-chart-canvas" style="max-height:320px;"></canvas>
       </div>
+
+      <!-- Daily Production Need (sizes the batches for today) -->
+      <div class="por-chart-card wide">
+        <div class="por-chart-title">
+          <i class="fa-solid fa-industry" style="color:var(--por-brand);margin-right:5px;"></i>
+          Daily Production Need — Top 10 Remaining vs Daily Pace
+          <span class="por-tip" title="What to make TODAY to stay on plan.
+For each item:
+  Remaining = Target Production − Produced (this month, from Manufacture STEs)
+  Daily Need = Remaining ÷ Working Days Left in the month (Sunday excluded)
+The Daily Need bar tells the supervisor the per-day batch size to hit Target by month-end.
+If Daily Need is bigger than usual run rate → flag it; demand is outpacing capacity.">i</span>
+        </div>
+        <canvas id="por-chart-daily-need" class="por-chart-canvas" style="max-height:320px;"></canvas>
+      </div>
+
+      <!-- Production Readiness pie -->
       <div class="por-chart-card">
-        <div class="por-chart-title"><i class="fa-solid fa-chart-pie" style="color:var(--por-err);margin-right:5px;"></i>Shortage Status</div>
+        <div class="por-chart-title">
+          <i class="fa-solid fa-circle-check" style="color:var(--por-ok);margin-right:5px;"></i>
+          Production Readiness Mix
+          <span class="por-tip" title="Snapshot of how many items are in each readiness bucket:
+Ready    — possible_qty ≥ Target. Can fulfil the planned target right now.
+Partial  — possible_qty &gt; 0 but &lt; Target. Some quantity makeable.
+Blocked  — possible_qty = 0 with at least one BOM component short.
+No Demand — no Sales Order, no Projection, nothing to make.">i</span>
+        </div>
+        <canvas id="por-chart-readiness" class="por-chart-canvas"></canvas>
+      </div>
+
+      <!-- Shortage Status pie (kept) -->
+      <div class="por-chart-card">
+        <div class="por-chart-title">
+          <i class="fa-solid fa-chart-pie" style="color:var(--por-err);margin-right:5px;"></i>
+          Items With vs Without Shortage
+          <span class="por-tip" title="Of all items in the dashboard, how many have at least one BOM component short of stock.
+Source: per-item BOM walk vs Bin.actual_qty (warehouse-scoped).">i</span>
+        </div>
         <canvas id="por-chart-shortage" class="por-chart-canvas"></canvas>
       </div>
+
+      <!-- Coverage Health distribution -->
       <div class="por-chart-card">
-        <div class="por-chart-title"><i class="fa-solid fa-chart-bar" style="color:var(--por-ok);margin-right:5px;"></i>Top 10 — Curr Month Orders</div>
+        <div class="por-chart-title">
+          <i class="fa-solid fa-shield-halved" style="color:var(--por-info);margin-right:5px;"></i>
+          Coverage Health Distribution
+          <span class="por-tip" title="How well planning inputs cover this month&apos;s sales for each item.
+Coverage % = (Sales Projection + Prev Month SO) ÷ Total Curr Sales × 100.
+Bucket counts:
+  &lt;50%       under-planned, expect shortfall
+  50–99%      partially planned
+  100–149%    well-planned
+  ≥150%       over-planned (review forecast)
+  No Sales    no current month sales — coverage undefined">i</span>
+        </div>
+        <canvas id="por-chart-coverage" class="por-chart-canvas"></canvas>
+      </div>
+
+      <!-- Shortage Drivers — procurement priority -->
+      <div class="por-chart-card wide">
+        <div class="por-chart-title">
+          <i class="fa-solid fa-truck-fast" style="color:var(--por-warn);margin-right:5px;"></i>
+          Top Shortage Drivers — Components Blocking the Most Items
+          <span class="por-tip" title="Components causing shortages across the most parent items.
+Score = number of distinct parent items short of THIS component.
+Tie-broken by total shortage qty across all parents.
+Action: this is the procurement priority list — buying these closes the biggest production logjam.
+Source: per-item BOM walk shortage_components, aggregated.">i</span>
+        </div>
+        <canvas id="por-chart-shortage-drivers" class="por-chart-canvas" style="max-height:300px;"></canvas>
+      </div>
+
+      <!-- Top 10 by current month order -->
+      <div class="por-chart-card">
+        <div class="por-chart-title">
+          <i class="fa-solid fa-chart-bar" style="color:var(--por-ok);margin-right:5px;"></i>
+          Top 10 — Current Month Demand
+          <span class="por-tip" title="Top 10 items by pending Curr Month SO qty.
+Bars overlay: Curr SO (demand) | Planned (open WO sum) | Dispatch (delivered).
+Use this to see where production is keeping up vs. lagging demand.">i</span>
+        </div>
         <canvas id="por-chart-orders" class="por-chart-canvas"></canvas>
       </div>
+
+      <!-- Projection vs Sales -->
       <div class="por-chart-card">
-        <div class="por-chart-title"><i class="fa-solid fa-chart-bar" style="color:var(--por-info);margin-right:5px;"></i>Top 10 — Sales Projection vs Sales</div>
+        <div class="por-chart-title">
+          <i class="fa-solid fa-chart-bar" style="color:var(--por-info);margin-right:5px;"></i>
+          Top 10 — Sales Projection vs Total Sales
+          <span class="por-tip" title="For the top 10 items by projection, compares forecast to actual booked sales this month. Tells the planner where forecast was too high or too low.">i</span>
+        </div>
         <canvas id="por-chart-proj" class="por-chart-canvas"></canvas>
       </div>
+
+      <!-- Planned WOs by Group -->
       <div class="por-chart-card wide">
-        <div class="por-chart-title"><i class="fa-solid fa-chart-bar" style="color:var(--por-warn);margin-right:5px;"></i>Planned WOs by Item Group</div>
+        <div class="por-chart-title">
+          <i class="fa-solid fa-chart-bar" style="color:var(--por-warn);margin-right:5px;"></i>
+          Open Work Orders by Item Group
+          <span class="por-tip" title="Total count of open Work Orders rolled up by item group.
+Source: tabWork Order, filtered by selected WO Status + Warehouse.
+Uses the FULL ERPNext item group name (no abbreviation).">i</span>
+        </div>
         <canvas id="por-chart-group" class="por-chart-canvas" style="max-height:290px;"></canvas>
       </div>
     </div>
@@ -1155,6 +1542,27 @@
     </div>
     <div class="por-modal-ftr">
       <button class="por-btn por-btn-default" data-close-modal="por-pp-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODAL: Production Plan Tree (drilled-into PP)
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="por-overlay" id="por-pptree-modal">
+  <div class="por-modal wide">
+    <div class="por-modal-hdr">
+      <i class="fa-solid fa-diagram-project" style="color:var(--por-brand);"></i>
+      <span class="por-modal-title" id="por-pptree-modal-title">Production Plan Tree</span>
+      <button class="por-modal-close" data-close-modal="por-pptree-modal">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="por-modal-body" id="por-pptree-modal-body">
+      <div class="por-state-box"><div class="por-spinner"></div></div>
+    </div>
+    <div class="por-modal-ftr">
+      <button class="por-btn por-btn-default" data-close-modal="por-pptree-modal">Close</button>
     </div>
   </div>
 </div>

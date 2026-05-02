@@ -217,6 +217,391 @@ Use this table when triaging "is X covered?" questions.
   `DEEPSEEK_API_KEY` constant → `frappe.conf.deepseek_api_key` → `TOC Settings.custom_deepseek_api_key`.
 - After any HTML/JS change: `redis-cli -h redis-cache -p 6379 FLUSHALL`.
 
+## Sync Block — Session 2026-05-01 #9 (Cover Sheet Filter Display Fix)
+
+### Bug fixed
+The Cover sheet was rendering `WO Statuses` / `SO Statuses` / `PO Statuses`
+/ `Warehouses` as JSON-string CHARACTER LISTS, e.g.
+`[, ", I, n,  , P, r, o, c, e, s, s, ", ]`.
+
+**Root cause**: the URL form (`window.location.href = ...export_excel?...`)
+encodes lists as JSON strings (`'["In Process","Not Started"]'`).
+`get_production_overview` parses them internally, but `export_excel`
+itself was passing the RAW string to `", ".join(...)` for the Cover sheet —
+which iterates the string char-by-char.
+
+**Fix**: added a local `_as_list(v, default)` helper at the top of
+`export_excel` that:
+- Returns the default if value is None/empty.
+- Calls `frappe.parse_json` if the value is a string.
+- Returns lists as-is.
+- Falls back to wrapping a single value in a 1-elem list, or to default.
+Then used the parsed lists everywhere — both for `get_production_overview`
+call AND for the Cover sheet rendering.
+
+### Restricted areas (added)
+- `_as_list` is the canonical parser for these URL params inside
+  `export_excel`. Don't bypass it — every list-shaped param coming through
+  the URL will arrive JSON-encoded.
+
+## Sync Block — Session 2026-05-01 #8 (Sheet Guide + Simple Report)
+
+### What changed
+The Excel export now ships **8 sheets** (was 6).
+
+**New: Sheet Guide** (tab #2, between Cover and Overview).
+A workbook map. One row per sheet with its purpose, real-world use case,
+and key columns. Helps non-technical readers know which tab to open. Indigo
+header, alt-row shading, wrap text on the description columns.
+
+**New: Simple Report** (tab #3, between Sheet Guide and Overview).
+The planner's daily quick-look. Eleven columns:
+
+| Column | Source / Formula |
+|--------|------------------|
+| Item Code, Item Name, Item Group, Stock UOM | Item master |
+| Total Pending SO         | NEW backend helper `_get_all_pending_so_qty` — sum of `stock_qty − delivered × cf` clamped ≥0 across ALL pending SOs (any month), filtered by selected SO Status + Warehouses. |
+| Open WO Pending Qty      | `Σ (Work Order.qty − produced_qty)` on open WOs (already exposed as `pending_wo_qty`). |
+| Total Projection         | `qty_in_stock_uom` from this month's Sales Projection. |
+| Stock on Hand (Physical) | `Bin.actual_qty` only. **Always physical** on this sheet, regardless of the page-level Stock View toggle. |
+| Target Production        | `max(Sales Projection, Total Curr Sales)`. |
+| Shortage vs Physical Stock      | `max(Target − Stock, 0)` — pure firefight view. |
+| Shortage vs (Stock + Pending WO)| `max(Target − (Stock + Pending WO), 0)` — gap after open WOs land. |
+
+A pre-header row (row 2) lists every formula in plain English. Frozen
+panes at C5 (so item code + name remain visible while scrolling). Row tint:
+red if Shortage vs (Stock+WO) > 0, amber if only Shortage vs Physical > 0,
+zebra otherwise. AutoFilter on rows 4:end (skips the formula note row).
+
+### Restricted areas (added)
+- The Simple Report sheet uses **physical stock only** (independent
+  `_get_stock(..., "physical")` call). Don't honour the page Stock View
+  here — the user explicitly asked for "with physical stock" math.
+- Pre-header row in Simple Report (row 2) holds the formulas. AutoFilter
+  starts at row 4 to skip it. If you reposition headers, update both.
+- `_get_all_pending_so_qty` clamps to `>= 0` (over-delivered SOs go to 0,
+  not negative). Same convention as `production_plan_engine`. Don't drop
+  the GREATEST clause.
+- Sheet ORDER for the workbook is now: Cover → Sheet Guide → Simple
+  Report → Overview → UOM Comparison → Item Master → Group Pivot →
+  Shortage Drivers. Cover stays leftmost; Sheet Guide is the second tab so
+  the reader hits the workbook map immediately.
+
+## Sync Block — Session 2026-05-01 #7 (Counts-not-Qty Cards, Excel Export Overhaul)
+
+### What changed
+
+**Summary cards now show ITEM COUNTS, never aggregated qty.**
+Reason: items use heterogeneous UOMs (Pcs / Kg / Gram / Master Carton).
+Summing `qty` across items with different UOMs is mathematically wrong.
+
+The 8 cards now show:
+1. Total Items
+2. With Shortage
+3. No Shortage
+4. Items w/ Open WO
+5. Items w/ Curr Month SO
+6. Items Dispatched
+7. Blocked (short + 0 possible)
+8. Target Hit (≥100%)
+
+Each card label now ends in "(count)" and has a descriptive tooltip.
+The aggregate qty fields (`total_planned_qty` etc.) are still in the
+summary dict but now feed only the Excel "Cover" sheet, which clearly
+labels them and warns about UOM mixing.
+
+**Excel export overhauled — now 6 sheets:**
+
+| Sheet | Purpose |
+|-------|---------|
+| Cover           | Title + which filters were applied + counts table. The reading guide. |
+| Overview        | All 30 columns including Description; alt rows; conditional tints (red shortage / pink open SO); frozen panes (C2); autofilter on every column. |
+| UOM Comparison  | One row per (item, metric, UOM). Stock UOM rows highlighted indigo. Lets a planner look up any qty in any UOM without manual conversion. |
+| Item Master     | NEW. Reference catalogue: code / name / group / stock_uom / description / standard_rate / valuation_rate / TOC flags / All UOM Conversions string. |
+| Group Pivot     | NEW. Pre-aggregated by Item Group: counts of items with shortage / WO / PP / curr SO / dispatch / projection / target hit / blocked / sub-assembly. Bottom TOTAL row in indigo. |
+| Shortage Drivers| NEW. Procurement priority list. Components blocking the most parents (red tint if blocks ≥5, amber if ≥2). |
+
+Each sheet:
+- Indigo header (#4F46E5) with white bold text
+- Alternate-row shading (zebra) on body rows that aren't tinted by status
+- Frozen panes (typically `B2` or `C2`)
+- AutoFilter on the header row across the whole data range
+- Borders on every cell
+
+**Google Sheets compatibility**:
+- AutoFilter ranges are written via `ws.auto_filter.ref` (preserved on import).
+- Pre-aggregated "pivot-style" data sheet replaces real pivot tables (real
+  pivots flatten unpredictably during Sheets import).
+- Static fills (PatternFill) instead of named table styles — colour
+  survives the import.
+- Frozen panes are honoured.
+
+### Restricted areas (added)
+- Cards MUST stay as counts. If a future change wants a qty card, it MUST
+  be per-UOM (e.g. "Total Planned Qty in KG only") — never a mixed-UOM sum.
+- Sheet ORDER in the workbook matters: Cover first acts as the reading guide.
+  Reorder only if the Cover stays the leftmost tab.
+- AutoFilter on Group Pivot excludes the TOTAL row (`max_row - 1`). Don't
+  remove this; including TOTAL in the filter range corrupts the sort.
+- Item Master "All UOM Conversions" column is a single string of the form
+  `"<UOM> (×<factor>); <UOM> (×<factor>); ..."`. Don't split into multiple
+  columns — that exploded the row count and broke the reference catalogue.
+- Shortage Drivers tint thresholds are 2 (amber) and 5 (red). These are
+  not configurable through TOC Settings yet — change with care; they map
+  to mental categories ("worth chasing" vs "drop everything").
+
+## Sync Block — Session 2026-05-01 #6 (Production-team Charts, Filter Toasts, All-tab Filter Sync)
+
+### What changed
+
+**New production-team chart series (backend `get_chart_data`)**:
+
+| Key | Type | What it answers for the floor |
+|-----|------|------------------------------|
+| `bar_priority_action`  | horizontal stacked bar | "What's the gap I have to chase TODAY?" Stacks Stock + Pending WO + Gap (red) per item, top 10 by Target Gap. |
+| `bar_daily_need`       | horizontal grouped bar | "How much do I need to produce per day to hit Target?" Remaining + per-day need (Sundays excluded). |
+| `readiness_pie`        | doughnut | Items split into Ready / Partial / Blocked / No Demand. |
+| `bar_coverage_health`  | bar | Distribution of items across Coverage % buckets (<50, 50–99, 100–149, ≥150, No Sales). |
+| `bar_shortage_drivers` | horizontal bar | Top 10 components blocking the most parents. Procurement priority list. |
+| `working_days_left`    | int | Remaining working days in the period (excludes Sunday). Drives daily-need calc. |
+
+The Charts tab now renders 9 charts in 5 logical sections:
+"Today's Priority", "Daily Need", "Readiness Mix", "Shortage Status",
+"Coverage Health", "Shortage Drivers", "Top by Demand",
+"Projection vs Sales", "Open WOs by Group". Every card has a `[i]` tip.
+
+**Filter tooltips**: every filter group label and most controls now have a
+title= explaining what the filter affects across tabs (Overview / AI / Charts).
+
+**Filter-change toast + Load-button pulse**:
+- Any change to Company, Month, Year, Stock View, or any multi-select status
+  triggers `frappe.show_alert({ indicator: 'blue' }, 5)` describing the change.
+- The Load button gets `.por-load-pulse` (CSS keyframe ring) so the user
+  notices the pending refresh.
+- Clicking Load clears the pulse and shows a green confirmation toast:
+  "Loaded N items for Month YYYY. All tabs (Overview, AI, Charts) will use
+  this dataset."
+- `_loadData` invalidates `_chartsLoaded` and `_aiInsightLoaded` so the next
+  view of either tab refetches automatically.
+
+**Chart filter parity**: `_loadCharts` now passes `pp_statuses` and
+`po_statuses` in addition to wo/so/warehouses/stock_mode. Same parameter
+set as the Overview tab — guarantees identical scoping across tabs.
+
+### Restricted areas (added)
+- Working-days-left calculation uses `weekday() < 6` (Mon=0..Sun=6 → keeps
+  Mon..Sat as working). If the factory has different weekly off days,
+  expose this through TOC Settings rather than hard-coding.
+- `bar_priority_action` data series — `stock`, `wo_pending`, `gap` MUST sum
+  to ≤ `target` per item. The clamping logic is intentional so the stack
+  chart renders without overshoot. Don't simplify to raw values.
+- `frappe.show_alert` is the only toast mechanism used. Don't introduce a
+  parallel notification system; users get confused.
+- The Load-button pulse class is `por-load-pulse`. CSS keyframe is
+  `por-load-pulse`. Don't rename either independently — they're paired.
+- `_aiInsightLoaded` flag is reset on every `_loadData` call. Removing this
+  reset re-introduces stale-AI-insight bug after filter change.
+
+## Sync Block — Session 2026-05-01 #5 (Qualifying Items Tightened, Custom Tooltips, Shortage Detail with Name+Stock)
+
+### What changed
+
+**Qualifying items narrowed to exactly the 4 conditions the user specified**.
+`_get_qualifying_items` now returns ONLY items that match at least one of:
+
+  1. `Item.custom_toc_auto_manufacture = 1` (TOC App flag)
+  2. Item is the `production_item` of an open Work Order
+     OR appears in `Production Plan Item.item_code` of an open Production Plan
+  3. Sub-assembly proper — item has its own open WO AND is consumed by a parent
+     WO via the same Production Plan link
+  4. Item has at least one OPEN PENDING Sales Order line (any month)
+
+  Dropped (intentional, per spec): items only present in Sales Projection;
+  items used purely as plain BOM components without their own WO. Result on
+  the test bench: 785 → 344 items.
+
+**Shortage materials now show item code + name + current stock everywhere.**
+Backend `_get_shortage_summary` now returns each short component with
+`item_code`, `item_name`, `required`, `in_stock` (alias `stock`), `shortage`,
+`uom`. Frontend renders this richer line in:
+  - Item-detail modal "components short" inline strip — now a 6-column table
+  - Shortage modal "Breakdown by WO" — now a 6-column table
+  - Shortage chip hover tooltip — multi-line list of top short components
+  - PP Tree (already showed name + stock from earlier work)
+
+**Custom hover tooltip system replaces native `title=`.**
+Reason: native `title=` tooltips have a 700ms+ browser delay AND are styled
+by the OS (inconsistent across Mac/Win/Linux). User said "tooltips not
+working" — they were firing, just very late.
+
+Mechanism — see `_setupTooltips()` in JS:
+- Single global `#por-tooltip` div appended to `<body>`.
+- Delegated `mouseover` on `#por-root` reads any `[title]` or `[data-tip]`
+  on the hovered element, copies the text into the tooltip div, hides the
+  native tooltip by stashing `title` into `data-orig-title`, restores on mouseout.
+- `mousemove` repositions, edge-aware so the tip never overflows the viewport.
+- `scroll` and window `blur` clear stale tips.
+- All existing `title="..."` attributes work without HTML edits — zero
+  migration cost.
+
+CSS classes added: `.por-tooltip` (dark indigo bg, white text, monospace-friendly
+multi-line). Cursor hint added: `[title], [data-tip] { cursor:help }`.
+
+### Restricted areas (added)
+- `_get_qualifying_items` is the gatekeeper for everything downstream — every
+  item displayed in the table, charts, AI context, Excel export. Adding a
+  new "qualifying" condition without user sign-off broadens the dashboard
+  and reverts the 2026-05-01 spec.
+- `_get_shortage_summary` short_components MUST include `item_name` and `in_stock`.
+  The frontend assumes both fields. Removing them re-introduces the
+  "code-only shortage" complaint.
+- The custom tooltip system removes `title` and re-attaches it. Do NOT also
+  bind a competing tooltip handler — race conditions cause flickering.
+- `data-orig-title` is the swap field. Renaming it breaks the restoration
+  on `mouseout` and leaves elements without their tooltip permanently after
+  the first hover.
+- `#por-tooltip` is appended to `document.body`, not `#por-root`, so the
+  z-index works above all modals and the page header. Don't move it.
+
+## Sync Block — Session 2026-05-01 #4 (Blank-page Fix: WKP-001 Apostrophe Escape)
+
+### What broke
+After Pass #3, the page rendered blank. Browser console showed the Page doc
+returning a `script` field beginning with
+`frappe.templates["production_overview"] = ' <li ...` — i.e. Frappe had
+wrapped the HTML in a single-quoted JS string, and one of the apostrophes
+inside an HTML *tooltip* prematurely terminated that string. Result: the
+generated page script was a SyntaxError, eval failed, page rendered blank.
+
+### Root cause
+TWO raw apostrophes inside HTML — neither in an `onclick` handler:
+1. `title="... 'Workflow: <state>' ..."` (literal apostrophes around text)
+2. Plain-content tooltip text: `"this month's demand"` (possessive).
+
+The well-known WKP-001 rule originally said "no single quotes in event
+handlers", but the actual constraint is much stronger — Frappe wraps the
+ENTIRE HTML inside a single-quoted JS string, so a raw apostrophe ANYWHERE
+in the HTML breaks the wrapping. Tooltip text, alt text, plain content
+between tags — all of it is in the wrapped string.
+
+### Fix (one line each)
+Line 908 — `'Workflow: <state>'` → `&quot;Workflow: <state>&quot;`
+Line 1120 — `month's` → `month&apos;s`
+
+### Hardening (already in #3 carried forward)
+Every `getElementById` lookup in `_bindEvents` is now wrapped in `$on(id, ev, fn)`
+which silently no-ops on null — even if cached HTML lags behind the JS, the
+bootstrap will not abort.
+
+### Restricted Areas (added)
+- **HTML apostrophe count must be zero.** Run before every commit:
+  ```
+  grep -c "'" apps/chaizup_toc/chaizup_toc/chaizup_toc/page/production_overview/production_overview.html
+  ```
+  must return `0`. Same rule for any Frappe Page HTML — `wo_kitting_planner.html`,
+  `toc_item_settings.html`, `toc_user_guide.html` etc.
+- Audit the live generated page script after any HTML change:
+  ```python
+  from frappe.desk.desk_page import get
+  out = get("production-overview")
+  ```
+  Then grep the `script` field for unescaped apostrophes inside the
+  `frappe.templates[...] = '...';` wrapper. `node --check` on the dumped
+  script must exit 0.
+
+### Sync handoff
+For ALL Frappe pages in this app (and any future ones):
+1. NO raw apostrophes in HTML. Use `&apos;` for possessives, `&quot;` for
+   string args inside event handlers / templates.
+2. NO `%}` in CSS without a preceding `;` (Jinja2 collision).
+3. Every new DOM lookup should be guarded — null-safety prevents one missing
+   element from blanking the entire page.
+
+## Sync Block — Session 2026-04-30 #3 (Warehouse, Target, PP Tree, Sort+Search, Hyperlinks)
+
+### What changed
+
+**Removed**
+- "Type" column (FG/SFG/RM/PM badge) — discontinued. The classification is still
+  computed server-side and present in API output / Excel, just not rendered.
+
+**Added**
+- **Sequence #** column — for Priority Planning Mode. Row index of the current
+  sort/filter view; persists into `_recalcPriorityPossibleQty` so item priority
+  follows whatever order the user sees.
+- **Target Production** column — `max(Sales Projection, Total Sales)` with a
+  "Projection / Order" pill showing which side wins. All UOMs in tooltip.
+- **% Target Achieved** column — uses the user formula
+  `gap = max(curr_so − (pending_wo + stock), 0)` then
+  `achieved = max(target − gap, 0)`; warehouse-scoped.
+
+**Hyperlinks everywhere**
+- Item Code, Active BOM, WO names, MR names, PO names, PP names, sub-asm
+  parent WOs — all open `/app/<doctype>/<name>` in a new tab via the new
+  `_dl(doctype, name)` helper.
+
+**Warehouse-aware queries**
+- `_get_planned_qty`, `_get_actual_qty`, `_get_so_qty`, `_get_dispatch_qty`,
+  `_get_total_sales_qty`, `_get_projection_qty`, `_get_has_open_so_map`,
+  `_get_wo_counts` all accept a `warehouses` parameter now.
+- WO scoping uses `wo.fg_warehouse`. STE uses `sed.t_warehouse`. SO uses
+  `COALESCE(NULLIF(soi.warehouse,''), so.set_warehouse)`. DN uses
+  `dni.warehouse`. Sales Projection uses `sp.source_warehouse`. Bin already
+  was warehouse-scoped.
+
+**PP Tree modal (drill-into PP)**
+- New `get_pp_tree(pp_name)` endpoint — returns parent + sub-assembly WOs,
+  each with BOM components and supply/shortage data.
+- Component rows show:
+  required, consumed (from STEs of that WO), remaining, stock,
+  will-be-received-from PO/WO/MR, shortage.
+- Detail row beneath each component lists open WO/PO/MR documents (each is
+  a hyperlink to its `/app/<doctype>/<name>`).
+
+**Column sort + universal search**
+- Every header is `data-sort=<key>` clickable; toggles asc/desc. Indicator
+  shown via `.por-sort-asc` / `.por-sort-desc` chevron.
+- New search input on the tab bar; substring matches on item code/name,
+  item group, active BOM, and parent PP names. `Esc` clears.
+
+**Item name wrap**
+- `.por-in` overridden to `white-space:normal`; `.por-col-item` widened to
+  240px. Full names visible without truncation.
+
+**PO Status filter**
+- New multi-select on the filter bar, populated from
+  `get_default_statuses().all_po_statuses` (dynamic — not hardcoded).
+- Sent to backend as `po_statuses`; accepted by `get_production_overview`
+  and `export_excel`.
+
+**Excel export updated**
+- Sheet 1 columns: Type column removed; Pending WO Qty, Target Production,
+  Target Gap, % Target Achieved added.
+
+### Restricted areas (do NOT change)
+- `_get_so_qty` warehouse clause uses BOTH `soi.warehouse` AND
+  `so.set_warehouse` via COALESCE — legacy SOs that only set the header
+  warehouse must still match. Removing one half re-introduces the
+  warehouse-leakage bug.
+- WO warehouse column is `fg_warehouse` (NOT `wip_warehouse` — that's
+  different semantics). Don't swap.
+- STE warehouse column for finished item is `t_warehouse` (target). Don't
+  use `s_warehouse` (source) here.
+- Excel sheet1 column list is the source of truth — JS `_buildRow`, HTML
+  `<th>` order, and the openpyxl headers must all stay in lock-step.
+- `_dl(doctype, name)` always opens a NEW TAB (`target="_blank"`). Don't
+  remove `rel="noopener noreferrer"` — required for security.
+- `_recalcPriorityPossibleQty(rows)` MUST be called with the same rows that
+  are about to render; calling it without the visible rows reverts to global
+  order and breaks the sequence column meaning.
+- `get_pp_tree` joins on `Work Order.production_plan` — it does NOT scope
+  by `production_item`. The whole plan tree is returned for every parent WO
+  in the plan because the user explicitly asked for "tree parent production
+  with sub assembly".
+- The Type column is gone but `item_type` is still computed server-side
+  (used by AI context + Excel sheet 2 metadata). Don't remove the field
+  from the API response or the AI prompt context will break.
+
 ## Sync Block — Session 2026-04-30 #2 (Full-spec compliance pass)
 
 ### What changed
