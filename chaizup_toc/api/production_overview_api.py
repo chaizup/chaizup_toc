@@ -195,10 +195,15 @@ def get_production_overview(
     total_sales_map  = _get_total_sales_qty(all_codes, curr_month, curr_year, warehouses)
     stock_map        = _get_stock(all_codes, warehouses, stock_mode)
     bom_map          = _get_active_bom(all_codes)
-    shortage_map     = _get_shortage_summary(all_codes, bom_map, stock_map)
+    shortage_map     = _get_shortage_summary(
+        all_codes, bom_map, stock_map,
+        planned_qty_map=planned_info_map,
+        warehouses=warehouses, stock_mode=stock_mode
+    )
     possible_map     = _get_possible_qty(all_codes, bom_map, stock_map)
     cost_summary_map = _get_cost_summary(all_codes, curr_month, curr_year, bom_map)
     pp_count_map     = _get_active_pp_count(all_codes, pp_statuses)
+    wo_pp_group_map  = _get_wo_pp_groups(all_codes, wo_statuses, warehouses)
     has_open_so_map  = _get_has_open_so_map(all_codes, so_statuses, warehouses)
     # Total pending SO (any month) — used by Excel Simple Report sheet + AI ctx.
     total_pending_so_map = _get_all_pending_so_qty(all_codes, so_statuses, warehouses)
@@ -288,6 +293,10 @@ def get_production_overview(
             "active_bom":        bom_map.get(code, ""),
             "cost_summary":      cost_summary_map.get(code, {}),
             "pp_count":          pp_count_map.get(code, 0),
+            # Smart PP indicator (POR-007): see _get_wo_pp_groups docstring
+            "wo_pp_count":       wo_pp_group_map.get(code, {}).get("wo_pp_count", 0),
+            "wo_pp_names":       wo_pp_group_map.get(code, {}).get("wo_pp_names", []),
+            "wo_pp_siblings":    wo_pp_group_map.get(code, {}).get("wo_pp_siblings", 0),
             "has_open_so":       has_open_so_map.get(code, False),
             "total_pending_so":  flt(total_pending_so_map.get(code, 0)),
         })
@@ -2177,12 +2186,25 @@ def _get_pp_list(item_code, pp_statuses=None):
     Native ERPNext call: list active Production Plans containing this item
     as a Production Plan Item, plus all child Work Orders for the same plan.
     Used by `get_active_production_plans` modal.
+
+    NOTE: pp.custom_created_by and pp.custom_creation_reason are chaizup_toc
+    custom fields installed via fixtures/custom_field.json. We probe each
+    column with frappe.db.has_column() so the query still works on bench
+    sites where the fixtures haven't been synced yet.
     """
     pp_statuses = pp_statuses or _DEFAULT_PP_STATUSES
     pp_sql      = _sql_in(pp_statuses)
+
+    # ── Probe optional custom columns (graceful when fixtures not synced) ──
+    has_created_by      = frappe.db.has_column("Production Plan", "custom_created_by")
+    has_creation_reason = frappe.db.has_column("Production Plan", "custom_creation_reason")
+    extra_cols = []
+    if has_created_by:      extra_cols.append("pp.custom_created_by")
+    if has_creation_reason: extra_cols.append("pp.custom_creation_reason")
+    extra_select = ("," + ", ".join(extra_cols)) if extra_cols else ""
+
     pps = frappe.db.sql(f"""
-        SELECT DISTINCT pp.name, pp.status, pp.posting_date,
-               pp.custom_created_by, pp.custom_creation_reason
+        SELECT DISTINCT pp.name, pp.status, pp.posting_date{extra_select}
         FROM `tabProduction Plan` pp
         JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
         WHERE pp.docstatus = 1
@@ -2223,8 +2245,8 @@ def _get_pp_list(item_code, pp_statuses=None):
             "pp_name":          pp.name,
             "status":           pp.status,
             "posting_date":     str(pp.posting_date or ""),
-            "created_by":       pp.custom_created_by or "User",
-            "creation_reason":  pp.custom_creation_reason or "",
+            "created_by":       (pp.get("custom_created_by") if has_created_by else None) or "User",
+            "creation_reason":  (pp.get("custom_creation_reason") if has_creation_reason else "") or "",
             "work_orders":      by_pp.get(pp.name, []),
         })
     return out
@@ -2766,6 +2788,62 @@ def _get_active_pp_count(item_codes, pp_statuses=None):
     return {r.item_code: cint(r.cnt) for r in rows}
 
 
+def _get_wo_pp_groups(item_codes, wo_statuses, warehouses=None):
+    """
+    Smart Production Plan grouping for the Overview "Open WOs" cell.
+
+    POR-007 (2026-05-04): The "Production Plans" modal makes it obvious that
+    multiple Work Orders share a parent PP — but on the main grid the user
+    can't see that signal until they open the modal. This helper returns,
+    per FG item:
+      - `wo_pp_count`     : number of distinct PPs that THIS item's open WOs
+                            are part of
+      - `wo_pp_names`     : list of PP names (for tooltip)
+      - `wo_pp_siblings`  : count of OTHER items that also have open WOs
+                            in those same PPs (i.e. how many products are
+                            being co-planned with this one)
+
+    The frontend renders a small chip beside the WO count whenever
+    `wo_pp_count > 0` so users know at a glance which items are "co-planned".
+    """
+    if not item_codes:
+        return {}
+    wo_statuses = wo_statuses or _DEFAULT_WO_STATUSES
+    codes_sql = _sql_in(item_codes)
+    wo_sql    = _sql_in(wo_statuses)
+    wh_clause = _wh_clause(warehouses, "fg_warehouse")
+
+    # Step 1: collect (production_item, production_plan) pairs for open WOs.
+    rows = frappe.db.sql(f"""
+        SELECT production_item, production_plan
+        FROM `tabWork Order`
+        WHERE docstatus = 1 AND status IN {wo_sql}
+          AND production_plan IS NOT NULL AND production_plan != ''
+          AND production_item IN {codes_sql}
+          {wh_clause}
+    """, as_dict=True)
+
+    # item -> set(pp_name); pp -> set(item_code)
+    item_to_pps    = {}
+    pp_to_items    = {}
+    for r in rows:
+        item_to_pps.setdefault(r.production_item, set()).add(r.production_plan)
+        pp_to_items.setdefault(r.production_plan,  set()).add(r.production_item)
+
+    out = {}
+    for code, pps in item_to_pps.items():
+        siblings = set()
+        for pp in pps:
+            siblings |= pp_to_items.get(pp, set())
+        siblings.discard(code)
+        out[code] = {
+            "wo_pp_count":    len(pps),
+            "wo_pp_names":    sorted(pps),
+            "wo_pp_siblings": len(siblings),
+        }
+    return out
+
+
 def _get_stock(item_codes, warehouses, stock_mode="physical"):
     """
     Returns {item_code: qty} for current stock.
@@ -2815,42 +2893,80 @@ def _get_active_bom(item_codes):
     return result
 
 
-def _get_shortage_summary(item_codes, bom_map, stock_map):
+def _get_shortage_summary(item_codes, bom_map, stock_map, planned_qty_map=None,
+                          warehouses=None, stock_mode="physical"):
     """
     Shallow BOM walk — check if any component is short.
     Returns {item_code: {has_shortage: bool, short_components: [...]}}
 
-    Each short_component now carries `item_name` and `in_stock` so the
-    frontend can render a complete shortage line everywhere it appears
-    (overview hover preview, item detail modal, shortage modal). Per the
-    2026-05-01 spec: "where the system shows shortage materials, show
-    item name and current stock too — not just item code."
+    POR-006 (2026-05-04): Two bugs fixed.
+      1. Component stocks were missing. The `stock_map` argument only contains
+         stocks for FG/qualifying items, NOT for their components. The old
+         code did `stock_map.get(comp_code, 0)` → always 0 for components →
+         every BOM line marked short (false positive). The modal
+         (`get_shortage_detail`) didn't have this bug because it re-fetches
+         component stock via `_get_stock(comp_codes, ...)`. Fix: build a
+         component-level stock map here and merge with the FG stock_map.
+      2. Required qty did not multiply by Work Order qty. Old code compared
+         per-unit BOM qty (e.g. 5g of sugar per 1 unit FG) against full stock,
+         so 100g of sugar would never look short for ANY FG. The modal
+         multiplies by the WO `qty` (e.g. 5g × 200 units = 1000g). Fix: use
+         `pending_wo_qty` from `planned_qty_map`. If no open WOs, fall back
+         to 1 unit (treat the BOM batch_qty as the comparison baseline).
+
+    Each short_component carries `item_name` and `in_stock` so the frontend
+    can render a complete shortage line everywhere it appears.
     """
     result = {}
+    planned_qty_map = planned_qty_map or {}
+
+    # ── Build a stock map that covers component items, not just FG ──
+    component_codes = set()
+    for code in item_codes:
+        bom = bom_map.get(code, "")
+        if not bom:
+            continue
+        for c in _bom_one_level(bom):
+            if c.get("item_code"):
+                component_codes.add(c["item_code"])
+    component_stock = (
+        _get_stock(list(component_codes), warehouses or [], stock_mode)
+        if component_codes else {}
+    )
+    # FG stock_map gets overridden by component stock for component codes.
+    # (Some FGs are also components of other FGs — SFGs — and that's fine,
+    #  the actual on-hand stock is the same number either way.)
+    combined_stock = {**(stock_map or {}), **component_stock}
+
     for code in item_codes:
         bom = bom_map.get(code, "")
         if not bom:
             result[code] = {"has_shortage": False, "short_components": []}
             continue
-        # Shallow: only 1 level to keep it fast for the overview
         components = _bom_one_level(bom)
+        # Use total pending WO qty (across all open WOs of this FG). When
+        # there are no WOs, compare against 1-unit BOM qty so the column
+        # still answers "would a 1-unit run be possible right now?"
+        pending_wo_qty = flt(planned_qty_map.get(code, {}).get("pending", 0))
+        qty_to_produce = pending_wo_qty if pending_wo_qty > 0 else 1
         short = []
         for comp in components:
-            req_qty = flt(comp["qty"])
-            in_stk  = flt(stock_map.get(comp["item_code"], 0))
+            req_qty = flt(comp["qty"]) * qty_to_produce
+            in_stk  = flt(combined_stock.get(comp["item_code"], 0))
             if in_stk < req_qty:
                 short.append({
                     "item_code": comp["item_code"],
                     "item_name": comp.get("item_name", ""),
-                    "required":  req_qty,
-                    "in_stock":  in_stk,
-                    "stock":     in_stk,   # alias — JS uses both names
+                    "required":  round(req_qty, 3),
+                    "in_stock":  round(in_stk, 3),
+                    "stock":     round(in_stk, 3),   # alias — JS uses both names
                     "shortage":  round(req_qty - in_stk, 3),
                     "uom":       comp["uom"],
                 })
         result[code] = {
-            "has_shortage":    len(short) > 0,
-            "short_components":short[:5],  # top 5 for overview
+            "has_shortage":     len(short) > 0,
+            "short_components": short[:5],  # top 5 for overview
+            "qty_to_produce":   qty_to_produce,  # for transparency / debug
         }
     return result
 

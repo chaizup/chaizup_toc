@@ -66,6 +66,10 @@ class ProductionOverview {
         this._sortKey   = "";       // header click sets this
         this._sortDir   = "asc";    // "asc" | "desc"
         this._searchTxt = "";       // universal search substring (lowercased)
+        // Quick filter pill state (POR-008): all default OFF — additive (AND).
+        this._filterHasSO = false;  // "Open SO"  pill — keep only items with active SO
+        this._filterHasWO = false;  // "Open WO"  pill — keep only items with at least 1 open WO
+        this._filterHasPP = false;  // "In PP"    pill — keep only items inside an active Production Plan
         // AI state
         this._aiModel   = "deepseek-chat";
         this._aiContext = null;
@@ -80,13 +84,49 @@ class ProductionOverview {
     // Doctype hyperlink helper — used across the page so every doc id is a
     // hyperlink that opens /app/<route>/<name> in a new tab. The affordance is
     // the same everywhere so users learn it once.
-    _dl(doctype, name, label) {
+    //
+    // 4th arg `htmlLabel` (default false): if true, the caller is sending raw
+    // HTML for the link content (e.g. an FA <i> icon). Without this opt-in we
+    // _esc() the label and any HTML tags would render as literal text in the UI.
+    // Bug POR-003 (2026-05-04): the FA icon next to PP names rendered as text.
+    _dl(doctype, name, label, htmlLabel) {
         if (!name) return "";
         const route = String(doctype).toLowerCase().replace(/\s+/g, "-");
         const display = label != null ? label : name;
+        const inner = htmlLabel ? display : this._esc(display);
         return `<a class="por-doclink" target="_blank" rel="noopener noreferrer"
                   href="/app/${route}/${encodeURIComponent(name)}"
-                  title="Open ${this._esc(doctype)} ${this._esc(name)} in a new tab">${this._esc(display)}</a>`;
+                  title="Open ${this._esc(doctype)} ${this._esc(name)} in a new tab">${inner}</a>`;
+    }
+
+    // Render the `open_docs` column from `_get_open_docs_for_item` in the
+    // shortage modal. Each entry is an object {type, name, qty, uom, received?}
+    // — Bug POR-004 (2026-05-04): the JS was running String(d) which produced
+    // "[object Object]". We render a typed pill with a clickable doctype link
+    // and a compact qty/uom hint. Empty list shows an em-dash so the column
+    // never collapses to nothing.
+    _renderOpenDocs(docs) {
+        if (!docs || !docs.length) {
+            return `<span style="color:var(--por-sl-400);font-size:11px;">—</span>`;
+        }
+        return docs.slice(0, 3).map(d => {
+            if (!d || typeof d !== "object") {
+                return `<span class="por-open-doc">${this._esc(d)}</span>`;
+            }
+            const type  = d.type || "Doc";
+            const name  = d.name || "";
+            const tag   = type === "Purchase Order" ? "PO"
+                        : type === "Material Request" ? "MR"
+                        : type === "Work Order" ? "WO"
+                        : this._esc(type);
+            const qty   = d.qty != null ? this._formatNum(d.qty) : "";
+            const uom   = d.uom ? this._esc(d.uom) : "";
+            const qtyTxt = qty ? ` ${qty}${uom ? " " + uom : ""}` : "";
+            const link  = name ? this._dl(type, name) : this._esc(name);
+            return `<span class="por-open-doc" title="${this._esc(type)} ${this._esc(name)}${qtyTxt}">
+                      <strong>${tag}</strong> ${link}${qtyTxt ? `<small style="color:var(--por-muted);"> ·${qtyTxt}</small>` : ""}
+                    </span>`;
+        }).join(" ");
     }
 
     // ── Init ─────────────────────────────────────────────────────────────
@@ -470,6 +510,24 @@ class ProductionOverview {
         // Item group filter
         $on("por-grp-filter", "change", (e) => this._applyGroupFilter(e.target.value));
 
+        // Quick filter pills (POR-008) — toggle pill state and re-render table.
+        // Delegated so it works whether the pills exist at bind time or not.
+        document.addEventListener("click", (e) => {
+            const pill = e.target.closest(".por-quick-pill");
+            if (!pill) return;
+            const flag = pill.dataset.quickFilter;
+            if (flag === "has-so") this._filterHasSO = !this._filterHasSO;
+            else if (flag === "has-wo") this._filterHasWO = !this._filterHasWO;
+            else if (flag === "has-pp") this._filterHasPP = !this._filterHasPP;
+            else return;
+            // Sync UI state on every relevant pill in the document
+            const map = { "has-so": this._filterHasSO, "has-wo": this._filterHasWO, "has-pp": this._filterHasPP };
+            document.querySelectorAll(".por-quick-pill").forEach(p => {
+                p.classList.toggle("active", !!map[p.dataset.quickFilter]);
+            });
+            if (this._data) this._renderTable(this._currentVisibleItems());
+        });
+
         // Export buttons
         $on("por-export-csv",   "click", () => this._exportCSV());
         $on("por-export-excel", "click", () => this._exportExcel());
@@ -587,6 +645,23 @@ class ProductionOverview {
         const grp = document.getElementById("por-grp-filter");
         const gv = grp ? grp.value : "";
         if (gv) items = items.filter(i => (i.item_group || "") === gv);
+        // Quick filter pills (POR-008): "Has Open SO" / "Has Open WO".
+        // Driven from JS state set by .por-quick-pill click handlers, so the
+        // search and sort pipelines all stack consistently.
+        if (this._filterHasSO) {
+            items = items.filter(i =>
+                i.has_open_so === true ||
+                (i.curr_month_order || 0) > 0 ||
+                (i.prev_month_order || 0) > 0 ||
+                (i.total_pending_so || 0) > 0
+            );
+        }
+        if (this._filterHasWO) {
+            items = items.filter(i => (i.open_wo_count || 0) > 0);
+        }
+        if (this._filterHasPP) {
+            items = items.filter(i => (i.wo_pp_count || 0) > 0);
+        }
         // Search
         if (this._searchTxt) {
             const q = this._searchTxt;
@@ -695,6 +770,18 @@ class ProductionOverview {
 
         const woChip = `<span class="por-wo-chip${item.open_wo_count ? "" : " zero"}"
             title="Open Work Orders for this item filtered by selected WO statuses. Click item code to see the list.">${item.open_wo_count}</span>`;
+        // Smart PP indicator (POR-007): WOs grouped under Production Plans.
+        // Hidden when no PPs touch this item — keeps the cell clean for the
+        // 80% of items that aren't part of a multi-WO plan.
+        const ppGroupChip = (item.wo_pp_count || 0) > 0
+            ? `<span class="por-pp-chip" title="${this._esc(
+                `${item.wo_pp_count} Production Plan${item.wo_pp_count > 1 ? "s" : ""}: ${(item.wo_pp_names || []).join(", ")}` +
+                (item.wo_pp_siblings ? ` · co-planned with ${item.wo_pp_siblings} other item${item.wo_pp_siblings > 1 ? "s" : ""}` : "")
+              )}">
+                <i class="fa-solid fa-clipboard-list" style="font-size:9px;"></i>
+                ${item.wo_pp_count}${item.wo_pp_siblings ? `<small style="opacity:.7;">+${item.wo_pp_siblings}</small>` : ""}
+              </span>`
+            : "";
 
         const pvs = item.projection_vs_sales;
         const pvsHtml = !pvs
@@ -799,7 +886,7 @@ Warehouse-scoped to your filter.`;
           <td style="text-align:center;">${seqHtml}</td>
           <td><span class="por-grp-cell" title="${group}">${group || "--"}</span></td>
           <td>${subAsmHtml}</td>
-          <td style="text-align:center;">${woChip}</td>
+          <td style="text-align:center;white-space:nowrap;">${woChip}${ppGroupChip}</td>
           <td>${pm ? this._planInput(item.item_code, "planned_qty", item.planned_qty) : this._fmtQ(item.planned_qty, conv, uom, tipPlanned)}</td>
           <td>${this._fmtQ(item.actual_qty, conv, uom, tipProduced)}</td>
           <td>${this._fmtQ(item.prev_month_order, conv, uom, tipPrevSO)}</td>
@@ -883,6 +970,9 @@ Warehouse-scoped to your filter.`;
         sel.innerHTML = `<option value="">All Groups</option>` +
             groups.map(g => `<option value="${this._esc(g)}">${this._esc(g)}</option>`).join("");
         document.getElementById("por-grp-filter-wrap").style.display = "block";
+        // Quick filter pills wrapper (POR-008) — shown alongside group filter
+        const pills = document.getElementById("por-quick-pills-wrap");
+        if (pills) pills.style.display = "flex";
     }
 
     _applyGroupFilter(_group) {
@@ -1087,7 +1177,7 @@ Warehouse-scoped to your filter.`;
                   <td>${this._fmtQ(a.in_stock, uomC, a.stock_uom)}</td>
                   <td style="font-weight:700;color:var(--por-err-text);">${this._fmtQ(a.shortage, uomC, a.stock_uom)}</td>
                   <td style="text-align:center;">${a.wo_count}</td>
-                  <td>${(a.open_docs || []).slice(0,3).map(d => `<span class="por-open-doc">${this._esc(d)}</span>`).join(" ")}</td>
+                  <td>${this._renderOpenDocs(a.open_docs)}</td>
                 </tr>`;
             }
             html += `</tbody></table>`;
@@ -1309,7 +1399,7 @@ Warehouse-scoped to your filter.`;
                           title="Click to open the Production Plan tree (parent + sub-assemblies + components + supply + shortage)">
                     ${this._esc(p.pp_name)}
                   </button>
-                  ${this._dl("Production Plan", p.pp_name, '<i class="fa-solid fa-arrow-up-right-from-square" style="font-size:10px;"></i>')}
+                  ${this._dl("Production Plan", p.pp_name, '<i class="fa-solid fa-arrow-up-right-from-square" style="font-size:10px;"></i>', true)}
                   <span class="por-wo-st por-wo-st-ip" title="Production Plan status">${this._esc(p.status)}</span>
                   <span style="color:var(--por-muted);font-weight:400;font-size:11px;">${this._esc(p.posting_date)}</span>
                   <span class="por-pp-tag por-pp-other" style="margin-left:auto;">Created by: ${this._esc(p.created_by)}</span>
@@ -1718,8 +1808,11 @@ Warehouse-scoped to your filter.`;
         if (!text) return;
         if (!this._aiContext && this._data) this._aiContext = this._buildAIContext();
 
-        // Show user bubble
-        this._appendBubble("user", this._esc(text));
+        // Show user bubble.
+        // POR-005 (2026-05-04): pass plain text, not _esc(text) — _appendBubble
+        // renders user bubbles via .textContent so the browser handles escaping.
+        // Pre-escaping caused double-escape (e.g. user typed "<3" → saw "&lt;3").
+        this._appendBubble("user", text);
         this._setTyping(true);
 
         const sessionId = document.getElementById("por-ai-session").value;

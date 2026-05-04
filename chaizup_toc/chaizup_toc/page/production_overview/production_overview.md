@@ -673,3 +673,174 @@ If extending this page in a future session:
    that incorrectly flags every component item as sub-asm.
 4. New columns require both the `<th>` in HTML AND `_buildRow` cell + the
    Excel sheet1 column list — keep all three in sync.
+
+---
+
+## Sync Block — 2026-05-04 (Bug Fix: POR-002)
+
+### Bug
+**POR-002** — `get_active_production_plans` (Plan button modal) raised
+`OperationalError: Unknown column "pp.custom_created_by"` on sites where
+the chaizup_toc fixture for `tabProduction Plan.custom_created_by` /
+`custom_creation_reason` had not been migrated yet.
+
+### Root cause
+`_get_pp_list()` blindly SELECTed `pp.custom_created_by, pp.custom_creation_reason`.
+These two columns are defined in `chaizup_toc/fixtures/custom_field.json`
+(rows `Production Plan-custom_created_by` and `Production Plan-custom_creation_reason`)
+and are written by:
+- `production_plan_engine.py:430` — `pp.custom_created_by = "System"` (engine-created PPs)
+- `production_plan_engine.py:243` — auto-set to `"User"` for manually created PPs
+  (via the `Production Plan` doc_event in `hooks.py:144`).
+
+If a developer pulls the app onto a fresh bench and runs the page before
+`bench migrate` completes the fixture sync, the SELECT explodes because
+the columns do not yet exist on the database table.
+
+### Fix
+Probe each column with `frappe.db.has_column("Production Plan", <col>)`
+before building the SELECT. The query now appends `pp.custom_created_by`
+and `pp.custom_creation_reason` only when the columns exist; otherwise
+the result rows fall back to `"User"` for `created_by` and `""` for
+`creation_reason`.
+
+The fix is idempotent: once `bench migrate` syncs the fixtures, the next
+call automatically picks up the columns again — no code change needed.
+
+### File changed
+- `api/production_overview_api.py` — `_get_pp_list()` (around line 2175)
+
+### Restricted areas (do not regress)
+- The columns are CONTRACTUAL with `production_plan_engine.py`. Do **not**
+  remove them from the SELECT permanently; only the *probe-before-select*
+  pattern is acceptable. The engine still writes those values and the UI
+  still surfaces them.
+- Do not replace `frappe.db.has_column` with `frappe.db.exists` (different
+  semantics — `exists` checks rows, not columns).
+- `pp.get("custom_created_by")` is intentional — `frappe._dict.__getattr__`
+  returns `None` for missing keys but `.get()` is explicit. Keep `.get()`.
+
+### Verification
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`
+2. Reload `/app/production-overview`.
+3. Load any item, then click the **Plan** chip in the "Production Plan"
+   column → the modal opens listing PPs (or "No active Production Plans"
+   if none exist).
+4. Confirm no `OperationalError` in the browser console / Frappe Error Log.
+
+
+---
+
+## Sync Block — 2026-05-04 (Bug Fixes: POR-003, POR-004, POR-005)
+
+### Bugs
+
+| ID | Tab / Modal | Symptom | Cause | Fix |
+|----|-------------|---------|-------|-----|
+| POR-003 | Production Plans modal | The FA "open in new tab" icon next to the PP name showed as raw HTML text: `<i class="fa-solid fa-arrow-up-right-from-square" ...></i>` | `_dl(doctype, name, label)` always escaped the `label` argument with `_esc()`, even when the caller passed raw HTML (the icon) | Added an opt-in 4th arg `htmlLabel` to `_dl`. Updated the single PP icon callsite (`_buildPpHtml`) to pass `true`. Other 18 callsites continue to escape (default behaviour). |
+| POR-004 | Shortage modal — Aggregated table → "Open Docs" column | Cells showed `[object Object] [object Object]` instead of doc links | `(a.open_docs \|\| []).slice(0,3).map(d => _esc(d))` — `d` is an object `{type, name, qty, uom, received?}` from `_get_open_docs_for_item()`, but `_esc(d)` does `String(d)` → `"[object Object]"` | Added new helper `_renderOpenDocs(docs)` that renders typed pills (PO / MR / WO badge + clickable doctype link + qty/uom). Replaced the inline expression in `_buildShortageHtml`. CSS tightened: `.por-open-doc` now `inline-flex` with a coloured `<strong>` tag prefix. |
+| POR-005 | AI Advisor → Chat tab | User-typed messages with reserved chars (`<`, `>`, `&`) showed as `&lt;`, `&gt;`, `&amp;` instead of the original characters | `_sendAIMessage` did `_appendBubble("user", _esc(text))` but `_appendBubble` defaults `isHtml=false` → renders via `.textContent`, which already escapes — double-escape | Pass plain `text` (not `_esc(text)`) to `_appendBubble`. Browser handles escaping via textContent. |
+
+### Files changed
+- `chaizup_toc/page/production_overview/production_overview.js`:
+  - `_dl()` — new `htmlLabel` param.
+  - `_renderOpenDocs()` — new helper.
+  - `_buildShortageHtml()` — calls `_renderOpenDocs`.
+  - `_buildPpHtml()` — passes `true` to `_dl` for PP icon link.
+  - `_sendAIMessage()` — does NOT pre-escape user text.
+- `chaizup_toc/page/production_overview/production_overview.html`:
+  - `.por-open-doc` styling — inline-flex pill with `<strong>` tag prefix.
+
+### Restricted areas (do not regress)
+- `_dl` MUST default to `htmlLabel=false` so accidental misuse doesn't XSS. Only opt-in to raw HTML when the caller fully controls the label string.
+- `_renderOpenDocs` MUST keep the empty-list em-dash branch — without it the column collapses and the table shifts visually.
+- `_appendBubble("user", ...)` MUST receive plain text. Assistant bubbles still use `isHtml=true` because the AI returns HTML markup (tables, action lists) by design.
+- `_get_open_docs_for_item()` returns objects, not strings — keep the JS-side rendering object-aware. Don't change the API to return pre-formatted strings (hostile to AI-context filtering).
+
+### Verification
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`
+2. Reload `/app/production-overview`. Load a period.
+3. POR-003: click Plan chip → modal opens, PP names show a tiny `↗` icon (no raw HTML text).
+4. POR-004: click View on a shortage row → "Open Docs" column shows pills like `[PO] PO-00012  · 50.00 Nos`.
+5. POR-005: AI Advisor → type `<3 production rate` and send → bubble shows `<3 production rate`, not `&lt;3 production rate`.
+
+
+---
+
+## Sync Block — 2026-05-04 (POR-006, POR-007, POR-008)
+
+### POR-006 — Shortage column / Shortage modal disagreement
+
+**Symptom**: Overview table marks an item (e.g. CZPFG383) with a Shortage chip, but clicking View opens the modal which says "No component shortages found".
+
+**Root cause** (two compounding bugs in `_get_shortage_summary`):
+1. **Wrong stock map.** The function received `stock_map` built only for FG / qualifying items. For each BOM component it did `stock_map.get(comp_code, 0)` which returned 0 for every component → every BOM line got flagged short. The modal (`get_shortage_detail`) didn't have this bug because it re-fetches component stock via `_get_stock(comp_codes, …)`.
+2. **No WO multiplication.** The function compared the per-batch BOM qty (e.g. 5 g of sugar per 1 unit FG) against full stock, ignoring how many units of FG are actually planned. The modal multiplies by `WO.qty` so a 200-unit run of the same FG correctly needs 1000 g.
+
+**Fix**:
+- Added `planned_qty_map`, `warehouses`, `stock_mode` parameters to `_get_shortage_summary`.
+- Inside, build a component-only stock map via `_get_stock(component_codes, warehouses, stock_mode)` and merge with the FG `stock_map` (FG-as-component case still works because actual on-hand is the same number).
+- Use `pending_wo_qty` from `planned_qty_map` as the multiplier; fall back to 1 unit when no open WOs exist (the column then answers "is a 1-unit run blocked right now?").
+
+**RESTRICT**:
+- Do NOT pass an empty `warehouses` list and expect "all warehouses" to mean different things in the FG vs component lookup — both must use the same filter to stay consistent with the modal.
+- `qty_to_produce = pending_wo_qty if pending_wo_qty > 0 else 1` — keep this fallback. Removing it makes items with no WOs always show "no shortage", which is misleading because operations may still want to know whether a unit run is feasible.
+
+### POR-007 — Smart Production Plan indicator
+
+**Why**: The Production Plans modal already shows that multiple WOs share a parent PP, but the user can't see this signal until they open the modal. The screenshot shows 4 WOs all in PP `WMSPP-2025-00027` — that's exactly the kind of co-planning we want surfaced on the grid.
+
+**Implementation**:
+- New helper `_get_wo_pp_groups(item_codes, wo_statuses, warehouses)` returns per-item:
+  - `wo_pp_count`     — distinct PPs covering this item's open WOs
+  - `wo_pp_names`     — list of PP names (used in the chip tooltip)
+  - `wo_pp_siblings`  — number of OTHER items co-planned in the same PPs
+- Wired into `get_production_overview` as `wo_pp_group_map`. Item output now includes `wo_pp_count`, `wo_pp_names`, `wo_pp_siblings`.
+- JS renders a small `📋` warn-coloured chip beside the WO count when `wo_pp_count > 0`; tooltip lists the PPs and sibling count.
+
+**RESTRICT**:
+- Keep the chip **hidden** when `wo_pp_count === 0` — most items are not co-planned and the cell stays clean.
+- Do not move PP discovery into the BOM helpers; the `tabWork Order.production_plan` join is the single source of truth for "is this item part of a multi-WO plan?".
+
+### POR-008 — Quick filter pills: Open SO / Open WO / In PP
+
+**Why**: User asked for quick toggles to show only items with active sales orders, only items with active work orders, and a complementary "In Production Plan" pill that pairs naturally with the new smart PP chip.
+
+**Implementation**:
+- HTML: three `.por-quick-pill` buttons inside `#por-quick-pills-wrap`, sitting next to the group filter in the tab bar. Wrapper hidden until data loads (same pattern as group filter).
+- JS state: three booleans on the controller — `_filterHasSO`, `_filterHasWO`, `_filterHasPP`. All default OFF.
+- A delegated click handler toggles the matching flag, syncs `.active` class on the pill, then calls `_renderTable(this._currentVisibleItems())` so search + group + sort + pills all stack consistently.
+- Filter logic in `_currentVisibleItems`:
+  - Open SO: `has_open_so === true OR curr_month_order > 0 OR prev_month_order > 0 OR total_pending_so > 0`. Multi-condition because not every site uses the same "open SO" definition.
+  - Open WO: `open_wo_count > 0`.
+  - In PP: `wo_pp_count > 0` (pairs with the smart chip).
+- CSS: pill style mirrors the existing Frappe filter pill aesthetic (rounded, neutral, brand-blue when active).
+
+**RESTRICT**:
+- Toggle pills are pure client-side filters over `this._data.items`. Do not move them to the API — the server already returns the booleans/counts the JS needs, and a round-trip per pill click would be a regression.
+- The order of evaluation in `_currentVisibleItems` is group → quick pills → search → sort. Don't reorder; the search box expects an already-filtered set so users don't see hidden hits.
+- Keep the pills additive (AND), not exclusive (OR). Users want to drill down, not toggle between single facets.
+
+### Files changed
+- `chaizup_toc/api/production_overview_api.py`
+  - `_get_shortage_summary` rewritten — accepts `planned_qty_map`, `warehouses`, `stock_mode`; builds component-stock map; multiplies by pending WO qty.
+  - Call site in `get_production_overview` updated to pass new args.
+  - New helper `_get_wo_pp_groups` and `wo_pp_group_map` integration.
+  - Item output includes `wo_pp_count`, `wo_pp_names`, `wo_pp_siblings`.
+- `chaizup_toc/page/production_overview/production_overview.js`
+  - Constructor: `_filterHasSO`, `_filterHasWO`, `_filterHasPP` flags.
+  - `_currentVisibleItems`: applies the three pill filters before search.
+  - `_buildRow`: renders `.por-pp-chip` beside the WO chip when applicable.
+  - `_buildGroupFilter`: also reveals the pills wrapper.
+  - Delegated click handler for `.por-quick-pill` toggles flags + re-renders.
+- `chaizup_toc/page/production_overview/production_overview.html`
+  - `#por-quick-pills-wrap` containing three `.por-quick-pill` buttons.
+  - CSS for `.por-pp-chip` (warn-tone) and `.por-quick-pill` (filter pill aesthetic, brand on active).
+
+### Verification
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`.
+2. Reload `/app/production-overview`. Load a period.
+3. POR-006: pick any item that previously showed Shortage but the modal said "No shortages" — the column should now match the modal. Items with real component shortages still show the chip.
+4. POR-007: items with WOs grouped under a PP (e.g. CZPFG383 with WMSPP-2025-00027) display a warn-coloured `📋 N` chip beside the WO count; hover for PP names + sibling count.
+5. POR-008: click each pill in turn — the row count drops to only items matching the selected facet. Combine pills + group + search; all should stack correctly.
+

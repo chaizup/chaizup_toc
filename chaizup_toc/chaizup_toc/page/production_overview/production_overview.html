@@ -666,13 +666,50 @@
 .por-short-row-ok   td { color:var(--por-ok-text); }
 .por-short-row-bad  td { background:rgba(239,68,68,.03); }
 
-/* Open docs pills */
+/* Smart PP indicator chip (POR-007) — sits beside the WO count cell */
+.por-pp-chip {
+  display:inline-flex; align-items:center; gap:3px;
+  margin-left:5px; padding:1px 6px;
+  border-radius:99px;
+  background:var(--por-warn-bg); color:var(--por-warn-text);
+  border:1px solid var(--por-warn);
+  font-family:"Geist Mono",monospace; font-size:10px; font-weight:700;
+  cursor:help; line-height:1.4;
+}
+.por-pp-chip i { color:var(--por-warn-text); }
+.por-pp-chip small { font-weight:600; }
+
+/* Quick filter pills (POR-008) */
+#por-quick-pills-wrap { display:flex; }
+.por-quick-pill {
+  display:inline-flex; align-items:center; gap:4px;
+  height:24px; padding:0 9px;
+  font-size:11px; font-weight:600; font-family:inherit;
+  border:1px solid var(--por-border); border-radius:99px;
+  background:var(--por-surface); color:var(--por-muted);
+  cursor:pointer; transition:all .15s; white-space:nowrap;
+}
+.por-quick-pill:hover { border-color:var(--por-sl-400); color:var(--por-text); }
+.por-quick-pill.active {
+  background:var(--por-brand); border-color:var(--por-brand); color:#fff;
+}
+.por-quick-pill.active i { color:#fff; }
+
+/* Open docs pills (Shortage modal — Aggregated table column) */
 .por-open-doc {
-  display:inline-block; margin:1px 2px;
-  font-size:10px; padding:1px 5px;
+  display:inline-flex; align-items:center; gap:4px;
+  margin:1px 2px;
+  font-size:10px; padding:1px 6px;
   border-radius:3px; background:var(--por-sl-100);
   color:var(--por-sl-700);
+  white-space:nowrap;
 }
+.por-open-doc strong {
+  font-size:9px; letter-spacing:.4px;
+  background:var(--por-info-bg); color:var(--por-info-text);
+  padding:0 4px; border-radius:2px;
+}
+.por-open-doc small { font-size:9px; }
 
 @media (max-height:768px) {
   .por-ai-insight { max-height:100px; }
@@ -1063,6 +1100,21 @@ Physical + Expected adds open PO inbound + open WO planned output.">
              placeholder="Search item code / name / group / BOM..."
              style="height:24px;font-size:11px;width:240px;"
              title="Universal search — case-insensitive substring match across Item Code, Item Name, Item Group, Active BOM, and Production Plan IDs visible on the row. Press Esc to clear.">
+    </div>
+    <!-- Quick filter pills (POR-008) — shown alongside group filter once data loads -->
+    <div id="por-quick-pills-wrap" style="display:none;align-self:center;gap:4px;padding:0 4px;">
+      <button class="por-quick-pill" data-quick-filter="has-so"
+              title="Show only items with active Sales Orders this month or pending across any month">
+        <i class="fa-solid fa-cart-shopping" style="font-size:9px;"></i> Open SO
+      </button>
+      <button class="por-quick-pill" data-quick-filter="has-wo"
+              title="Show only items with at least one open Work Order">
+        <i class="fa-solid fa-hammer" style="font-size:9px;"></i> Open WO
+      </button>
+      <button class="por-quick-pill" data-quick-filter="has-pp"
+              title="Show only items whose open Work Orders are part of an active Production Plan (co-planned with other items)">
+        <i class="fa-solid fa-clipboard-list" style="font-size:9px;"></i> In PP
+      </button>
     </div>
     <!-- Item group filter (shown after data loads) -->
     <div id="por-grp-filter-wrap" style="display:none;padding:0 6px;align-self:center;">
