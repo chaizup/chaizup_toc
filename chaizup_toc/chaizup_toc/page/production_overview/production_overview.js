@@ -66,10 +66,13 @@ class ProductionOverview {
         this._sortKey   = "";       // header click sets this
         this._sortDir   = "asc";    // "asc" | "desc"
         this._searchTxt = "";       // universal search substring (lowercased)
-        // Quick filter pill state (POR-008): all default OFF — additive (AND).
-        this._filterHasSO = false;  // "Open SO"  pill — keep only items with active SO
-        this._filterHasWO = false;  // "Open WO"  pill — keep only items with at least 1 open WO
-        this._filterHasPP = false;  // "In PP"    pill — keep only items inside an active Production Plan
+        // Quick filter pill state (POR-008 + POR-011): all default OFF — additive (AND).
+        // Open SO / No SO are mutually exclusive (handled in click handler).
+        this._filterHasSO    = false;  // "Open SO"        pill
+        this._filterNoSO     = false;  // "No SO"          pill (NEW POR-011)
+        this._filterInProj   = false;  // "In Projection"  pill (NEW POR-011)
+        this._filterHasWO    = false;  // "Open WO"        pill
+        this._filterHasPP    = false;  // "In PP"          pill
         // AI state
         this._aiModel   = "deepseek-chat";
         this._aiContext = null;
@@ -133,6 +136,10 @@ class ProductionOverview {
     async _init() {
         this._setupFullHeight();
         this._setupTooltips();   // custom hover-tip — must run before any HTML renders
+        // POR-009: default Planning Mode = Independent. The CSS body class
+        // `por-mode-independent` dims the drag handles + makes seq inputs
+        // visually inert (pointer-events:none).
+        document.body.classList.add("por-mode-independent");
         await this._loadDefaults();
         this._bindEvents();
         this._initAIPanel();
@@ -329,35 +336,37 @@ class ProductionOverview {
             btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
         });
 
-        // Planning mode toggle + sub-mode (Independent / Priority)
-        // All DOM lookups are null-guarded so a single missing element from a
-        // stale cached template never breaks the entire page bootstrap.
-        const planToggle = document.getElementById("por-planning-toggle");
-        const planSub    = document.getElementById("por-plan-submode");
-        const planLbl    = document.getElementById("por-planning-lbl");
-        if (planToggle) {
-            planToggle.addEventListener("change", () => {
-                this._planMode = planToggle.checked;
-                if (planLbl) planLbl.textContent = this._planMode ? "On" : "Off";
-                if (planSub) planSub.style.display = this._planMode ? "" : "none";
-                if (this._data) {
-                    if (this._planMode && planSub && planSub.value === "priority") {
-                        this._recalcPriorityPossibleQty();
-                    }
-                    this._renderTable(this._currentVisibleItems());
-                }
+        // Planning Mode segmented buttons (POR-009) — mirrors WKP Mode A / Mode B.
+        // Mode A (Independent): row order does NOT affect Possible Qty.
+        // Mode B (Priority Queue): items consume the pool in row order. The
+        //   user reorders rows via the seq-input column or by drag-and-drop.
+        // The OLD checkbox toggle + sub-mode dropdown are GONE — kept only as
+        // safe-fallback null lookups so a stale cached template doesn't crash.
+        document.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-plan-mode]");
+            if (!btn) return;
+            const mode = btn.dataset.planMode;            // "independent" | "priority"
+            if (mode === "priority") {
+                this._planMode    = true;
+                this._planSubmode = "priority";
+            } else {
+                this._planMode    = false;
+                this._planSubmode = "independent";
+            }
+            // Sync segment-button visual state
+            document.querySelectorAll(".por-seg-btn[data-plan-mode]").forEach(b => {
+                b.classList.toggle("active", b.dataset.planMode === mode);
             });
-        }
-        if (planSub) {
-            planSub.addEventListener("change", () => {
-                this._planSubmode = planSub.value;
-                if (this._data) {
-                    if (this._planSubmode === "priority") this._recalcPriorityPossibleQty();
-                    else this._restoreIndependentPossibleQty();
-                    this._renderTable(this._currentVisibleItems());
-                }
-            });
-        }
+            // Add a body-level class so CSS can light up drag handles + seq inputs
+            document.body.classList.toggle("por-mode-priority",    mode === "priority");
+            document.body.classList.toggle("por-mode-independent", mode !== "priority");
+            // Recompute and re-render
+            if (this._data) {
+                if (this._planSubmode === "priority") this._recalcPriorityPossibleQty();
+                else this._restoreIndependentPossibleQty();
+                this._renderTable(this._currentVisibleItems());
+            }
+        });
 
         // Select-all checkbox
         $on("por-select-all", "change", function () {
@@ -372,10 +381,12 @@ class ProductionOverview {
                 const view = e.target.closest(".por-view-shortage");
                 const cost = e.target.closest(".por-cost-btn");
                 const pp   = e.target.closest(".por-pp-btn");
+                const so   = e.target.closest(".por-so-btn");
                 if (ic)   this._openItemModal(ic.dataset.code);
                 if (view) this._openShortageModal(view.dataset.code);
                 if (cost) this._openCostModal(cost.dataset.code);
                 if (pp)   this._openPpModal(pp.dataset.code);
+                if (so)   this._openSoModal(so.dataset.code);
             });
         }
 
@@ -510,18 +521,37 @@ class ProductionOverview {
         // Item group filter
         $on("por-grp-filter", "change", (e) => this._applyGroupFilter(e.target.value));
 
-        // Quick filter pills (POR-008) — toggle pill state and re-render table.
+        // Quick filter pills (POR-008 + POR-011) — toggle pill state and re-render.
         // Delegated so it works whether the pills exist at bind time or not.
+        // Open SO and No SO are MUTUALLY EXCLUSIVE — selecting one auto-clears
+        // the other. All other pills are additive (AND).
         document.addEventListener("click", (e) => {
             const pill = e.target.closest(".por-quick-pill");
             if (!pill) return;
             const flag = pill.dataset.quickFilter;
-            if (flag === "has-so") this._filterHasSO = !this._filterHasSO;
-            else if (flag === "has-wo") this._filterHasWO = !this._filterHasWO;
-            else if (flag === "has-pp") this._filterHasPP = !this._filterHasPP;
-            else return;
+            if (flag === "has-so") {
+                this._filterHasSO = !this._filterHasSO;
+                if (this._filterHasSO) this._filterNoSO = false;
+            } else if (flag === "no-so") {
+                this._filterNoSO = !this._filterNoSO;
+                if (this._filterNoSO) this._filterHasSO = false;
+            } else if (flag === "in-proj") {
+                this._filterInProj = !this._filterInProj;
+            } else if (flag === "has-wo") {
+                this._filterHasWO = !this._filterHasWO;
+            } else if (flag === "has-pp") {
+                this._filterHasPP = !this._filterHasPP;
+            } else {
+                return;
+            }
             // Sync UI state on every relevant pill in the document
-            const map = { "has-so": this._filterHasSO, "has-wo": this._filterHasWO, "has-pp": this._filterHasPP };
+            const map = {
+                "has-so":  this._filterHasSO,
+                "no-so":   this._filterNoSO,
+                "in-proj": this._filterInProj,
+                "has-wo":  this._filterHasWO,
+                "has-pp":  this._filterHasPP,
+            };
             document.querySelectorAll(".por-quick-pill").forEach(p => {
                 p.classList.toggle("active", !!map[p.dataset.quickFilter]);
             });
@@ -656,6 +686,20 @@ class ProductionOverview {
                 (i.total_pending_so || 0) > 0
             );
         }
+        if (this._filterNoSO) {
+            // POR-011: counterpoint to "Open SO" — items with NO active customer
+            // demand. Often these are projection-driven / make-to-stock items.
+            items = items.filter(i =>
+                !i.has_open_so &&
+                (i.total_pending_so || 0) === 0 &&
+                (i.curr_month_order || 0) === 0 &&
+                (i.prev_month_order || 0) === 0
+            );
+        }
+        if (this._filterInProj) {
+            // POR-011: items present in this month's submitted Sales Projection.
+            items = items.filter(i => (i.curr_projection || 0) > 0);
+        }
         if (this._filterHasWO) {
             items = items.filter(i => (i.open_wo_count || 0) > 0);
         }
@@ -725,10 +769,119 @@ class ProductionOverview {
         if (this._planMode && this._planSubmode === "priority") {
             this._recalcPriorityPossibleQty(items);
         }
+        // Persist the rendered order so seq-input + drag handlers know what
+        // "row #N" maps to even after the user reorders.
+        this._priorityOrder = items.map(i => i.item_code);
         tbody.innerHTML = items.map((item, idx) => this._buildRow(item, idx + 1)).join("");
         // Count badge
         document.getElementById("por-vis-count").textContent = items.length;
         document.getElementById("por-count-badge").style.display = "block";
+
+        // Wire row-level interactions for Priority mode (POR-009).
+        this._bindPriorityRowHandlers(tbody);
+    }
+
+    // === POR-009: Priority Queue (Mode B) row interactions ===
+    // Two affordances: the seq-input (type a new number) and HTML5 drag-drop.
+    // BOTH paths converge on _applyPriorityOrder(newCodeArray) which mutates
+    // `_data.items` order in place, then calls `_renderTable` to re-simulate.
+    _bindPriorityRowHandlers(tbody) {
+        if (!tbody || !this._planMode) return;
+
+        // -- Seq input: change/Enter triggers reorder --
+        tbody.querySelectorAll(".por-seq-input").forEach(inp => {
+            const commit = () => {
+                if (!this._planMode) return;
+                const code   = inp.dataset.code;
+                const oldSeq = parseInt(inp.dataset.currentSeq, 10);
+                const newSeq = Math.max(1, parseInt(inp.value, 10) || 1);
+                if (newSeq === oldSeq) return;
+                this._moveItemInOrder(code, newSeq - 1);
+            };
+            inp.addEventListener("change", commit);
+            inp.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); commit(); }
+            });
+        });
+
+        // -- Drag-and-drop on rows --
+        tbody.querySelectorAll("tr").forEach(tr => {
+            // Only drag when in Priority mode AND the user grabs the handle.
+            const handle = tr.querySelector(".por-drag-handle");
+            if (!handle) return;
+            // We use HTML5 native DnD. Bind on the TR; gate by mousedown on
+            // the handle to avoid hijacking checkbox/cell clicks.
+            tr.draggable = false;
+            handle.addEventListener("mousedown", () => {
+                if (this._planMode) tr.draggable = true;
+            });
+            handle.addEventListener("mouseup",   () => { tr.draggable = false; });
+
+            tr.addEventListener("dragstart", (e) => {
+                if (!this._planMode) return;
+                tr.classList.add("por-drag-active");
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", tr.dataset.code);
+            });
+            tr.addEventListener("dragend", () => {
+                tr.classList.remove("por-drag-active");
+                tbody.querySelectorAll(".por-drag-over").forEach(t => t.classList.remove("por-drag-over"));
+                tr.draggable = false;
+            });
+            tr.addEventListener("dragover", (e) => {
+                if (!this._planMode) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                tr.classList.add("por-drag-over");
+            });
+            tr.addEventListener("dragleave", () => tr.classList.remove("por-drag-over"));
+            tr.addEventListener("drop", (e) => {
+                if (!this._planMode) return;
+                e.preventDefault();
+                tr.classList.remove("por-drag-over");
+                const fromCode = e.dataTransfer.getData("text/plain");
+                const toCode   = tr.dataset.code;
+                if (!fromCode || !toCode || fromCode === toCode) return;
+                const order   = (this._priorityOrder || []).slice();
+                const fromIdx = order.indexOf(fromCode);
+                const toIdx   = order.indexOf(toCode);
+                if (fromIdx < 0 || toIdx < 0) return;
+                order.splice(fromIdx, 1);
+                order.splice(toIdx, 0, fromCode);
+                this._applyPriorityOrder(order);
+            });
+        });
+    }
+
+    // Move an item to a specific 0-based index within the visible order, then
+    // re-render. Bound to the seq-input change events.
+    _moveItemInOrder(code, newIdx) {
+        const order   = (this._priorityOrder || []).slice();
+        const fromIdx = order.indexOf(code);
+        if (fromIdx < 0) return;
+        order.splice(fromIdx, 1);
+        order.splice(Math.min(Math.max(newIdx, 0), order.length), 0, code);
+        this._applyPriorityOrder(order);
+    }
+
+    // Apply a new order. Reorders `_data.items` so that subsequent renders
+    // (with current sort cleared) reflect the user's priority. Note: any
+    // active sort key is cleared because explicit priority overrides it.
+    _applyPriorityOrder(orderCodes) {
+        if (!this._data || !this._data.items) return;
+        const byCode = new Map(this._data.items.map(i => [i.item_code, i]));
+        const sorted = orderCodes.map(c => byCode.get(c)).filter(Boolean);
+        // Append any items not in `orderCodes` (e.g. filtered out) so we
+        // don't lose them on subsequent filter toggles.
+        for (const it of this._data.items) {
+            if (!orderCodes.includes(it.item_code)) sorted.push(it);
+        }
+        this._data.items = sorted;
+        // Clear active column sort — explicit priority is now the order.
+        this._sortKey = "";
+        this._sortDir = "asc";
+        this._renderHeaderSortIndicators();
+        this._renderTable(this._currentVisibleItems());
     }
 
     _buildRow(item, seqNum) {
@@ -738,8 +891,15 @@ class ProductionOverview {
         const uom    = item.stock_uom || "";
         const conv   = item.uom_conversions || [];
         const pm     = this._planMode;
-        const seqHtml = `<span class="por-seq${pm && this._planSubmode === "priority" ? " priority" : ""}"
-                            title="Priority sequence — row #${seqNum} of the current sort order. In Priority Planning Mode, earlier rows take precedence in the stock pool.">${seqNum}</span>`;
+        // POR-009: seq cell now has TWO affordances — drag handle + editable
+        // input. Drag handle is dimmed in Mode A (CSS body class). The input
+        // is ignored in Mode A by `pointer-events:none`.
+        const seqHtml = `
+            <span class="por-drag-handle" title="${pm ? "Drag this row to reorder priority (Mode B only)." : "Switch to Mode B — Priority Queue to drag rows."}">&#9776;</span>
+            <input type="number" class="por-seq-input" min="1" value="${seqNum}"
+                   data-code="${code}" data-current-seq="${seqNum}"
+                   title="${pm ? "Type a new number and press Enter to move this row to that position." : "Read-only in Mode A. Switch to Mode B to edit priority."}"
+                   ${pm ? "" : "readonly tabindex=\"-1\""}>`;
 
         // Sub-Asm chip with hover-list of parent WOs (with shortage qty)
         let subAsmHtml = `<span style="color:var(--por-sl-300);font-size:11px;">—</span>`;
@@ -887,10 +1047,16 @@ Warehouse-scoped to your filter.`;
           <td><span class="por-grp-cell" title="${group}">${group || "--"}</span></td>
           <td>${subAsmHtml}</td>
           <td style="text-align:center;white-space:nowrap;">${woChip}${ppGroupChip}</td>
-          <td>${pm ? this._planInput(item.item_code, "planned_qty", item.planned_qty) : this._fmtQ(item.planned_qty, conv, uom, tipPlanned)}</td>
+          <td>${this._fmtQ(item.planned_qty, conv, uom, tipPlanned)}</td>
           <td>${this._fmtQ(item.actual_qty, conv, uom, tipProduced)}</td>
           <td>${this._fmtQ(item.prev_month_order, conv, uom, tipPrevSO)}</td>
-          <td>${pm ? this._planInput(item.item_code, "curr_month_order", item.curr_month_order) : this._fmtQ(item.curr_month_order, conv, uom, tipCurrSO)}</td>
+          <td style="white-space:nowrap;">${this._fmtQ(item.curr_month_order, conv, uom, tipCurrSO)}
+            <button class="por-btn por-btn-default por-btn-sm por-so-btn"
+                    data-code="${code}"
+                    title="View every Sales Order containing ${this._esc(item.item_code)} (status + customer + qty + UOM + delivery date), filtered by your selected SO statuses and warehouses.">
+              <i class="fa-solid fa-cart-shopping"></i> SOs
+            </button>
+          </td>
           <td>${this._fmtQ(item.prev_dispatch || 0, conv, uom, tipPrevDisp)}</td>
           <td>${this._fmtQ(item.curr_dispatch, conv, uom, tipCurrDisp)}</td>
           <td>${this._fmtQ(item.curr_projection, conv, uom, tipProj)}</td>
@@ -901,7 +1067,11 @@ Warehouse-scoped to your filter.`;
           <td>${achHtml}</td>
           <td>${this._fmtQ(item.stock, conv, uom, tipStock)}</td>
           <td class="por-shortage-cell">${shortageHtml}</td>
-          <td>${this._fmtQ(item.possible_qty, conv, uom, tipPossible)}</td>
+          <td>${this._fmtQ(item.possible_qty, conv, uom, tipPossible)}${
+              pm && item._planning_status
+                ? `<span class="por-plan-status por-plan-status-${item._planning_status}" title="Priority simulation result for this row (Mode B). Full = nothing constrained. Partial = some components consumed by upstream rows. Blocked = pool exhausted before this row.">${item._planning_status}</span>`
+                : ""
+          }</td>
           <td>${bomHtml}</td>
           <td>${ppHtml}</td>
           <td>
@@ -955,13 +1125,10 @@ Warehouse-scoped to your filter.`;
         return html;
     }
 
-    _planInput(code, field, val) {
-        const safeCode  = this._esc(code);
-        const safeField = this._esc(field);
-        const safeVal   = parseFloat(val) || 0;
-        return `<input class="por-plan-inp" type="number" min="0"
-                  data-code="${safeCode}" data-field="${safeField}" value="${safeVal}">`;
-    }
+    // _planInput REMOVED in POR-009 — qty cells (Planned, Curr SO) are now
+    // always read-only because they reflect ERPNext source data and must not
+    // be edited from this page. The only user-editable affordance in
+    // Planning Mode is now row priority (seq-input + drag-and-drop).
 
     // ── Group filter ──────────────────────────────────────────────────────
     _buildGroupFilter(items) {
@@ -1357,6 +1524,154 @@ Warehouse-scoped to your filter.`;
         }
 
         return html;
+    }
+
+    // ── Sales Orders for Item Modal (POR-012) ─────────────────────────────
+    // Honours the SO Statuses + Warehouses + "Pending only" toggle. The
+    // SO Status list passed to the API is read live from the page's MS
+    // panel — so the modal stays in sync with what the user is filtering on.
+    _openSoModal(itemCode) {
+        const modal = document.getElementById("por-so-modal");
+        const body  = document.getElementById("por-so-modal-body");
+        const title = document.getElementById("por-so-modal-title");
+        const toggle = document.getElementById("por-so-pending-only");
+        if (!modal || !body || !title) return;
+        title.textContent = `Sales Orders: ${itemCode}`;
+        body.innerHTML = `<div class="por-state-box"><div class="por-spinner"></div><p>Loading…</p></div>`;
+        modal.classList.add("open");
+
+        // Re-fetch on toggle change. Clean up the listener on close to avoid
+        // stacking handlers across multiple openings of the modal.
+        const fetchSos = (pendingOnly) => {
+            frappe.call({
+                method: "chaizup_toc.api.production_overview_api.get_so_detail_for_item",
+                args: {
+                    item_code:    itemCode,
+                    so_statuses:  JSON.stringify(this._selSo || []),
+                    warehouses:   JSON.stringify(this._selWh || []),
+                    pending_only: pendingOnly ? 1 : 0,
+                },
+                callback: (r) => {
+                    if (!r.message) {
+                        body.innerHTML = `<div class="por-state-box"><i class="fa-solid fa-inbox"></i><p>No data returned.</p></div>`;
+                        return;
+                    }
+                    body.innerHTML = this._buildSoHtml(r.message);
+                },
+                error: () => {
+                    body.innerHTML = `<div class="por-state-box"><i class="fa-solid fa-triangle-exclamation"></i><p>Error loading Sales Orders. Check Error Log → POR.</p></div>`;
+                },
+            });
+        };
+        const onToggle = () => fetchSos(toggle.checked);
+        if (toggle) {
+            toggle.checked = true;
+            // Replace any prior listener with a fresh one (clone trick).
+            const fresh = toggle.cloneNode(true);
+            toggle.parentNode.replaceChild(fresh, toggle);
+            fresh.addEventListener("change", () => fetchSos(fresh.checked));
+        }
+        fetchSos(true);
+    }
+
+    _buildSoHtml(d) {
+        const rows  = d.rows || [];
+        const tot   = d.totals || {};
+        const uom   = d.stock_uom || "";
+        const conv  = d.uom_conversions || [];
+
+        if (rows.length === 0) {
+            const filter = d.filter_used || {};
+            const stTxt = (filter.so_statuses || []).join(", ") || "(default)";
+            return `<div class="por-state-box">
+                <i class="fa-solid fa-inbox"></i>
+                <p>No Sales Orders found for <code>${this._esc(d.item_code)}</code> matching your filter.</p>
+                <p style="font-size:11px;color:var(--por-muted);">SO Status filter: <code>${this._esc(stTxt)}</code><br>
+                Pending only: <code>${filter.pending_only ? "yes" : "no"}</code></p>
+            </div>`;
+        }
+
+        // Summary strip — same UOM stack convention as the rest of the page.
+        const stripHtml = `<div class="por-cost-strip">
+            <div class="por-cost-card std">
+              <div class="por-cost-num">${rows.length}</div>
+              <div class="por-cost-lbl">SO Lines</div>
+            </div>
+            <div class="por-cost-card act">
+              <div class="por-cost-num">${this._fmtQ(tot.ordered_qty_stock || 0, conv, uom)}</div>
+              <div class="por-cost-lbl">Total Ordered (stock UOM)</div>
+            </div>
+            <div class="por-cost-card">
+              <div class="por-cost-num">${this._fmtQ(tot.delivered_qty_stock || 0, conv, uom)}</div>
+              <div class="por-cost-lbl">Total Delivered (stock UOM)</div>
+            </div>
+            <div class="por-cost-card ${tot.pending_qty_stock > 0 ? "over" : "under"}">
+              <div class="por-cost-num">${this._fmtQ(tot.pending_qty_stock || 0, conv, uom)}</div>
+              <div class="por-cost-lbl">Total Pending (stock UOM)</div>
+            </div>
+            <div class="por-cost-card">
+              <div class="por-cost-num">${this._formatNum(tot.amount || 0)}</div>
+              <div class="por-cost-lbl">Total Amount</div>
+            </div>
+          </div>`;
+
+        const today = new Date().toISOString().slice(0, 10);
+
+        // Status pill — submitted vs draft + workflow state when present.
+        const statusPill = (r) => {
+            const txt = r.so_docstatus === 0
+                ? (r.workflow_state || "Draft")
+                : (r.status || "Submitted");
+            const cls = r.so_docstatus === 0
+                ? "por-wo-st-ns"
+                : (r.is_overdue ? "por-wo-st-mt" : "por-wo-st-ip");
+            return `<span class="por-wo-st ${cls}" title="docstatus=${r.so_docstatus} | status=${this._esc(r.status || "")}${r.workflow_state ? " | workflow=" + this._esc(r.workflow_state) : ""}">${this._esc(txt)}</span>`;
+        };
+
+        const rowsHtml = rows.map(r => {
+            const overdueBadge = r.is_overdue
+                ? `<span class="por-pp-tag por-target-order" style="margin-left:4px;" title="Delivery date ${this._esc(r.delivery_date)} is in the past and qty is still pending.">Overdue</span>`
+                : "";
+            return `<tr>
+                <td>${this._dl("Sales Order", r.so_name)} ${statusPill(r)}${overdueBadge}</td>
+                <td><span style="font-weight:600;">${this._esc(r.customer_name || r.customer || "—")}</span>
+                    ${r.customer_group ? `<span style="display:block;font-size:10px;color:var(--por-muted);">${this._esc(r.customer_group)}</span>` : ""}
+                </td>
+                <td style="font-family:'Geist Mono',monospace;font-size:11px;">${this._formatNum(r.qty)} ${this._esc(r.uom)}</td>
+                <td style="font-family:'Geist Mono',monospace;font-size:11px;">${this._formatNum(r.delivered_qty)} ${this._esc(r.uom)}</td>
+                <td style="font-family:'Geist Mono',monospace;font-size:11px;font-weight:700;color:${r.pending_qty > 0 ? "var(--por-err-text)" : "var(--por-ok-text)"};">${this._formatNum(r.pending_qty)} ${this._esc(r.uom)}</td>
+                <td>${this._fmtQ(r.stock_pending_qty, conv, uom)}</td>
+                <td style="font-family:'Geist Mono',monospace;font-size:11px;">×${this._formatNum(r.conversion_factor)}</td>
+                <td style="font-size:11px;${r.is_overdue ? "color:var(--por-err-text);font-weight:700;" : ""}">${this._esc(r.delivery_date) || "—"}</td>
+                <td style="font-size:11px;color:var(--por-muted);">${this._esc(r.warehouse) || "—"}</td>
+                <td style="font-family:'Geist Mono',monospace;font-size:11px;text-align:right;">${this._formatNum(r.rate)}</td>
+                <td style="font-family:'Geist Mono',monospace;font-size:11px;text-align:right;">${this._formatNum(r.amount)}</td>
+            </tr>`;
+        }).join("");
+
+        return `${stripHtml}
+            <div style="font-size:11px;color:var(--por-muted);margin:0 0 8px 4px;">
+              <i class="fa-solid fa-circle-info"></i>
+              Source: <code>tabSales Order Item</code> ⨯ <code>tabSales Order</code>.
+              Status filter applied: <code>${this._esc((d.filter_used && d.filter_used.so_statuses) || [].join(", ")) || "(default)"}</code>.
+              Pending qty = SO line qty − delivered qty (in line UOM); Pending (stock UOM) converts via the line's conversion factor.
+            </div>
+            <table class="por-dtable">
+                <thead><tr>
+                    <th>Sales Order</th>
+                    <th>Customer</th>
+                    <th title="Qty ordered in the SO line UOM (may differ from stock UOM)">Ordered Qty</th>
+                    <th title="Qty already delivered in the SO line UOM">Delivered</th>
+                    <th title="Pending qty in the SO line UOM (qty − delivered)">Pending (line UOM)</th>
+                    <th title="Pending qty converted to the item's stock UOM, with secondary UOM stacked below">Pending (stock UOM)</th>
+                    <th title="UOM Conversion Factor — how many stock-UOM units per 1 line-UOM unit">CF</th>
+                    <th>Delivery Date</th>
+                    <th>Warehouse</th>
+                    <th title="Rate per SO-line UOM">Rate</th>
+                    <th>Amount</th>
+                </tr></thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>`;
     }
 
     // ── Production Plans Modal ────────────────────────────────────────────

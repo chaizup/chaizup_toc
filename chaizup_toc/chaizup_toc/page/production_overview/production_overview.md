@@ -844,3 +844,191 @@ call automatically picks up the columns again — no code change needed.
 4. POR-007: items with WOs grouped under a PP (e.g. CZPFG383 with WMSPP-2025-00027) display a warn-coloured `📋 N` chip beside the WO count; hover for PP names + sibling count.
 5. POR-008: click each pill in turn — the row count drops to only items matching the selected facet. Combine pills + group + search; all should stack correctly.
 
+
+---
+
+## Sync Block — 2026-05-05 (POR-009, POR-010, POR-011)
+
+### POR-009 — Planning Mode now mirrors WKP Mode A / Mode B
+
+**Problem**: Planning Mode let users edit "Planned Qty" and "Curr Month SO"
+inputs. Those values are SOURCE data from ERPNext (Work Order.qty,
+Sales Order.stock_qty) and editing them on this page does nothing — it
+only confused planners. The user explicitly said: *"in planning mode I
+can change the priority sequence instead of planned qty and current month
+so qty"*.
+
+**Fix**: Adopted the WKP segmented Mode A / Mode B pattern:
+- Replaced the checkbox + sub-mode dropdown with a segmented button group
+  (`A — Independent` / `B — Priority Queue`) using `.por-seg-btn` —
+  visually identical to `.wkp-seg-btn`.
+- Removed the `_planInput` helper and the editable `<input>` cells in the
+  Planned Qty + Curr Month SO columns. Both are now ALWAYS read-only
+  (`_fmtQ`-rendered).
+- The seq column gained two affordances:
+  - drag handle (`.por-drag-handle`, `≡`) — dimmed in Mode A by the
+    body-level `.por-mode-independent` CSS class; full opacity + grab
+    cursor in Mode B (`.por-mode-priority`).
+  - editable seq input (`.por-seq-input`) — `readonly` in Mode A, brand
+    blue and editable in Mode B. `change`/`Enter` triggers
+    `_moveItemInOrder(code, newIdx)`.
+- HTML5 native drag-and-drop wired in `_bindPriorityRowHandlers`. Drag
+  is gated by mousedown on the handle so checkbox / cell clicks aren't
+  hijacked. Drop calls `_applyPriorityOrder(orderCodes)`.
+- `_applyPriorityOrder` mutates `this._data.items` in the new sequence
+  (preserving items filtered out so they don't get lost), clears the
+  active column sort (priority overrides sort), then calls `_renderTable`
+  which runs `_recalcPriorityPossibleQty` and shows a `Full / Partial /
+  Blocked` pill next to each row's Possible Qty.
+
+**Restricted areas**:
+- **DO NOT** re-introduce editable qty inputs on this page. Source-of-
+  truth lives in ERPNext; mutating it from a read-only dashboard would
+  be data corruption.
+- The body-level CSS class toggle (`por-mode-priority` /
+  `por-mode-independent`) is load-bearing — `.por-drag-handle` opacity
+  and `.por-seq-input` `pointer-events` both depend on it. If you remove
+  the class toggle, drag becomes always-on and Mode A is meaningless.
+- `_applyPriorityOrder` MUST clear `this._sortKey` before re-rendering;
+  otherwise the visible row order is the column sort (not the user's
+  priority) and the simulation runs against the wrong order.
+- Drop targets MUST `e.preventDefault()` in `dragover` — without it
+  HTML5 DnD won't fire `drop`.
+
+### POR-010 — Excel export improvements
+
+- **Cover sheet**: appended a *Formula Glossary* block with 21 rows
+  covering every computed metric on every sheet, including literal
+  Excel-style formulas (e.g. `Target Production = MAX(Sales Projection,
+  Total Curr Sales)`).
+- **Simple Report**: Target / Shortage vs Phys / Shortage vs Stock+WO
+  are now **live Excel formulas** (`=MAX(...)`) instead of pre-computed
+  static numbers. Editing any source cell (Pending SO, Pending WO,
+  Projection, Stock) auto-recalculates the derived columns. The header
+  row 2 explainer was rewritten to make this explicit.
+- **Sheet Guide** updated to mention the live-formula behaviour and the
+  Glossary block.
+
+**Restricted areas**:
+- Do NOT replace the formulas with hard-coded values when re-exporting —
+  the live-recalc behaviour is the whole point.
+- Column letters used in formulas (`get_column_letter(7)` etc.) are
+  fragile to header reorder. If you reorder Simple Report columns,
+  update the formula column-letter constants in lockstep.
+
+### POR-011 — Two new quick-filter pills: "No SO", "In Projection"
+
+- **No SO**: counterpoint to "Open SO". Items with no active customer
+  demand at all (`!has_open_so AND total_pending_so == 0 AND
+  curr_month_order == 0 AND prev_month_order == 0`). Useful to spot
+  make-to-stock candidates and projection-driven items.
+- **In Projection**: items present in this month's submitted Sales
+  Projection (`curr_projection > 0`). Useful to verify the projection
+  covers the right SKUs.
+- Open SO / No SO are **mutually exclusive** — clicking one auto-clears
+  the other. All other pills remain additive (AND).
+
+**Restricted areas**:
+- Keep Open SO ↔ No SO mutually exclusive in the click handler. Allowing
+  both selected at once would always return zero rows (logically
+  impossible) and is a UX trap.
+- Pills remain client-side filters over `this._data.items`. Do NOT
+  round-trip to the server per click.
+
+### Files changed
+- `api/production_overview_api.py` — Cover-sheet Glossary, Simple Report
+  live formulas, updated Sheet Guide entries.
+- `page/production_overview/production_overview.js` — Mode A/B
+  segmented buttons, dropped `_planInput`, drag-and-drop +
+  `_applyPriorityOrder` + `_moveItemInOrder` + `_bindPriorityRowHandlers`,
+  three new filter-state booleans, expanded pill click handler.
+- `page/production_overview/production_overview.html` — segmented button
+  HTML, two new filter-pill buttons, CSS for `.por-seg-group`,
+  `.por-drag-handle`, `.por-seq-input`, `.por-mode-priority`,
+  `.por-mode-independent`, `.por-plan-status-*`.
+
+### Verification
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`.
+2. Reload `/app/production-overview`. Load a period.
+3. POR-009: switch Planning Mode A → B; drag handles brighten and seq
+   inputs go indigo. Drag a row up/down — the order updates and the
+   Possible Qty column shows `Full / Partial / Blocked` pills. Type a
+   number in the seq input and press Enter — row jumps to that
+   position. Switch back to A — handles dim, inputs read-only.
+4. POR-010: click Excel export. Open the workbook, go to Simple Report,
+   edit any "Pending SO" or "Stock" cell — Target and Shortage columns
+   recalculate live. Cover sheet's Formula Glossary block lists every
+   metric.
+5. POR-011: click No SO — only items with zero customer demand shown.
+   Click Open SO — auto-deselects No SO. Click In Projection alone or
+   combined with another pill — additive intersection.
+
+---
+
+## Sync Block — 2026-05-05 (POR-012)
+
+### POR-012 — "View SOs" per-item modal
+
+**Why**: Planners need to see *exactly which SOs* drive an item's pending
+demand, with the correct line-UOM, conversion factor, customer, status,
+and delivery date — without leaving the Production Overview page.
+
+**Where**: New `<i class="fa-solid fa-cart-shopping"></i> SOs` button
+inside the "Curr Month SO" cell of every item row. Clicking it opens
+`#por-so-modal`.
+
+**Backend**: `chaizup_toc.api.production_overview_api.get_so_detail_for_item`
+- Args: `item_code`, `so_statuses` (JSON list, defaults to `_DEFAULT_SO_STATUSES`),
+  `warehouses` (JSON list — empty = all), `pending_only` (1/0).
+- SQL: `tabSales Order Item ⨯ tabSales Order LEFT JOIN tabCustomer`,
+  filter `item_code = %s AND _so_status_clause(...)` plus optional
+  `soi.warehouse IN (...)` and `(qty − delivered_qty) > 0`.
+- Reuses `_so_status_clause` so the same docstatus + workflow_state logic
+  the rest of the page uses applies here too. No bespoke status handling.
+- Returns BOTH line-UOM and stock-UOM quantities (`stock_qty`,
+  `stock_pending_qty`) so the modal can render either side without a
+  second round-trip.
+- Sort: docstatus DESC (submitted first), delivery_date ASC, creation ASC.
+- Hard cap of 200 rows (defensive).
+
+**Frontend**: `_openSoModal(itemCode)` in `production_overview.js`.
+- Reads `this._selSo` (current SO Status MS panel selection) and
+  `this._selWh` (warehouse filter) — passes them to the API live so
+  the modal stays in sync with whatever the user is filtering on.
+- "Pending only" checkbox in the modal header re-fetches when toggled.
+  Listener is rebound via clone-replace each time the modal opens to
+  prevent handler stacking across multiple opens.
+- Renders 4 summary cards (SO Lines / Total Ordered / Total Delivered /
+  Total Pending) plus an 11-column table.
+
+**Restricted areas (do NOT regress)**:
+- Status filtering MUST go through `_so_status_clause(...)` — never
+  build a raw `IN (...)` clause for `so.status`. The clause respects
+  workflow-state-as-status when the column exists; bypassing it
+  silently drops drafts on sites that route SOs through Frappe
+  Workflow.
+- Both `qty` and `stock_qty` are returned. Don't drop one — the modal
+  needs the line-UOM number for the "Pending (line UOM)" column AND
+  the stock-UOM number for the conversion-aware "Pending (stock UOM)"
+  column, and removing either will misrepresent pending demand on
+  multi-UOM items.
+- Hard `LIMIT 200` is intentional (some items have hundreds of SO
+  lines historically). If you raise it, also paginate the modal —
+  rendering 1000+ table rows will lock the browser.
+- Modal header listener rebinding: keep the clone-and-replace pattern.
+  Switching to `addEventListener` once at init time leaks because the
+  modal is rebuilt on each open.
+
+### Verification
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`.
+2. Reload `/app/production-overview`. Load a period.
+3. On any row with a non-zero "Curr Month SO", click the `🛒 SOs`
+   button. Modal opens with 4 summary cards + a table listing every
+   SO line containing the item.
+4. Toggle "Pending only" off — already-delivered lines appear; toggle
+   on — only lines with pending qty shown.
+5. Change the page's SO Status filter and click `🛒 SOs` again on a
+   different row — the modal honours the new filter.
+6. Open SOs for an item with multi-UOM sales (e.g. Master Carton of
+   24 Pcs). Confirm the "Pending (line UOM)" and "Pending (stock UOM)"
+   columns show consistent numbers via the CF column.

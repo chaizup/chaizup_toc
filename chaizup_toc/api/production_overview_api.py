@@ -766,6 +766,178 @@ def _split_status_and_workflow(status_list):
     return plain, wf
 
 
+# =============================================================================
+# SALES ORDERS for a specific item (View SOs modal — POR-012)
+# =============================================================================
+
+@frappe.whitelist()
+def get_so_detail_for_item(item_code, so_statuses=None, warehouses=None,
+                           pending_only=1):
+    """
+    Returns every Sales Order line containing `item_code`, scoped to the
+    user's currently selected SO Status filter (and warehouses if any).
+
+    Used by the per-row "View SOs" button on the Production Overview grid.
+
+    Parameters
+    ----------
+    item_code      : str   — the FG / item being looked up
+    so_statuses    : list  — same statuses + workflow states the user
+                              picked on the page (passed verbatim from JS).
+                              When empty/None, falls back to _DEFAULT_SO_STATUSES
+                              so the modal isn't silently empty.
+    warehouses     : list  — warehouse filter list. Empty => all warehouses.
+                              Filter is applied via SOI.warehouse so an SO line
+                              dispatching to a different warehouse is excluded.
+    pending_only   : 0/1  — when 1, only rows with pending qty > 0 are returned;
+                            when 0, returns all SO lines for the item including
+                            already-fully-delivered ones (audit-trail mode).
+
+    Returns
+    -------
+    {
+      "item_code":  str,
+      "stock_uom":  str,
+      "rows": [
+        {so_name, so_docstatus, status, workflow_state, customer, customer_name,
+         customer_group, qty, delivered_qty, pending_qty, uom, conversion_factor,
+         stock_qty, stock_pending_qty, rate, amount, transaction_date,
+         delivery_date, warehouse, project, currency},
+         ...
+      ],
+      "totals": {ordered_qty_stock, delivered_qty_stock, pending_qty_stock, amount},
+      "uom_conversions": [{uom, factor}, ...],
+    }
+
+    All quantities returned in BOTH the SO line UOM (qty / delivered_qty /
+    pending_qty) AND stock UOM (stock_qty / stock_pending_qty), so the modal
+    can render either side without a second round-trip.
+
+    Sort order: docstatus DESC (submitted first), then delivery_date ASC
+    (soonest deadline first), then SO creation ASC.
+    """
+    if isinstance(so_statuses, str):
+        so_statuses = frappe.parse_json(so_statuses) or []
+    if isinstance(warehouses, str):
+        warehouses = frappe.parse_json(warehouses) or []
+    so_statuses = so_statuses or _DEFAULT_SO_STATUSES
+    pending_only = cint(pending_only)
+
+    so_clause   = _so_status_clause(so_statuses)
+    wh_sql      = ""
+    wh_params   = {"item_code": item_code}
+    if warehouses:
+        wh_sql = " AND soi.warehouse IN %(warehouses)s"
+        wh_params["warehouses"] = warehouses
+    pending_sql = (
+        " AND (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0"
+        if pending_only else ""
+    )
+
+    rows = frappe.db.sql(f"""
+        SELECT
+            so.name                                        AS so_name,
+            so.docstatus                                   AS so_docstatus,
+            so.status                                      AS status,
+            COALESCE(so.workflow_state, '')                AS workflow_state,
+            so.customer                                    AS customer,
+            COALESCE(so.customer_name, so.customer)        AS customer_name,
+            COALESCE(cust.customer_group, '')              AS customer_group,
+            so.transaction_date                            AS transaction_date,
+            so.delivery_date                               AS delivery_date,
+            so.currency                                    AS currency,
+            so.project                                     AS project,
+            soi.qty                                        AS qty,
+            COALESCE(soi.delivered_qty, 0)                 AS delivered_qty,
+            (soi.qty - COALESCE(soi.delivered_qty, 0))     AS pending_qty,
+            soi.uom                                        AS uom,
+            COALESCE(soi.conversion_factor, 1)             AS conversion_factor,
+            COALESCE(soi.stock_qty, soi.qty)               AS stock_qty,
+            (
+                COALESCE(soi.stock_qty, soi.qty)
+                - COALESCE(soi.delivered_qty, 0) * COALESCE(soi.conversion_factor, 1)
+            )                                              AS stock_pending_qty,
+            COALESCE(soi.rate, 0)                          AS rate,
+            COALESCE(soi.amount, 0)                        AS amount,
+            COALESCE(soi.warehouse, '')                    AS warehouse,
+            COALESCE(soi.delivery_date, so.delivery_date)  AS line_delivery_date
+        FROM   `tabSales Order Item` soi
+        JOIN   `tabSales Order` so      ON so.name = soi.parent
+        LEFT JOIN `tabCustomer`  cust   ON cust.name = so.customer
+        WHERE  soi.item_code = %(item_code)s
+          AND  {so_clause}
+          {wh_sql}
+          {pending_sql}
+        ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
+        LIMIT 200
+    """, wh_params, as_dict=True)
+
+    item = frappe.db.get_value(
+        "Item", item_code,
+        ["item_name", "stock_uom"], as_dict=True
+    ) or {}
+
+    out_rows  = []
+    tot_ord   = 0.0
+    tot_dlvd  = 0.0
+    tot_pend  = 0.0
+    tot_amt   = 0.0
+    today_d   = getdate(today())
+    for r in rows:
+        dd = r.line_delivery_date or r.delivery_date
+        is_overdue = bool(
+            r.so_docstatus == 1 and dd and getdate(dd) < today_d and r.pending_qty > 0
+        )
+        out_rows.append({
+            "so_name":            r.so_name,
+            "so_docstatus":       cint(r.so_docstatus),
+            "status":             r.status,
+            "workflow_state":     r.workflow_state,
+            "customer":           r.customer,
+            "customer_name":      r.customer_name,
+            "customer_group":     r.customer_group,
+            "transaction_date":   str(r.transaction_date or ""),
+            "delivery_date":      str(dd or ""),
+            "is_overdue":         is_overdue,
+            "currency":           r.currency or "",
+            "project":            r.project or "",
+            "qty":                flt(r.qty),
+            "delivered_qty":      flt(r.delivered_qty),
+            "pending_qty":        flt(r.pending_qty),
+            "uom":                r.uom or item.get("stock_uom") or "",
+            "conversion_factor":  flt(r.conversion_factor) or 1.0,
+            "stock_qty":          flt(r.stock_qty),
+            "stock_pending_qty":  flt(r.stock_pending_qty),
+            "rate":               flt(r.rate),
+            "amount":             flt(r.amount),
+            "warehouse":          r.warehouse,
+        })
+        tot_ord  += flt(r.stock_qty)
+        tot_dlvd += flt(r.delivered_qty) * (flt(r.conversion_factor) or 1.0)
+        tot_pend += flt(r.stock_pending_qty)
+        tot_amt  += flt(r.amount)
+
+    return {
+        "item_code":      item_code,
+        "item_name":      item.get("item_name", ""),
+        "stock_uom":      item.get("stock_uom", ""),
+        "rows":           out_rows,
+        "totals": {
+            "ordered_qty_stock":   round(tot_ord,  3),
+            "delivered_qty_stock": round(tot_dlvd, 3),
+            "pending_qty_stock":   round(tot_pend, 3),
+            "amount":              round(tot_amt,  2),
+            "row_count":           len(out_rows),
+        },
+        "uom_conversions": _get_uom_conversions([item_code]).get(item_code, []),
+        "filter_used":     {
+            "so_statuses":   so_statuses,
+            "warehouses":    warehouses or [],
+            "pending_only":  bool(pending_only),
+        },
+    }
+
+
 def _so_status_clause(so_statuses):
     """
     Build a SQL fragment that matches:
@@ -1044,8 +1216,47 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
         c = ws_cover.cell(row=i, column=2, value=v)
         c.border = BORDER
         c.alignment = Alignment(horizontal="right")
+
+    # ── POR-010: Glossary of formulas (literal Excel-friendly form) ───────
+    # Sits below the Item Counts table on the Cover sheet so a planner can
+    # cross-reference any computed column without leaving the workbook.
+    glossary_start = len(cover_rows) + 8 + len(cnt_rows) + 2
+    ws_cover.cell(row=glossary_start - 1, column=1, value="Formula Glossary").font = COVER_TITLE_FONT
+    ws_cover.merge_cells(start_row=glossary_start - 1, start_column=1, end_row=glossary_start - 1, end_column=2)
+    _fmt_header(ws_cover, glossary_start, ["Metric", "Definition / Formula"], fill=SUB_HDR_FILL, font=SUB_HDR_FONT)
+    glossary_rows = [
+        ("Open WO Pending Qty",    "= SUM( WorkOrder.qty − produced_qty )  for WOs in selected status"),
+        ("Total Pending SO",       "= SUM( SO.stock_qty − SO.delivered_qty × cf )  across ALL months"),
+        ("Curr Month SO",          "= SUM(stock_qty − delivered_qty × cf)  delivery_date in CURR month"),
+        ("Prev Month SO",          "= SUM(stock_qty − delivered_qty × cf)  delivery_date in PREV month"),
+        ("Sales Projection",       "Sales Projection Items.qty_in_stock_uom for CURR month"),
+        ("Total Curr Sales",       "= SUM(SO.stock_qty)  for CURR month, submitted SOs"),
+        ("Stock on Hand (Phys)",   "= SUM(Bin.actual_qty)  warehouse-scoped"),
+        ("Stock on Hand (Exp)",    "= SUM(actual_qty + ordered_qty + planned_qty)  warehouse-scoped"),
+        ("Possible Qty",           "= MIN over BOM components: floor(stock ÷ qty_per_unit)"),
+        ("Target Production",      "= MAX(Sales Projection, Total Curr Sales)"),
+        ("Target Gap",             "= MAX(Curr Month SO − (Pending WO + Stock), 0)"),
+        ("% Target Achieved",      "= MAX(Target − Gap, 0) ÷ Target × 100"),
+        ("Coverage %",             "= (Sales Projection + Prev Month SO) ÷ Total Curr Sales × 100"),
+        ("Proj vs Sales %",        "= Total Curr Sales ÷ Sales Projection × 100"),
+        ("Shortage vs Phys",       "= MAX(Target − Stock, 0)"),
+        ("Shortage vs Stock+WO",   "= MAX(Target − (Stock + Pending WO), 0)"),
+        ("BOM Std Cost (per unit)","= SUM(BOM Item.amount)  for the active BOM"),
+        ("Actual Cost (per unit)", "= SUM(Stock Entry Detail.basic_amount) ÷ produced_qty  (curr month STEs)"),
+        ("Variance %",             "= (Actual − BOM Std) ÷ BOM Std × 100"),
+        ("Planning Mode A",        "Independent — every item compared vs full pool"),
+        ("Planning Mode B",        "Priority Queue — items consume pool in row order; earlier rows first"),
+    ]
+    for r_idx, (k, v) in enumerate(glossary_rows, start=glossary_start + 1):
+        c1 = ws_cover.cell(row=r_idx, column=1, value=k)
+        c1.border = BORDER; c1.font = Font(bold=True, color="334155")
+        c2 = ws_cover.cell(row=r_idx, column=2, value=v)
+        c2.border = BORDER; c2.alignment = LEFT_WRAP
+        if (r_idx - (glossary_start + 1)) % 2 == 1:
+            c1.fill = ALT_FILL; c2.fill = ALT_FILL
+
     ws_cover.column_dimensions["A"].width = 36
-    ws_cover.column_dimensions["B"].width = 32
+    ws_cover.column_dimensions["B"].width = 70
 
     # ────────────────────────────────────────────────────────────────────
     # SHEET 2 — SHEET GUIDE (use cases for every sheet, the workbook map)
@@ -1067,11 +1278,12 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
     guide_rows = [
         (
             "Cover",
-            "Title, applied filters, item-count summary.",
+            "Title, applied filters, item-count summary, formula glossary.",
             "First place to look — confirms WHAT you exported (which Company, "
-            "Period, Warehouses, Statuses, Stock View) and the headline "
-            "counts of items in each state.",
-            "Filter rows + Item Counts table.",
+            "Period, Warehouses, Statuses, Stock View). Includes the headline "
+            "counts of items in each state AND a glossary block listing the "
+            "EXACT formula behind every computed column on every sheet.",
+            "Filter rows + Item Counts + Formula Glossary tables.",
         ),
         (
             "Sheet Guide",
@@ -1081,17 +1293,19 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
         ),
         (
             "Simple Report",
-            "One-line-per-item planner snapshot. Pending SO vs WO vs stock vs "
-            "target vs shortage.",
+            "One-line-per-item planner snapshot with LIVE formulas. "
+            "Pending SO vs WO vs stock vs target vs shortage.",
             "Daily quick-look for the production planner. \"Can I cover the "
             "pending orders with what I have + what's already in WO, or do I "
             "need to start more?\". The two SHORTAGE columns answer that "
             "directly: Shortage vs Physical Stock = pure firefight; Shortage "
-            "vs (Stock + Pending WO) = remaining gap after open WOs land.",
-            "Item Code | Item Name | Stock UOM | Total Pending SO | "
-            "Open WO Pending | Sales Projection | Stock on Hand (Physical) | "
-            "Target Production | Target Calc | Shortage vs Physical | "
-            "Shortage vs Stock+WO.",
+            "vs (Stock + Pending WO) = remaining gap after open WOs land. "
+            "EDIT any source cell (Pending SO / Pending WO / Projection / "
+            "Stock) and the Target + Shortage columns auto-recalculate.",
+            "Item Code | Item Name | Item Group | Stock UOM | Total Pending "
+            "SO | Open WO Pending | Sales Projection | Stock on Hand "
+            "(Physical) | Target Production [formula] | Shortage vs Physical "
+            "[formula] | Shortage vs Stock+WO [formula].",
         ),
         (
             "Overview",
@@ -1194,13 +1408,15 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
     ws_simple["A1"].font = COVER_TITLE_FONT
     ws_simple.merge_cells("A1:K1")
     ws_simple["A2"] = (
-        "Total Pending SO  = sum of pending qty across ALL pending Sales Orders that match your SO Status filter (any month). "
-        "Open WO Pending Qty = SUM(Work Order.qty − produced_qty) on open WOs. "
-        "Total Projection  = qty_in_stock_uom from this month's Sales Projection. "
-        "Stock on Hand (Physical) = Bin.actual_qty (this report uses PHYSICAL only, regardless of Stock View). "
-        "Target Production = max(Sales Projection, Total Curr Month Sales). "
-        "Shortage vs Physical Stock = max(Target − Stock, 0). "
-        "Shortage vs Stock + Pending WO = max(Target − (Stock + Pending WO), 0)."
+        "All numeric cells are EDITABLE — Target, Shortage vs Phys and Shortage vs Stock+WO are LIVE Excel formulas; "
+        "edit Pending SO / Pending WO / Projection / Stock cells and the derived columns recalc automatically.   "
+        "Total Pending SO = SUM(SO.stock_qty − delivered_qty × cf) across ALL months matching your SO Status filter.   "
+        "Open WO Pending Qty = SUM(Work Order.qty − produced_qty) for open WOs.   "
+        "Total Projection = qty_in_stock_uom from this month's Sales Projection.   "
+        "Stock on Hand (Physical) = Bin.actual_qty (PHYSICAL only on this sheet, regardless of page Stock View).   "
+        "Target Production = MAX(Projection, Total Pending SO)  ← planner-friendly proxy for max(Projection, Curr Sales).   "
+        "Shortage vs Physical Stock = MAX(Target − Stock, 0).   "
+        "Shortage vs (Stock + Pending WO) = MAX(Target − (Stock + Pending WO), 0)."
     )
     ws_simple["A2"].font = NOTE_FONT
     ws_simple["A2"].alignment = LEFT_WRAP
@@ -1218,31 +1434,46 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
         "Shortage vs (Stock + Pending WO)",
     ]
     _fmt_header(ws_simple, 4, simple_headers)
+    # POR-010: Target Production, Shortage vs Phys and Shortage vs Stock+WO
+    # are now LIVE Excel formulas. If a planner edits Pending SO / Open WO /
+    # Projection / Stock cells in this sheet, the derived columns
+    # auto-recalculate. Cells reference column letters resolved by
+    # `get_column_letter` to avoid hard-coded indices.
+    col_curr_proj = get_column_letter(7)   # G — Total Projection
+    col_stock     = get_column_letter(8)   # H — Stock on Hand (Physical)
+    col_target    = get_column_letter(9)   # I — Target Production
+    col_short_p   = get_column_letter(10)  # J — Shortage vs Physical
+    col_short_pwo = get_column_letter(11)  # K — Shortage vs Stock + Pending WO
+    col_pendwo    = get_column_letter(6)   # F — Open WO Pending Qty
+    col_curr_so   = "@"  # not on this sheet — projection vs sales not computed here
+
     for r, item in enumerate(items, start=5):
         code = item["item_code"]
         target  = flt(item.get("target_production", 0))
         stock   = flt(physical_stock_map.get(code, 0))
         wo_pend = flt(item.get("pending_wo_qty", 0))
+        # Pre-computed for tinting + sort. Excel still recalculates from formulas.
         short_phys  = max(target - stock, 0)
         short_total = max(target - (stock + wo_pend), 0)
-        row = [
-            code,
-            item.get("item_name", ""),
-            item.get("item_group", ""),
-            item.get("stock_uom", ""),
-            flt(item.get("total_pending_so", 0)),
-            wo_pend,
-            flt(item.get("curr_projection", 0)),
-            stock,
-            target,
-            round(short_phys, 3),
-            round(short_total, 3),
-        ]
-        for col_idx, val in enumerate(row, start=1):
-            cell = ws_simple.cell(row=r, column=col_idx, value=val)
-            cell.border = BORDER
-            if col_idx >= 5 and isinstance(val, (int, float)):
-                cell.alignment = Alignment(horizontal="right")
+        ws_simple.cell(row=r, column=1, value=code).border = BORDER
+        ws_simple.cell(row=r, column=2, value=item.get("item_name", "")).border = BORDER
+        ws_simple.cell(row=r, column=3, value=item.get("item_group", "")).border = BORDER
+        ws_simple.cell(row=r, column=4, value=item.get("stock_uom", "")).border = BORDER
+        # Numeric source columns
+        ws_simple.cell(row=r, column=5, value=flt(item.get("total_pending_so", 0))).border = BORDER
+        ws_simple.cell(row=r, column=6, value=wo_pend).border = BORDER
+        ws_simple.cell(row=r, column=7, value=flt(item.get("curr_projection", 0))).border = BORDER
+        ws_simple.cell(row=r, column=8, value=stock).border = BORDER
+        # Live formulas (POR-010).
+        # Target Production = MAX(Curr Projection, Curr Sales) — but curr
+        # sales isn't on this sheet; use MAX(Projection, Total Pending SO) as
+        # the planner-friendly proxy: "what's the bigger demand signal — the
+        # projection or the pending orders?". Document this in the header note.
+        ws_simple.cell(row=r, column=9,  value=f"=MAX({col_curr_proj}{r},E{r})").border = BORDER
+        ws_simple.cell(row=r, column=10, value=f"=MAX({col_target}{r}-{col_stock}{r},0)").border = BORDER
+        ws_simple.cell(row=r, column=11, value=f"=MAX({col_target}{r}-({col_stock}{r}+{col_pendwo}{r}),0)").border = BORDER
+        for col_idx in (5, 6, 7, 8, 9, 10, 11):
+            ws_simple.cell(row=r, column=col_idx).alignment = Alignment(horizontal="right")
         # Tinting: red if any shortage, alt-row otherwise
         if short_total > 0:
             for c in range(1, len(simple_headers) + 1):

@@ -420,14 +420,63 @@
 .por-short-ok   { font-size:11px; color:var(--por-ok-text); font-weight:600; }
 .por-short-warn { font-size:11px; color:var(--por-err-text); font-weight:700; }
 
-/* Planning input */
-.por-plan-inp {
-  width:76px; height:24px; padding:0 5px;
+/* === Planning Mode segmented group (POR-009 — mirrors WKP Mode A/B) === */
+.por-seg-group {
+  display:inline-flex; align-items:stretch;
   border:1px solid var(--por-border); border-radius:var(--por-r-sm);
-  font-family:"Geist Mono",monospace; font-size:12px;
-  background:white; outline:none;
+  background:var(--por-surface); overflow:hidden;
 }
-.por-plan-inp:focus { border-color:var(--por-brand); box-shadow:0 0 0 2px rgba(79,70,229,.12); }
+.por-seg-btn {
+  padding:0 10px; height:24px;
+  border:none; background:transparent; cursor:pointer;
+  font-size:11px; font-weight:600; color:var(--por-muted);
+  font-family:inherit; transition:all .15s; white-space:nowrap;
+}
+.por-seg-btn + .por-seg-btn { border-left:1px solid var(--por-border); }
+.por-seg-btn:hover { background:var(--por-sl-50); color:var(--por-text); }
+.por-seg-btn.active { background:var(--por-brand); color:#fff; }
+.por-seg-btn.active:hover { background:var(--por-brand-h); color:#fff; }
+
+/* === Priority Mode row affordances === */
+/* Drag handle in the seq column — full opacity in Mode B, dimmed in Mode A */
+.por-drag-handle {
+  display:inline-block; cursor:grab; user-select:none;
+  color:var(--por-sl-400); font-size:13px; line-height:1; margin-right:4px;
+  opacity:.25; transition:opacity .15s;
+}
+.por-mode-priority .por-drag-handle { opacity:1; cursor:grab; }
+.por-mode-priority .por-drag-handle:active { cursor:grabbing; }
+
+/* Editable seq input — only active in Priority mode */
+.por-seq-input {
+  width:38px; height:22px; padding:0 4px;
+  border:1px solid var(--por-border); border-radius:var(--por-r-sm);
+  background:var(--por-sl-50); color:var(--por-sl-700);
+  font-family:"Geist Mono",monospace; font-size:11px; font-weight:700;
+  text-align:center; outline:none;
+}
+.por-mode-priority .por-seq-input {
+  background:var(--por-brand); color:#fff; border-color:var(--por-brand);
+  cursor:text;
+}
+.por-seq-input:focus { box-shadow:0 0 0 2px rgba(79,70,229,.18); }
+/* Mode A: input visually inert (read-only) */
+.por-mode-independent .por-seq-input { pointer-events:none; }
+
+/* Row drag highlights */
+#por-tbody tr.por-drag-active { opacity:.55; background:var(--por-info-bg) !important; }
+#por-tbody tr.por-drag-over   { box-shadow:inset 0 2px 0 0 var(--por-brand); }
+
+/* Planning status pill rendered next to Possible Qty in Mode B */
+.por-plan-status {
+  display:inline-flex; align-items:center; gap:3px;
+  padding:1px 6px; border-radius:99px;
+  font-size:10px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
+  margin-left:4px;
+}
+.por-plan-status-full    { background:var(--por-ok-bg);   color:var(--por-ok-text); }
+.por-plan-status-partial { background:var(--por-warn-bg); color:var(--por-warn-text); }
+.por-plan-status-blocked { background:var(--por-err-bg);  color:var(--por-err-text); }
 
 /* Tooltip i button */
 .por-tip {
@@ -1062,18 +1111,24 @@ Physical + Expected adds open PO inbound + open WO planned output.">
       </select>
     </div>
 
-    <!-- Planning Mode toggle + sub-mode (Independent / Priority) -->
-    <div class="por-filter-grp" title="Independent: each item checked against full pool of stock independently. Priority: items consume stock in row order — earlier rows take precedence.">
+    <!-- Planning Mode — segmented button group (POR-009).
+         Mirrors wo_kitting_planner Mode A / Mode B. Removed the editable
+         qty inputs (Planned / Curr SO) — those are SOURCE values from
+         ERPNext and must NOT be edited from this page. The only thing
+         the user changes in Mode B is the priority *sequence*, via the
+         seq-input column or row drag-and-drop. -->
+    <div class="por-filter-grp" title="Mode A — Independent: each item checked against full stock pool independently; row order does not matter.&#10;Mode B — Priority Queue: items consume the pool in row order; earlier rows take precedence. Use the # column or drag rows to set priority.">
       <span class="por-filter-lbl">Planning Mode</span>
-      <label class="por-toggle">
-        <input type="checkbox" id="por-planning-toggle">
-        <span class="por-toggle-slider"></span>
-      </label>
-      <span class="por-toggle-lbl" id="por-planning-lbl">Off</span>
-      <select id="por-plan-submode" class="por-select" style="height:24px;font-size:11px;display:none;margin-left:4px;">
-        <option value="independent">Independent</option>
-        <option value="priority">Priority</option>
-      </select>
+      <div class="por-seg-group" role="tablist">
+        <button class="por-seg-btn active" data-plan-mode="independent"
+                title="Mode A — Independent. Each item is checked against the full stock pool. Row order does NOT affect Possible Qty.">
+          A &mdash; Independent
+        </button>
+        <button class="por-seg-btn" data-plan-mode="priority"
+                title="Mode B — Priority Queue. Items consume the pool in row order. The TOP row gets first pick. Drag rows or type a number in the # column to change priority.">
+          B &mdash; Priority Queue
+        </button>
+      </div>
     </div>
 
     <div class="por-filter-sep"></div>
@@ -1101,11 +1156,21 @@ Physical + Expected adds open PO inbound + open WO planned output.">
              style="height:24px;font-size:11px;width:240px;"
              title="Universal search — case-insensitive substring match across Item Code, Item Name, Item Group, Active BOM, and Production Plan IDs visible on the row. Press Esc to clear.">
     </div>
-    <!-- Quick filter pills (POR-008) — shown alongside group filter once data loads -->
+    <!-- Quick filter pills (POR-008 + POR-011) — shown alongside group filter once data loads.
+         Pills are additive (AND). "Open SO" and "No SO" are mutually
+         exclusive — clicking one auto-clears the other (handled in JS). -->
     <div id="por-quick-pills-wrap" style="display:none;align-self:center;gap:4px;padding:0 4px;">
       <button class="por-quick-pill" data-quick-filter="has-so"
-              title="Show only items with active Sales Orders this month or pending across any month">
+              title="Show only items with active Sales Orders this month or pending across any month.&#10;Definition: has_open_so OR curr_month_order OR prev_month_order OR total_pending_so > 0.">
         <i class="fa-solid fa-cart-shopping" style="font-size:9px;"></i> Open SO
+      </button>
+      <button class="por-quick-pill" data-quick-filter="no-so"
+              title="Show only items with NO open Sales Orders. Items here are make-to-stock candidates or projection-driven items, not customer-driven.&#10;Definition: NOT has_open_so AND total_pending_so == 0 AND curr_month_order == 0 AND prev_month_order == 0.">
+        <i class="fa-solid fa-circle-minus" style="font-size:9px;"></i> No SO
+      </button>
+      <button class="por-quick-pill" data-quick-filter="in-proj"
+              title="Show only items that appear in this month's submitted Sales Projection (qty &gt; 0).&#10;Useful to verify the projection covers the right SKUs.">
+        <i class="fa-solid fa-chart-line" style="font-size:9px;"></i> In Projection
       </button>
       <button class="por-quick-pill" data-quick-filter="has-wo"
               title="Show only items with at least one open Work Order">
@@ -1594,6 +1659,34 @@ Uses the FULL ERPNext item group name (no abbreviation).">i</span>
     </div>
     <div class="por-modal-ftr">
       <button class="por-btn por-btn-default" data-close-modal="por-pp-modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODAL: Sales Orders for Item  (POR-012 — View SOs column)
+     Shows every SO line containing the item, scoped to the SO Statuses +
+     Warehouses the user picked on the page. Pending qty toggle in footer.
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="por-overlay" id="por-so-modal">
+  <div class="por-modal wide">
+    <div class="por-modal-hdr">
+      <i class="fa-solid fa-cart-shopping" style="color:var(--por-brand);"></i>
+      <span class="por-modal-title" id="por-so-modal-title">Sales Orders</span>
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--por-muted);font-weight:600;margin-left:auto;margin-right:10px;cursor:pointer;"
+             title="When ON: only SO lines with pending qty &gt; 0 (i.e. not yet fully delivered).&#10;When OFF: shows every SO line for this item including fully-delivered ones (audit trail).">
+        <input type="checkbox" id="por-so-pending-only" checked>
+        Pending only
+      </label>
+      <button class="por-modal-close" data-close-modal="por-so-modal">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="por-modal-body" id="por-so-modal-body">
+      <div class="por-state-box"><div class="por-spinner"></div></div>
+    </div>
+    <div class="por-modal-ftr">
+      <button class="por-btn por-btn-default" data-close-modal="por-so-modal">Close</button>
     </div>
   </div>
 </div>
