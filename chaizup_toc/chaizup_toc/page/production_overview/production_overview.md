@@ -1032,3 +1032,69 @@ inside the "Curr Month SO" cell of every item row. Clicking it opens
 6. Open SOs for an item with multi-UOM sales (e.g. Master Carton of
    24 Pcs). Confirm the "Pending (line UOM)" and "Pending (stock UOM)"
    columns show consistent numbers via the CF column.
+
+---
+
+## Sync Block — 2026-05-05 (POR-013 — BLANK PAGE FIX)
+
+### POR-013 — Production Overview rendered as a blank page
+
+**Symptom**: Visiting `/app/production-overview` showed an empty page. No
+visible filter bar, no tabs, no table. Page just sat blank with no
+explicit JS error in some browsers (others showed a SyntaxError on the
+auto-generated `frappe.templates['production_overview'] = '...';` line).
+
+**Root cause**: A raw apostrophe (`'`) inside a `title=` attribute in
+`production_overview.html`:
+
+```html
+title="Show only items that appear in this month's submitted Sales
+       Projection (qty > 0)..."
+```
+
+Frappe's page asset pipeline builds a JS file that does:
+
+```js
+frappe.templates['production_overview'] = 'HTML LITERAL HERE';
+```
+
+— it wraps the entire HTML body in a **single-quoted JS string**. The
+raw `'` in `month's` closes that string mid-template, leaving the rest
+as broken JS that the parser rejects. `frappe.render_template(...)`
+then can't find the template and the controller never injects markup
+into `page.body`. Result: blank page.
+
+**Fix**: Replace any raw `'` outside `<style>` with `&apos;` (or
+rephrase). The single offending occurrence (`month's`) was changed to
+`month&apos;s`. Verified the file with:
+
+```sh
+awk '/<style>/{s=1} /<\/style>/{s=0; next} {if(s==0) print}' \
+  production_overview.html | grep -c "[^=&]'[^=]"
+# → 0
+```
+
+### Restricted areas (do NOT regress)
+- **NEVER** put a raw `'` in `production_overview.html` outside the
+  `<style>` block. Use `&apos;`, `&#39;`, `right-single-quotation`
+  (`’` / `&rsquo;`) or rephrase. Single quotes inside CSS rules are
+  fine because the `<style>` block is parsed differently — but
+  apostrophes in titles, alt text, button labels, and inline HTML
+  comments will all break the page.
+- This is the *same class of bug* as SCT-001 (Supply Chain Tracker
+  blanked out by `Click View for ERP details.` containing `'`). Both
+  pages share the Frappe single-quoted-string template wrapping
+  contract.
+- After ANY edit to `production_overview.html`:
+  1. Run the awk grep above — it MUST print `0`.
+  2. Run `redis-cli -h redis-cache -p 6379 FLUSHALL` so the bundle
+     cache reloads.
+  3. Hard-reload `/app/production-overview` and confirm the filter
+     bar, tabs, and load button appear.
+
+### Verification
+1. Hard-reload `/app/production-overview`. The filter bar, tab bar,
+   and Load button render. Click Load — the table populates.
+2. Hover the new "In Projection" pill — tooltip displays correctly
+   with `month's` rendered as a literal apostrophe (the entity is
+   resolved by the browser when shown in the tooltip).
