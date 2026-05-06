@@ -448,12 +448,24 @@
 .por-mode-priority .por-drag-handle:active { cursor:grabbing; }
 
 /* Editable seq input — only active in Priority mode */
+/* POR-016 (2026-05-06): widened to 56px (was 38px) so 3-digit
+   priority numbers (e.g. 100+ items) display without truncation.
+   Native browser spinner buttons hidden — they took up internal
+   width and wasted space; users get drag handle + Enter-to-jump
+   instead. */
 .por-seq-input {
-  width:38px; height:22px; padding:0 4px;
+  width:56px; height:22px; padding:0 6px;
   border:1px solid var(--por-border); border-radius:var(--por-r-sm);
   background:var(--por-sl-50); color:var(--por-sl-700);
   font-family:"Geist Mono",monospace; font-size:11px; font-weight:700;
   text-align:center; outline:none;
+  -moz-appearance:textfield;          /* hide spinner on Firefox */
+  appearance:textfield;
+}
+.por-seq-input::-webkit-outer-spin-button,
+.por-seq-input::-webkit-inner-spin-button {
+  -webkit-appearance:none;            /* hide spinner on WebKit/Blink (Chrome, Safari, Edge) */
+  margin:0;
 }
 .por-mode-priority .por-seq-input {
   background:var(--por-brand); color:#fff; border-color:var(--por-brand);
@@ -1175,6 +1187,11 @@ Physical + Expected adds open PO inbound + open WO planned output.">
       <button class="por-quick-pill" data-quick-filter="has-wo"
               title="Show only items with at least one open Work Order">
         <i class="fa-solid fa-hammer" style="font-size:9px;"></i> Open WO
+      </button>
+      <!-- POR-014 (2026-05-06): No WO counterpoint to Open WO. Pairs with Open WO; mutually exclusive. -->
+      <button class="por-quick-pill" data-quick-filter="no-wo"
+              title="Show only items with NO open Work Order. Useful to surface items needing release / planning attention.&#10;Definition: open_wo_count == 0.">
+        <i class="fa-solid fa-ban" style="font-size:9px;"></i> No WO
       </button>
       <button class="por-quick-pill" data-quick-filter="has-pp"
               title="Show only items whose open Work Orders are part of an active Production Plan (co-planned with other items)">

@@ -3249,25 +3249,64 @@ def test_deepseek_connection():
 #  PRIVATE: DeepSeek caller + function-call execution loop
 # ─────────────────────────────────────────────────────────────────────
 
+def _is_valid_api_key(key):
+    """
+    POR-017 (2026-05-06): Reject placeholder values from ANY source.
+
+    History — production_overview AI was returning "DeepSeek API error
+    (HTTP 400/401)" because `frappe.conf.deepseek_api_key` and
+    `TOC Settings.custom_deepseek_api_key` could legitimately contain
+    placeholder strings like "YOUR_KEY_HERE" / "" / whitespace, which
+    the previous _get_api_key() returned as-is. DeepSeek then either
+    rejected the malformed bearer token (400) or flagged auth failure
+    (401). The user-visible error log titled "WKP AI DeepSeek Error"
+    was misleading — the call should have been short-circuited.
+
+    Validation rules (all must pass):
+      - Not None / empty / whitespace-only
+      - Does NOT start with "YOUR_" (case-insensitive)
+      - Length >= 16 (DeepSeek keys are typically `sk-` + 32 hex chars)
+
+    DO NOT relax these rules without testing — a placeholder key
+    leaking through reproduces the original bug instantly.
+    """
+    if not key:
+        return False
+    s = str(key).strip()
+    if not s:
+        return False
+    if s.upper().startswith("YOUR_"):
+        return False
+    if len(s) < 16:
+        return False
+    return True
+
+
 def _get_api_key():
     """
     Resolve DeepSeek API key via fallback hierarchy:
       1. DEEPSEEK_API_KEY constant (this file)
       2. frappe.conf.deepseek_api_key (site_config.json)
       3. TOC Settings custom_deepseek_api_key field (Password fieldtype — use get_decrypted_password)
+
+    POR-017 (2026-05-06): every source is now run through
+    `_is_valid_api_key()` so placeholder strings (e.g. literal
+    "YOUR_KEY_HERE") never get sent to DeepSeek. Returns None if no
+    valid key is found; callers must surface a configuration message
+    rather than attempting the call.
     """
-    if DEEPSEEK_API_KEY and not DEEPSEEK_API_KEY.startswith("YOUR_"):
-        return DEEPSEEK_API_KEY
+    if _is_valid_api_key(DEEPSEEK_API_KEY):
+        return str(DEEPSEEK_API_KEY).strip()
     key = getattr(frappe.conf, "deepseek_api_key", None)
-    if key:
-        return key
+    if _is_valid_api_key(key):
+        return str(key).strip()
     try:
         from frappe.utils.password import get_decrypted_password
         key = get_decrypted_password(
             "TOC Settings", "TOC Settings", "custom_deepseek_api_key", raise_exception=False
         )
-        if key:
-            return key
+        if _is_valid_api_key(key):
+            return str(key).strip()
     except Exception:
         pass
     return None
@@ -3315,20 +3354,31 @@ def _call_deepseek(messages, tools=None, api_key=None, model=None):
         timeout=40,
     )
     if not resp.ok:
+        # POR-017 (2026-05-06): expand the logged error so triage doesn't
+        # require enabling debug mode. We log: status, error body, model,
+        # message-count, total chars (proxy for token count), and tool
+        # presence. Truncate the body to 1500 chars to keep the log row
+        # manageable but still useful for HTTP 400 oversized-payload
+        # diagnosis.
         try:
             err_body = resp.json().get("error", {})
-            err_msg = err_body.get("message", resp.text[:400])
+            err_msg  = err_body.get("message", resp.text[:1500])
         except Exception:
-            err_msg = resp.text[:400]
+            err_msg = resp.text[:1500]
+        total_chars = sum(len(str(m.get("content") or "")) for m in messages)
         frappe.log_error(
-            f"DeepSeek API {resp.status_code}: {err_msg}",
+            (
+                f"DeepSeek API {resp.status_code}: {err_msg}\n\n"
+                f"model={effective_model}  messages={len(messages)}  "
+                f"chars={total_chars}  has_tools={bool(tools)}"
+            ),
             "WKP AI DeepSeek Error",
         )
     resp.raise_for_status()
     return resp.json()
 
 
-def _execute_chat_with_tools(messages, context, api_key, model=None):
+def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None):
     """
     Run the function-calling loop: send messages, execute any tool calls,
     and return the final text reply + updated message list.
@@ -3338,16 +3388,28 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
         context  dict   Compressed simulation context (for tool data lookup)
         api_key  str    DeepSeek API key
         model    str    Optional model override (see DEEPSEEK_MODELS)
+        tools    list   Optional tool schema. Defaults to `_AI_TOOLS` (WKP
+                        kitting tools). POR-017 (2026-05-06): callers from
+                        Production Overview pass `tools=[]` because the WKP
+                        tools depend on `context["rows"]/["dispatch"]`
+                        which the POR context doesn't populate — sending
+                        them caused the LLM to attempt unanswerable
+                        function calls and inflated the request payload
+                        toward HTTP 400.
 
     Returns:
         tuple: (reply_text: str, updated_messages: list)
     """
     tool_calls_made = 0
     tools_used      = []   # track which function names were called
+    # tools=None  → preserve legacy WKP behaviour
+    # tools=[]    → caller explicitly wants NO tool calls (Production Overview)
+    # tools=[...] → caller-supplied tool schema
+    effective_tools = _AI_TOOLS if tools is None else tools
 
     try:
         while tool_calls_made <= _AI_MAX_TOOL_CALLS:
-            result   = _call_deepseek(messages, _AI_TOOLS, api_key, model=model)
+            result   = _call_deepseek(messages, effective_tools or None, api_key, model=model)
             choice   = result["choices"][0]
             msg      = choice["message"]
             finish   = choice.get("finish_reason", "stop")
@@ -3389,6 +3451,19 @@ def _execute_chat_with_tools(messages, context, api_key, model=None):
         )
     except _requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
+        if status == 400:
+            # POR-017 (2026-05-06): 400 = malformed request. Most common
+            # causes here are oversized context payload or a placeholder
+            # API key that DeepSeek rejects pre-auth. Show actionable
+            # guidance instead of the generic "see Error Log" line.
+            return (
+                "<span class=\"wkp-ai-err\">DeepSeek API rejected the request (HTTP 400).</span> "
+                "Common causes: invalid / placeholder API key, or context "
+                "payload too large. Check <b>TOC Settings → AI Advisor → "
+                "DeepSeek API Key</b>, then see <b>Error Log → WKP AI "
+                "DeepSeek Error</b> for the body returned by the API.",
+                messages, tools_used,
+            )
         if status == 401:
             return (
                 "<span class=\"wkp-ai-err\">Invalid or expired DeepSeek API key.</span> "

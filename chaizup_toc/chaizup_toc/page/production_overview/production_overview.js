@@ -66,12 +66,15 @@ class ProductionOverview {
         this._sortKey   = "";       // header click sets this
         this._sortDir   = "asc";    // "asc" | "desc"
         this._searchTxt = "";       // universal search substring (lowercased)
-        // Quick filter pill state (POR-008 + POR-011): all default OFF — additive (AND).
-        // Open SO / No SO are mutually exclusive (handled in click handler).
+        // Quick filter pill state (POR-008 + POR-011 + POR-014): all default OFF — additive (AND).
+        // Mutual-exclusion pairs (handled in click handler):
+        //   Open SO ↔ No SO  (clicking one auto-clears the other)
+        //   Open WO ↔ No WO  (POR-014 — same pattern)
         this._filterHasSO    = false;  // "Open SO"        pill
-        this._filterNoSO     = false;  // "No SO"          pill (NEW POR-011)
-        this._filterInProj   = false;  // "In Projection"  pill (NEW POR-011)
+        this._filterNoSO     = false;  // "No SO"          pill (POR-011)
+        this._filterInProj   = false;  // "In Projection"  pill (POR-011)
         this._filterHasWO    = false;  // "Open WO"        pill
+        this._filterNoWO     = false;  // "No WO"          pill (POR-014, 2026-05-06)
         this._filterHasPP    = false;  // "In PP"          pill
         // AI state
         this._aiModel   = "deepseek-chat";
@@ -538,7 +541,12 @@ class ProductionOverview {
             } else if (flag === "in-proj") {
                 this._filterInProj = !this._filterInProj;
             } else if (flag === "has-wo") {
+                // POR-014: Open WO ↔ No WO are mutually exclusive (same UX pattern as SO pair).
                 this._filterHasWO = !this._filterHasWO;
+                if (this._filterHasWO) this._filterNoWO = false;
+            } else if (flag === "no-wo") {
+                this._filterNoWO = !this._filterNoWO;
+                if (this._filterNoWO) this._filterHasWO = false;
             } else if (flag === "has-pp") {
                 this._filterHasPP = !this._filterHasPP;
             } else {
@@ -550,6 +558,7 @@ class ProductionOverview {
                 "no-so":   this._filterNoSO,
                 "in-proj": this._filterInProj,
                 "has-wo":  this._filterHasWO,
+                "no-wo":   this._filterNoWO,
                 "has-pp":  this._filterHasPP,
             };
             document.querySelectorAll(".por-quick-pill").forEach(p => {
@@ -702,6 +711,12 @@ class ProductionOverview {
         }
         if (this._filterHasWO) {
             items = items.filter(i => (i.open_wo_count || 0) > 0);
+        }
+        if (this._filterNoWO) {
+            // POR-014 (2026-05-06): items with NO open Work Order.
+            // Surfaces planning gaps — items that have demand/projection
+            // but no production currently in flight.
+            items = items.filter(i => (i.open_wo_count || 0) === 0);
         }
         if (this._filterHasPP) {
             items = items.filter(i => (i.wo_pp_count || 0) > 0);
@@ -1030,6 +1045,13 @@ Warehouse-scoped to your filter.`;
 
         // Item code is now a hyperlink to /app/item/<code> AND triggers the
         // detail modal on click of the chevron icon (data-code).
+        //
+        // POR-015 (2026-05-06): SOs button MOVED from "Curr Month SO" cell
+        // to here (under the item name). Rationale: keeps quick actions on
+        // the frozen Item column so users always see the SO drill-down
+        // affordance alongside the item identifier — without scrolling
+        // horizontally on dense rows. The Curr Month SO cell now renders
+        // the qty only (cleaner, narrower).
         const itemHeaderHtml = `
             <div style="display:flex;align-items:center;gap:6px;">
               ${this._dl("Item", item.item_code, item.item_code)}
@@ -1038,7 +1060,14 @@ Warehouse-scoped to your filter.`;
                 <i class="fa-solid fa-circle-info" style="font-size:11px;"></i>
               </button>
             </div>
-            <span class="por-in" title="${name}">${name}</span>`;
+            <span class="por-in" title="${name}">${name}</span>
+            <div class="por-item-actions" style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="por-btn por-btn-default por-btn-sm por-so-btn"
+                      data-code="${code}"
+                      title="View every Sales Order containing ${this._esc(item.item_code)} (status + customer + qty + UOM + delivery date), filtered by your selected SO statuses and warehouses.">
+                <i class="fa-solid fa-cart-shopping"></i> SOs
+              </button>
+            </div>`;
 
         return `<tr data-code="${code}" data-group="${group}" data-has-so="${item.has_open_so ? "1" : "0"}" class="${item.has_open_so ? "por-has-so" : ""}">
           <td class="por-col-s por-col-chk"><input type="checkbox" class="por-row-chk" data-code="${code}"></td>
@@ -1050,13 +1079,7 @@ Warehouse-scoped to your filter.`;
           <td>${this._fmtQ(item.planned_qty, conv, uom, tipPlanned)}</td>
           <td>${this._fmtQ(item.actual_qty, conv, uom, tipProduced)}</td>
           <td>${this._fmtQ(item.prev_month_order, conv, uom, tipPrevSO)}</td>
-          <td style="white-space:nowrap;">${this._fmtQ(item.curr_month_order, conv, uom, tipCurrSO)}
-            <button class="por-btn por-btn-default por-btn-sm por-so-btn"
-                    data-code="${code}"
-                    title="View every Sales Order containing ${this._esc(item.item_code)} (status + customer + qty + UOM + delivery date), filtered by your selected SO statuses and warehouses.">
-              <i class="fa-solid fa-cart-shopping"></i> SOs
-            </button>
-          </td>
+          <td style="white-space:nowrap;">${this._fmtQ(item.curr_month_order, conv, uom, tipCurrSO)}</td>
           <td>${this._fmtQ(item.prev_dispatch || 0, conv, uom, tipPrevDisp)}</td>
           <td>${this._fmtQ(item.curr_dispatch, conv, uom, tipCurrDisp)}</td>
           <td>${this._fmtQ(item.curr_projection, conv, uom, tipProj)}</td>

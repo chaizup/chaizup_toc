@@ -1098,3 +1098,228 @@ awk '/<style>/{s=1} /<\/style>/{s=0; next} {if(s==0) print}' \
 2. Hover the new "In Projection" pill — tooltip displays correctly
    with `month's` rendered as a literal apostrophe (the entity is
    resolved by the browser when shown in the tooltip).
+
+
+---
+
+## Sync Block — 2026-05-06 (POR-014, POR-015, POR-016, POR-017, POR-018)
+
+### POR-014 — "No WO" quick-filter pill
+
+**Why**: counterpoint to "Open WO". Surfaces items that have demand or
+projection but no Work Order in flight — the planner's "what should I
+release a WO for next?" pile.
+
+**Implementation**:
+- HTML: new `.por-quick-pill[data-quick-filter="no-wo"]` button between
+  Open WO and In PP. Icon: `fa-ban`.
+- JS: new `_filterNoWO` flag (default OFF). Filter logic in
+  `_currentVisibleItems`: `(open_wo_count || 0) === 0`.
+- Mutual exclusion: Open WO ↔ No WO behave like the existing Open SO ↔
+  No SO pair. Clicking one auto-clears the other in the click handler;
+  active CSS class follows the same map-driven sync pattern.
+
+**RESTRICT**:
+- Keep Open WO ↔ No WO mutually exclusive. Allowing both selected at
+  once always returns zero rows (logically impossible) — UX trap.
+- Pure client-side filter over `this._data.items`. Do not move to API.
+
+### POR-015 — "View SOs" button moved under the item name
+
+**Why**: the SOs drill-down was tucked inside the "Curr Month SO" cell,
+which sits behind the frozen Item column on horizontal scroll. Users
+asked for the affordance to live with the item identifier so it is
+always visible. As a side benefit, the Curr Month SO cell becomes
+narrower and more scannable.
+
+**Implementation**:
+- New `.por-item-actions` wrapper inside `itemHeaderHtml`, holding the
+  SOs button.
+- "Curr Month SO" cell now renders qty only (no inline button).
+- Click handler in `_bindEvents` already delegates on `.por-so-btn` —
+  no event-binding change required.
+
+**RESTRICT**:
+- Don't reintroduce a duplicate SOs button in the Curr Month SO cell —
+  two buttons opening the same modal confuse users and the click
+  handler stops at the first match anyway.
+- The `.por-item-actions` wrapper is the canonical home for any future
+  per-item quick action that should live in the frozen column.
+
+### POR-016 — Priority Seq input widened, native spinners hidden
+
+**Why**: 38px width truncated 3-digit priority numbers (sites with 100+
+items showed `12…` etc.). Native `input[type=number]` increment/
+decrement arrows ate width and were redundant — users have the drag
+handle for fine moves and Enter-to-jump for big moves.
+
+**Implementation**:
+- `.por-seq-input` width 38px → 56px, padding bumped to 6px.
+- `appearance:textfield` + Webkit-specific
+  `::-webkit-(outer|inner)-spin-button { -webkit-appearance:none }`
+  to hide spinners cross-browser (Firefox + Chromium + Safari).
+
+**RESTRICT**:
+- Both Firefox (`appearance:textfield`) AND Webkit
+  (`::-webkit-*-spin-button`) rules are needed; removing either
+  re-introduces the spinner on the affected engine.
+
+### POR-017 — DeepSeek API HTTP 400 error fix
+
+**Symptom**: AI Advisor showed "DeepSeek API error (HTTP 400). See
+Error Log → WKP AI DeepSeek Error for details." even when the user
+had not configured a real API key.
+
+**Root cause** (compounding):
+1. `_get_api_key()` only filtered the in-file constant placeholder
+   (`startswith("YOUR_")`). Site-config and TOC Settings values were
+   returned verbatim. Sites with a placeholder-shaped value in
+   `site_config.json:deepseek_api_key` (e.g. `"YOUR_KEY_HERE"`) sent
+   that string as the bearer token. DeepSeek answered with 401 on
+   recent versions and 400 on others. The frontend rendered "HTTP 400".
+2. The chat endpoint passed the WKP `_AI_TOOLS` schema unconditionally.
+   Those tools depend on `context["rows"]/["dispatch"]` — keys the
+   Production Overview context never sets. DeepSeek would attempt
+   tool calls that returned `{"error": ...}` and the inflated payload
+   could push subsequent calls past the model input window (→ 400).
+3. The system context dict could include a large `summary{}` /
+   `period{}` blob. With no upper bound on JSON length, it occasionally
+   crossed the per-call max input.
+
+**Fix** (all in `wo_kitting_api.py` + `production_overview_api.py`):
+- New `_is_valid_api_key(key)` helper. ANY source whose value is None
+  / empty / whitespace / starts with `"YOUR_"` (case-insensitive) /
+  shorter than 16 chars is rejected.
+- `_get_api_key()` runs every source through `_is_valid_api_key()`.
+  Returns None when no valid key exists; callers surface the friendly
+  "API key not configured" message instead of attempting the call.
+- `_call_deepseek()` log expanded with `model`, `messages count`,
+  `chars` and `has_tools` so future 400 triage is debuggable from the
+  Error Log alone.
+- `_execute_chat_with_tools()` accepts a new `tools` kwarg. `tools=None`
+  preserves WKP's legacy `_AI_TOOLS`. `tools=[]` disables tool calls
+  entirely (used by Production Overview).
+- New 400-specific branch in `_execute_chat_with_tools` HTTPError
+  handler with actionable text ("Invalid / placeholder API key, or
+  context payload too large").
+- `chat_with_overview_advisor` now passes `tools=[]` AND caps the
+  encoded `CURRENT PRODUCTION CONTEXT` JSON at 12,000 chars
+  (≈3k tokens). Truncation is marked with `/* TRUNCATED */`.
+- `get_ai_overview_insight` projects each top-20 item down to a fixed
+  21-key whitelist before sending — keeps the request body bounded
+  even if a future field bloats item dicts (e.g. shortage_components).
+
+**RESTRICT**:
+- `_is_valid_api_key` rules are intentional. Relaxing any (length,
+  placeholder, whitespace) re-introduces the bug. Test every source.
+- For Production Overview AI, `tools=[]` is REQUIRED — the WKP tool
+  set has no data in this context. Don't switch to `tools=None`
+  (defaults to WKP) without porting the `rows`/`dispatch` lookup
+  surface to POR.
+- The 12,000-char cap applies to the JSON-encoded context, NOT to the
+  system prompt or user message. If a future feature genuinely needs
+  larger context, prefer pruning keys via the strip-list before
+  raising the cap.
+- Logging expansion in `_call_deepseek` includes `chars` (sum of
+  message content lengths). Don't change to token-count without
+  pulling in tiktoken — char count is a stable proxy.
+
+### POR-018 — Excel export creativity + insights upgrade
+
+**What changed**:
+- New **"Action Plan"** sheet (3rd tab — between Sheet Guide and
+  Simple Report). Items are classified into 5 priority ranks:
+  `1. START NOW` (red), `2. EXPEDITE` (amber), `3. PLAN` (blue),
+  `4. ON TRACK` (green), `5. IDLE` (grey). Each row carries a
+  one-line WHY plus a concrete recommended action ("Release a new
+  WO for {qty} {uom}", "Expedite component {code}", etc.). Sort: by
+  priority asc, gap desc. AutoFilter + frozen panes + DataBar on
+  the Gap column for visual ranking.
+- **Cover sheet** gained two new blocks:
+  1. *Health Snapshot* — 4 traffic-light KPI cards (Items Needing
+     Action / Items On Track / Avg Coverage % / Items in WO Pipeline).
+     Status colour comes from threshold rules.
+  2. *Top Action Items (preview)* — shows the top-3 priority-1/2 rows
+     from Action Plan so a manager who only opens the Cover still sees
+     the most urgent items. Falls back to a green "(none)" row when
+     no items meet priority 1 or 2.
+- **Simple Report** gained two `DataBarRule` conditional bars:
+  amber on `Shortage vs Physical Stock`, red on
+  `Shortage vs (Stock + Pending WO)`. Bar length = relative magnitude;
+  cell value still visible.
+- **Sheet Guide** updated with the new Action Plan row.
+- **Sheet ORDER** is now: Cover → Sheet Guide → **Action Plan** →
+  Simple Report → Overview → UOM Comparison → Item Master →
+  Group Pivot → Shortage Drivers (9 sheets).
+
+**Priority classification** (top-down, first match wins):
+| Rank | Trigger | Recommended Action |
+|------|---------|-------------------|
+| 1 START NOW | `target_gap > 0 AND open_wo_count == 0` | Release a new WO for {gap} {uom} |
+| 2 EXPEDITE  | `open_wo_count > 0 AND has_shortage AND possible_qty == 0` | Expedite top short component |
+| 3 PLAN      | `proj > stock+wo_pend AND curr_month_order == 0` | Make-to-stock plan ~{need} {uom} |
+| 4 ON TRACK  | `target > 0 AND % achieved >= 90` | Monitor next week |
+| 5 IDLE      | catch-all | Confirm if still in scope |
+
+**RESTRICT**:
+- Priority rule order is intentional. Earlier rules are specific;
+  later rules are catch-alls. Reordering changes the action a planner
+  sees on a row and erodes trust in the recommendations.
+- The "Top Action Items" cover preview pulls only from priority 1 / 2
+  (red / amber). Promoting other priorities would dilute the urgency
+  signal — the WHOLE Action Plan sheet is for that.
+- DataBar rules use min/max relative scaling. A workbook with one
+  outlier will compress all others — that is the desired behaviour
+  (the outlier IS the priority).
+- Action Plan classification reads `it.get("target_gap")`,
+  `it.get("possible_qty")`, `it.get("shortage_components")[0]`. The
+  upstream `get_production_overview` MUST keep populating these
+  fields. If a future change drops `shortage_components`, the EXPEDITE
+  recommendation degrades to "top short component" without a code —
+  not a crash, but an information loss to fix in tandem.
+
+### Files changed
+
+- `chaizup_toc/api/wo_kitting_api.py`
+  - New `_is_valid_api_key`. Hardened `_get_api_key`.
+  - `_call_deepseek` log expanded.
+  - `_execute_chat_with_tools` accepts `tools` kwarg.
+  - 400-specific error branch added.
+- `chaizup_toc/api/production_overview_api.py`
+  - `get_ai_overview_insight` slim-projects items to 21-field
+    whitelist before sending.
+  - `chat_with_overview_advisor` passes `tools=[]` and caps JSON
+    context at 12k chars.
+  - `export_excel`: new `Action Plan` sheet, Cover Health Snapshot,
+    Cover Top Action Items, Simple Report data bars, Sheet Guide
+    row.
+- `chaizup_toc/page/production_overview/production_overview.html`
+  - New `[data-quick-filter="no-wo"]` button.
+  - `.por-seq-input` widened + native spinner hidden.
+- `chaizup_toc/page/production_overview/production_overview.js`
+  - `_filterNoWO` state + click handler + filter logic.
+  - SOs button moved into `itemHeaderHtml` (`.por-item-actions`).
+  - Curr Month SO cell now renders qty only.
+
+### Verification
+
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`.
+2. Hard-reload `/app/production-overview`. Load a period.
+3. POR-014: click "No WO" pill → only items with `open_wo_count == 0`
+   shown; clicking "Open WO" auto-clears "No WO" and vice-versa.
+4. POR-015: confirm SOs button now sits under the Item Name text in
+   every row; Curr Month SO cell shows qty only with no button.
+5. POR-016: switch to Mode B Priority Queue — seq input is wider,
+   accepts 3-digit numbers, no up/down arrows visible inside the
+   input box on Chrome / Firefox / Safari.
+6. POR-017: bench execute
+   `chaizup_toc.api.production_overview_api.test_ai_connection_por`
+   on a site with placeholder key — expects `{ok:false, message:"No
+   API key found..."}`. AI Advisor shows the friendly "API key not
+   configured" warning instead of "HTTP 400".
+7. POR-018: click Excel export. Verify sheet ORDER matches the table
+   above. Open Action Plan — rows sorted by priority, recommendations
+   read like sentences, Gap column shows red data bars. Open Cover —
+   Health Snapshot + Top Action Items preview blocks render.
+   Open Simple Report — Shortage columns show coloured bars.
+

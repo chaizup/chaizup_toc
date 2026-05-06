@@ -1052,6 +1052,11 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    # POR-018 (2026-05-06): conditional formatting (data bars + colour scale)
+    # for visual scanability on Simple Report and Action Plan. Without these
+    # the planner has to mentally compare numbers row-by-row; with them the
+    # bars + tints communicate priority instantly.
+    from openpyxl.formatting.rule import DataBarRule, ColorScaleRule
 
     # IMPORTANT: parse JSON-encoded params BEFORE rendering them on the Cover
     # sheet. The URL form sends `wo_statuses=["In Process","Not Started"]`
@@ -1255,8 +1260,96 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
         if (r_idx - (glossary_start + 1)) % 2 == 1:
             c1.fill = ALT_FILL; c2.fill = ALT_FILL
 
+    # ── POR-018 (2026-05-06): Health Snapshot — at-a-glance KPI block ────
+    # Sits at the bottom of the Cover so a manager can read the workbook's
+    # headline state without opening any other tab. Each KPI card is a
+    # 3-row mini block: label / number / status pill.
+    #
+    # KPIs chosen for actionability (NOT vanity metrics):
+    #   1. Items Needing Action  — count requiring intervention today
+    #   2. Items On Track        — count meeting target
+    #   3. Avg Coverage %        — health of demand-side planning inputs
+    #   4. Open WO Pipeline      — production currently in flight
+    #
+    # Use traffic-light colour: green=ok, amber=watch, red=critical.
+    snapshot_start = ws_cover.max_row + 3
+    ws_cover.cell(row=snapshot_start - 1, column=1, value="Health Snapshot").font = COVER_TITLE_FONT
+    ws_cover.merge_cells(
+        start_row=snapshot_start - 1, start_column=1,
+        end_row=snapshot_start - 1, end_column=4,
+    )
+
+    # Compute snapshot numbers from items list.
+    needs_action_count   = sum(
+        1 for it in items
+        if (it.get("has_shortage") and it.get("possible_qty", 0) == 0)
+        or (it.get("target_gap", 0) > 0 and it.get("open_wo_count", 0) == 0)
+    )
+    on_track_count = sum(1 for it in items if flt(it.get("target_achieved_pct", 0)) >= 90)
+    cov_values     = [flt(it.get("coverage_pct", 0)) for it in items if flt(it.get("total_curr_sales", 0)) > 0]
+    avg_coverage   = round(sum(cov_values) / len(cov_values), 1) if cov_values else 0
+    pipeline_items = sum(1 for it in items if (it.get("open_wo_count") or 0) > 0)
+
+    def _kpi_card(col, label, number, status, subtext):
+        # Status pill colour: ok / warn / err
+        fill_map = {"ok": OK_FILL, "warn": WARN_FILL, "err": ERR_FILL}
+        title_cell = ws_cover.cell(row=snapshot_start, column=col, value=label)
+        title_cell.font = Font(bold=True, color="334155", size=10)
+        title_cell.alignment = CENTRE
+        title_cell.border = BORDER
+        num_cell = ws_cover.cell(row=snapshot_start + 1, column=col, value=number)
+        num_cell.font = Font(bold=True, size=22, color="0F172A")
+        num_cell.alignment = CENTRE
+        num_cell.fill = fill_map.get(status, ALT_FILL)
+        num_cell.border = BORDER
+        sub_cell = ws_cover.cell(row=snapshot_start + 2, column=col, value=subtext)
+        sub_cell.font = NOTE_FONT
+        sub_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sub_cell.border = BORDER
+
+    _kpi_card(
+        1, "Items Needing Action", needs_action_count,
+        "err" if needs_action_count >= 5 else "warn" if needs_action_count > 0 else "ok",
+        "Blocked or has gap with no WO covering it. Open the Action Plan sheet."
+    )
+    _kpi_card(
+        2, "Items On Track", on_track_count,
+        "ok" if on_track_count >= max(1, len(items) // 2) else "warn",
+        "% Target Achieved >= 90% — keep doing what's working."
+    )
+    _kpi_card(
+        3, "Avg Coverage %", avg_coverage,
+        "ok" if avg_coverage >= 100 else "warn" if avg_coverage >= 60 else "err",
+        "(Projection + Prev SO) / Total Curr Sales. <60% = under-planned."
+    )
+    _kpi_card(
+        4, "Items in WO Pipeline", pipeline_items,
+        "ok" if pipeline_items > 0 else "warn",
+        "Items with at least one open Work Order today."
+    )
+    ws_cover.row_dimensions[snapshot_start].height     = 22
+    ws_cover.row_dimensions[snapshot_start + 1].height = 38
+    ws_cover.row_dimensions[snapshot_start + 2].height = 36
+
+    # Top 3 Action Items teaser — drives the reader into the Action Plan sheet.
+    top3_start = snapshot_start + 5
+    ws_cover.cell(row=top3_start - 1, column=1, value="Top Action Items (preview)").font = COVER_TITLE_FONT
+    ws_cover.merge_cells(
+        start_row=top3_start - 1, start_column=1,
+        end_row=top3_start - 1, end_column=4,
+    )
+    _fmt_header(ws_cover, top3_start, ["Priority", "Item", "Why", "Recommended Action"],
+                fill=SUB_HDR_FILL, font=SUB_HDR_FONT)
+
     ws_cover.column_dimensions["A"].width = 36
-    ws_cover.column_dimensions["B"].width = 70
+    ws_cover.column_dimensions["B"].width = 36
+    ws_cover.column_dimensions["C"].width = 38
+    ws_cover.column_dimensions["D"].width = 44
+
+    # We populate the Top Action Items rows AFTER the Action Plan ranking
+    # is computed (further down). Keep a reference to the start row so we
+    # can write back into it.
+    _cover_top_action_start = top3_start + 1
 
     # ────────────────────────────────────────────────────────────────────
     # SHEET 2 — SHEET GUIDE (use cases for every sheet, the workbook map)
@@ -1290,6 +1383,21 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
             "(this sheet) Workbook map.",
             "When you forget which sheet has which data — look here.",
             "—",
+        ),
+        (
+            "Action Plan",
+            "Prioritized to-do list. Each item gets a priority pill, "
+            "a one-line WHY, and a concrete recommended action.",
+            "Open this FIRST every morning. Items are sorted by priority "
+            "score (Start Now → Expedite → Plan → On Track → Idle). "
+            "Red rows are blockers — no production possible without "
+            "intervention. Amber rows have an open WO but a component "
+            "shortage to resolve. Blue rows are projection-driven "
+            "make-to-stock candidates. Pair with Shortage Drivers to "
+            "see which components to chase.",
+            "Priority | Item Code | Item Name | Status (one-line) | "
+            "Top Issue | Recommended Action | Target | Have | Gap | "
+            "Open WOs | Has Shortage. Conditional data bar on Gap.",
         ),
         (
             "Simple Report",
@@ -1379,7 +1487,230 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
     ws_guide.column_dimensions["D"].width = 56
 
     # ────────────────────────────────────────────────────────────────────
-    # SHEET 3 — SIMPLE REPORT (planner one-liner per item)
+    # SHEET 3 — ACTION PLAN (POR-018 — prioritized to-do list)
+    # ────────────────────────────────────────────────────────────────────
+    # The most actionable insight in the workbook. Each item is classified
+    # by urgency and given a concrete recommended action so the planner
+    # doesn't have to think — they read down the list and take action.
+    #
+    # Priority rules (evaluated TOP-DOWN; first matching rule wins):
+    #   1. START NOW   — has demand (gap > 0) AND no open WO covering it
+    #                    → "Release a new WO for {qty} {uom}"
+    #   2. EXPEDITE    — has open WO AND blocked by component shortage
+    #                    → "Resolve component shortage on top blocker"
+    #   3. PLAN        — projection > stock + pending WO AND no SO yet
+    #                    → "Make-to-stock candidate — review with sales"
+    #   4. ON TRACK    — % Target Achieved >= 90 (no action needed)
+    #                    → "On track — monitor next week"
+    #   5. IDLE        — no demand, no projection, no WO
+    #                    → "Idle — confirm if this item is still in scope"
+    #
+    # Sort: priority asc (1 first), then gap desc (largest gap first).
+    # Restricted: do NOT change rule order without testing — earlier rules
+    # are intentionally specific so later rules act as catch-alls.
+    PRIORITY_LABELS = {
+        1: ("START NOW",  "err"),   # red
+        2: ("EXPEDITE",   "warn"),  # amber
+        3: ("PLAN",       "info"),  # blue
+        4: ("ON TRACK",   "ok"),    # green
+        5: ("IDLE",       "muted"), # grey
+    }
+    PRIORITY_FILL = {
+        "err":   ERR_FILL,
+        "warn":  WARN_FILL,
+        "info":  PatternFill("solid", fgColor="DBEAFE"),
+        "ok":    OK_FILL,
+        "muted": ALT_FILL,
+    }
+
+    def _classify_action(it):
+        """Return (rank, status_text, top_issue, recommended_action, gap)."""
+        target  = flt(it.get("target_production", 0))
+        gap     = flt(it.get("target_gap", 0))
+        wo_open = cint(it.get("open_wo_count", 0))
+        has_short = bool(it.get("has_shortage"))
+        possible  = flt(it.get("possible_qty", 0))
+        proj    = flt(it.get("curr_projection", 0))
+        stock   = flt(it.get("stock", 0))
+        wo_pend = flt(it.get("pending_wo_qty", 0))
+        achieved = flt(it.get("target_achieved_pct", 0))
+        uom     = it.get("stock_uom", "") or ""
+        item_label = f"{it.get('item_name','')} ({it.get('item_code','')})"
+
+        # Top blocking component (if any) — used by EXPEDITE recommendation.
+        top_short_label = ""
+        comps = it.get("shortage_components") or []
+        if comps:
+            c = comps[0]
+            top_short_label = f"{c.get('item_code','')} ({c.get('item_name','') or '?'})"
+
+        # Rule 1: START NOW — gap > 0 AND no open WO
+        if gap > 0 and wo_open == 0:
+            return (
+                1,
+                f"Demand gap of {gap:,.2f} {uom} with no Work Order in flight.",
+                f"Curr SO {flt(it.get('curr_month_order',0)):,.2f} > Stock {stock:,.2f} + WO {wo_pend:,.2f}.",
+                f"Release a new Work Order for at least {gap:,.2f} {uom} of {item_label} TODAY.",
+                gap,
+            )
+        # Rule 2: EXPEDITE — has WO but component shortage blocks it
+        if wo_open > 0 and has_short and possible == 0:
+            return (
+                2,
+                f"{wo_open} Work Order(s) open but blocked by component shortage.",
+                f"Top blocker: {top_short_label}" if top_short_label else "Components short across active BOM.",
+                f"Expedite {top_short_label or 'top short component'} — purchase / transfer to unblock production.",
+                gap,
+            )
+        # Rule 3: PLAN — projection > stock + pending WO AND no current SO yet
+        if proj > 0 and proj > (stock + wo_pend) and flt(it.get("curr_month_order", 0)) == 0:
+            need = proj - (stock + wo_pend)
+            return (
+                3,
+                f"Projection {proj:,.2f} {uom} exceeds Stock+WO ({(stock+wo_pend):,.2f} {uom}).",
+                "Forecast > current supply, no firm SO yet. Make-to-stock candidate.",
+                f"Plan production of ~{need:,.2f} {uom} of {item_label}; confirm forecast with sales.",
+                need,
+            )
+        # Rule 4: ON TRACK — target_achieved >= 90
+        if target > 0 and achieved >= 90:
+            return (
+                4,
+                f"On track — % Target Achieved = {achieved:.0f}%.",
+                "No bottleneck identified.",
+                "Monitor; revisit at next planning cycle.",
+                0.0,
+            )
+        # Rule 5: IDLE — catch-all
+        return (
+            5,
+            "Idle — no demand, no projection, no WO.",
+            "—",
+            "Confirm if this item is still in production scope.",
+            0.0,
+        )
+
+    ws_action = wb.create_sheet("Action Plan")
+    ws_action["A1"] = "Action Plan — what to do today, ranked"
+    ws_action["A1"].font = COVER_TITLE_FONT
+    ws_action.merge_cells("A1:K1")
+    ws_action["A2"] = (
+        "Read top to bottom. RED priority = blocker (release a WO). AMBER = expedite a component to unblock an existing WO. "
+        "BLUE = projection-driven, no SO yet (make-to-stock candidate). GREEN = on track, monitor only. GREY = idle.   "
+        "Open the Shortage Drivers sheet to see which components to chase first."
+    )
+    ws_action["A2"].font = NOTE_FONT
+    ws_action["A2"].alignment = LEFT_WRAP
+    ws_action.merge_cells("A2:K2")
+    ws_action.row_dimensions[2].height = 36
+
+    action_headers = [
+        "Priority", "Item Code", "Item Name", "Status (one-line)",
+        "Top Issue", "Recommended Action",
+        "Target", "Have", "Gap",
+        "Open WOs", "Has Shortage",
+    ]
+    _fmt_header(ws_action, 4, action_headers)
+
+    # Build the classified, sorted list. Sort key: priority asc, gap desc.
+    actions = [(it, _classify_action(it)) for it in items]
+    actions.sort(key=lambda t: (t[1][0], -t[1][4]))
+
+    # Stash the top 3 actionable items (priority 1 or 2) for the Cover sheet teaser.
+    top_action_preview = []
+    for it, (rank, status_text, top_issue, recommendation, gap) in actions:
+        if rank <= 2 and len(top_action_preview) < 3:
+            top_action_preview.append((rank, it, status_text, recommendation))
+
+    for r_offset, (it, (rank, status_text, top_issue, recommendation, gap)) in enumerate(actions):
+        r = 5 + r_offset
+        label, kind = PRIORITY_LABELS[rank]
+        target  = flt(it.get("target_production", 0))
+        stock   = flt(it.get("stock", 0))
+        wo_pend = flt(it.get("pending_wo_qty", 0))
+        have    = stock + wo_pend
+        ws_action.cell(row=r, column=1, value=f"{rank}. {label}")
+        ws_action.cell(row=r, column=2, value=it.get("item_code", ""))
+        ws_action.cell(row=r, column=3, value=it.get("item_name", ""))
+        ws_action.cell(row=r, column=4, value=status_text)
+        ws_action.cell(row=r, column=5, value=top_issue)
+        ws_action.cell(row=r, column=6, value=recommendation)
+        ws_action.cell(row=r, column=7, value=round(target, 2))
+        ws_action.cell(row=r, column=8, value=round(have, 2))
+        ws_action.cell(row=r, column=9, value=round(gap, 2))
+        ws_action.cell(row=r, column=10, value=cint(it.get("open_wo_count", 0)))
+        ws_action.cell(row=r, column=11, value="Yes" if it.get("has_shortage") else "No")
+        # Tinting per priority
+        fill = PRIORITY_FILL[kind]
+        for c in range(1, len(action_headers) + 1):
+            cell = ws_action.cell(row=r, column=c)
+            cell.border = BORDER
+            cell.alignment = LEFT_WRAP if c in (4, 5, 6) else Alignment(
+                horizontal="right" if c in (7, 8, 9, 10) else "left",
+                vertical="center", wrap_text=False,
+            )
+            cell.fill = fill
+        # Priority cell — bold, dark, prominent
+        ws_action.cell(row=r, column=1).font = Font(bold=True, color="0F172A", size=11)
+
+    # Data bar on Gap column — visualises which item has the biggest delta.
+    if ws_action.max_row >= 5:
+        gap_col = get_column_letter(9)
+        ws_action.conditional_formatting.add(
+            f"{gap_col}5:{gap_col}{ws_action.max_row}",
+            DataBarRule(
+                start_type="min", end_type="max",
+                color="EF4444", showValue=True,
+            ),
+        )
+
+    ws_action.freeze_panes = "C5"
+    # Custom column widths — Recommended Action is the widest column.
+    ws_action.column_dimensions["A"].width = 14
+    ws_action.column_dimensions["B"].width = 18
+    ws_action.column_dimensions["C"].width = 30
+    ws_action.column_dimensions["D"].width = 40
+    ws_action.column_dimensions["E"].width = 38
+    ws_action.column_dimensions["F"].width = 50
+    for col in ("G", "H", "I", "J"):
+        ws_action.column_dimensions[col].width = 12
+    ws_action.column_dimensions["K"].width = 12
+    if ws_action.max_row >= 5:
+        ws_action.auto_filter.ref = (
+            f"A4:{get_column_letter(len(action_headers))}{ws_action.max_row}"
+        )
+        # Increase row height so wrapped Recommended Action stays readable
+        for r_idx in range(5, ws_action.max_row + 1):
+            ws_action.row_dimensions[r_idx].height = 30
+
+    # ── Write Top Action Items teaser back into the Cover sheet ──────────
+    _PRIORITY_PILL = {
+        1: ("🔴 START NOW", ERR_FILL),
+        2: ("🟠 EXPEDITE",  WARN_FILL),
+    }
+    for i, (rank, it, status_text, recommendation) in enumerate(top_action_preview):
+        r = _cover_top_action_start + i
+        pill_label, pill_fill = _PRIORITY_PILL.get(rank, ("ℹ️ NOTE", ALT_FILL))
+        ws_cover.cell(row=r, column=1, value=pill_label).fill = pill_fill
+        ws_cover.cell(row=r, column=1).font = Font(bold=True, color="0F172A", size=10)
+        ws_cover.cell(row=r, column=2, value=f"{it.get('item_name','')} ({it.get('item_code','')})")
+        ws_cover.cell(row=r, column=3, value=status_text)
+        ws_cover.cell(row=r, column=4, value=recommendation)
+        for c in range(1, 5):
+            ws_cover.cell(row=r, column=c).border = BORDER
+            ws_cover.cell(row=r, column=c).alignment = LEFT_WRAP
+        ws_cover.row_dimensions[r].height = 30
+    if not top_action_preview:
+        r = _cover_top_action_start
+        ws_cover.cell(row=r, column=1, value="(none)").alignment = CENTRE
+        ws_cover.cell(row=r, column=2, value="No Start Now / Expedite items right now.")
+        ws_cover.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
+        for c in range(1, 5):
+            ws_cover.cell(row=r, column=c).fill = OK_FILL
+            ws_cover.cell(row=r, column=c).border = BORDER
+
+    # ────────────────────────────────────────────────────────────────────
+    # SHEET 4 — SIMPLE REPORT (planner one-liner per item)
     # ────────────────────────────────────────────────────────────────────
     # Spec (2026-05-01 #8): Item name, stock UOM, total pending SO (per
     # filter), total open WO pending qty, total projection, total physical
@@ -1490,6 +1821,22 @@ def export_excel(company=None, month=None, year=None, warehouses=None,
     if ws_simple.max_row >= 5:
         ws_simple.auto_filter.ref = (
             f"A4:{get_column_letter(len(simple_headers))}{ws_simple.max_row}"
+        )
+        # POR-018 (2026-05-06): Conditional data bars on the two SHORTAGE
+        # columns. Without this the planner has to read each numeric cell;
+        # with the bars they can SCAN top-to-bottom and instantly spot the
+        # biggest gaps. Red bar = pure firefight (Shortage vs Phys), Amber
+        # = remaining gap after WO lands.
+        last_row = ws_simple.max_row
+        ws_simple.conditional_formatting.add(
+            f"{col_short_p}5:{col_short_p}{last_row}",
+            DataBarRule(start_type="min", end_type="max",
+                        color="F59E0B", showValue=True),  # amber
+        )
+        ws_simple.conditional_formatting.add(
+            f"{col_short_pwo}5:{col_short_pwo}{last_row}",
+            DataBarRule(start_type="min", end_type="max",
+                        color="EF4444", showValue=True),  # red
         )
 
     # ────────────────────────────────────────────────────────────────────
@@ -2081,11 +2428,30 @@ def get_ai_overview_insight(context_json, model=None):
 
     summary = context.get("summary", {})
     items   = context.get("items", [])[:20]  # top 20 only to stay within token budget
+    # POR-017 (2026-05-06): on top of the 20-item cap, project each item
+    # down to the fields the LLM actually reasons about. Some sites
+    # have items with `description`, `cost_summary`, `shortage_components`,
+    # `wo_pp_names`, `sub_assembly_wos`, etc. populated — sending them
+    # verbatim ballooned the request body past DeepSeek's per-call
+    # max_input_tokens and triggered HTTP 400. Keep this list short.
+    _AI_FIELDS = (
+        "item_code", "item_name", "item_group", "stock_uom",
+        "open_wo_count", "planned_qty", "actual_qty",
+        "curr_month_order", "prev_month_order", "total_pending_so",
+        "curr_dispatch", "curr_projection", "total_curr_sales",
+        "projection_vs_sales", "coverage_pct",
+        "stock", "possible_qty", "target_production",
+        "target_achieved_pct", "has_shortage", "has_open_so",
+    )
+    slim_items = [
+        {k: it.get(k) for k in _AI_FIELDS if k in it}
+        for it in items
+    ]
 
     insight_prompt = (
         "Analyse this production overview data and give a structured briefing.\n\n"
         f"SUMMARY: {json.dumps(summary)}\n"
-        f"TOP ITEMS (by curr month order qty): {json.dumps(items)}\n\n"
+        f"TOP ITEMS (by curr month order qty): {json.dumps(slim_items)}\n\n"
         "OUTPUT FORMAT (HTML):\n"
         "1. One sentence overall status.\n"
         "2. Table of top 3 critical issues: Item | Issue | Impact | Recommended Action\n"
@@ -2134,11 +2500,26 @@ def chat_with_overview_advisor(message, session_id, context_json, model=None):
     history_raw = frappe.cache().get_value(redis_key)
     history = json.loads(history_raw) if history_raw else []
 
-    # Build system context (strip large keys before sending to LLM)
-    ctx_for_ai = {k: v for k, v in context.items() if k not in ("items", "raw_rows")}
+    # Build system context (strip large keys before sending to LLM).
+    # POR-017 (2026-05-06): the previous strip removed only "items" and
+    # "raw_rows" — but `summary{}` plus `period{}`, `filters{}` and any
+    # nested arrays in summary (e.g. `total_planned_qty_per_uom`) could
+    # still push the JSON over DeepSeek's input window. We now also cap
+    # the encoded JSON at 12,000 chars (≈ 3k tokens) and truncate with
+    # a clear marker so the LLM sees the truncation. If a future feature
+    # adds a large key to `context`, add it to the strip list here, not
+    # to the cap.
+    ctx_for_ai = {
+        k: v for k, v in context.items()
+        if k not in ("items", "raw_rows", "rows", "dispatch")
+    }
+    ctx_json = json.dumps(ctx_for_ai, default=str)
+    _MAX_CTX_CHARS = 12000
+    if len(ctx_json) > _MAX_CTX_CHARS:
+        ctx_json = ctx_json[:_MAX_CTX_CHARS] + " /* TRUNCATED */"
     system_content = (
         f"{_POR_AI_SYSTEM_PROMPT}\n\n"
-        f"CURRENT PRODUCTION CONTEXT:\n{json.dumps(ctx_for_ai, default=str)}"
+        f"CURRENT PRODUCTION CONTEXT:\n{ctx_json}"
     )
 
     messages = (
@@ -2147,8 +2528,13 @@ def chat_with_overview_advisor(message, session_id, context_json, model=None):
         + [{"role": "user", "content": message}]
     )
 
+    # POR-017 (2026-05-06): pass tools=[] — the default `_AI_TOOLS` are
+    # WKP-specific (rows/dispatch lookups) and have no data in POR
+    # context. Sending them inflated the request body and produced
+    # tool_calls we couldn't satisfy. Pure chat is the right behaviour
+    # here.
     reply_text, updated_messages, _ = _execute_chat_with_tools(
-        messages, context, api_key, model=model
+        messages, context, api_key, model=model, tools=[]
     )
 
     # Save only user + assistant turns
