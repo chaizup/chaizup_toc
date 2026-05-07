@@ -482,12 +482,38 @@ def get_shortage_detail(item_code, warehouses=None, stock_mode="physical", wo_st
         reverse=True
     )
 
-    # Add UOM conversions + open docs per aggregated item
+    # POR-022 (2026-05-06): bulk-fetch expected-incoming-qty per
+    # component (pending WO + pending PO). Two SQLs total — keeps the
+    # modal snappy even for items with 30+ short components.
+    # Collect every component code that appears anywhere in the modal
+    # (aggregated + per-WO breakdown) so both views can render the
+    # incoming columns.
+    short_codes = set(x["item_code"] for x in aggregated)
+    for wo in shortage_by_wo:
+        for c in (wo.get("short_components") or []):
+            if c.get("item_code"):
+                short_codes.add(c["item_code"])
+    incoming_map = _get_incoming_supply_for_items(
+        list(short_codes), wo_statuses=wo_statuses
+    )
+
+    # Add UOM conversions + open docs + incoming supply per aggregated item
     agg_codes = [x["item_code"] for x in aggregated]
     uom_map   = _get_uom_conversions(agg_codes) if agg_codes else {}
     for item in aggregated:
         item["uom_conversions"] = uom_map.get(item["item_code"], [])
         item["open_docs"]       = _get_open_docs_for_item(item["item_code"])
+        inc = incoming_map.get(item["item_code"], {})
+        item["incoming_wo"]     = flt(inc.get("pending_wo", 0))
+        item["incoming_po"]     = flt(inc.get("pending_po", 0))
+
+    # Also annotate per-WO short_components so the by-WO breakdown shows
+    # the same incoming columns.
+    for wo in shortage_by_wo:
+        for c in (wo.get("short_components") or []):
+            inc = incoming_map.get(c.get("item_code"), {})
+            c["incoming_wo"] = flt(inc.get("pending_wo", 0))
+            c["incoming_po"] = flt(inc.get("pending_po", 0))
 
     return {
         "by_wo":     shortage_by_wo,
@@ -3715,6 +3741,80 @@ def _walk_bom_deep(bom_name, qty_to_produce, warehouses, stock_mode, depth=0, ma
     """Full BOM walk for shortage detail modal."""
     return _walk_bom_shallow(bom_name, qty_to_produce, warehouses, stock_mode,
                               max_depth=max_depth, depth=depth)
+
+
+def _get_incoming_supply_for_items(item_codes, wo_statuses=None, po_statuses=None):
+    """
+    POR-022 (2026-05-06): Bulk-fetch expected-incoming qty per component
+    for the shortage modal "Expected Incoming" columns.
+
+    Returns:
+        {
+          item_code: {
+              "pending_wo": float,   # Σ (qty − produced) on open WOs
+                                     # producing this item
+              "pending_po": float,   # Σ (qty − received) on open POs
+                                     # purchasing this item
+          }, ...
+        }
+
+    Bulk by design — the shortage modal can have 30+ components and
+    per-row queries would be N+1. We do exactly 2 SQLs total.
+
+    Status filters mirror the rest of the page: WO uses the user-supplied
+    status list (defaults to `_DEFAULT_WO_STATUSES`); PO uses
+    `_DEFAULT_PO_STATUSES`. We INTENTIONALLY skip warehouse filtering here
+    because the modal asks "what's coming for this component?" — the
+    answer is global per component, not per warehouse. If a future
+    requirement narrows it, accept a `warehouses` param and add the
+    `wo.fg_warehouse` / `poi.warehouse` clauses in the same place.
+
+    RESTRICT: keep this bulk. Do NOT call from a per-row loop in the JS;
+    the helper is for backend pre-computation only.
+    """
+    if not item_codes:
+        return {}
+
+    out = {c: {"pending_wo": 0.0, "pending_po": 0.0} for c in item_codes}
+    codes_sql = _sql_in(item_codes)
+
+    wo_statuses = wo_statuses or _DEFAULT_WO_STATUSES
+    po_statuses = po_statuses or _DEFAULT_PO_STATUSES
+    wo_sql = _sql_in(wo_statuses)
+    po_sql = _sql_in(po_statuses)
+
+    # Pending Work Order qty (production_item is what gets produced)
+    # GREATEST(qty − produced_qty, 0) so over-produced WOs don't
+    # negatively offset the pending pool.
+    wo_rows = frappe.db.sql(f"""
+        SELECT production_item AS item_code,
+               SUM(GREATEST(qty - produced_qty, 0)) AS pending
+        FROM `tabWork Order`
+        WHERE docstatus = 1
+          AND status IN {wo_sql}
+          AND production_item IN {codes_sql}
+        GROUP BY production_item
+    """, as_dict=True)
+    for r in wo_rows:
+        if r.item_code in out:
+            out[r.item_code]["pending_wo"] = flt(r.pending)
+
+    # Pending Purchase Order qty (line-level qty − received).
+    po_rows = frappe.db.sql(f"""
+        SELECT poi.item_code,
+               SUM(GREATEST(poi.qty - poi.received_qty, 0)) AS pending
+        FROM `tabPurchase Order Item` poi
+        JOIN `tabPurchase Order` po ON po.name = poi.parent
+        WHERE po.docstatus = 1
+          AND po.status IN {po_sql}
+          AND poi.item_code IN {codes_sql}
+        GROUP BY poi.item_code
+    """, as_dict=True)
+    for r in po_rows:
+        if r.item_code in out:
+            out[r.item_code]["pending_po"] = flt(r.pending)
+
+    return out
 
 
 def _get_open_docs_for_item(item_code, po_statuses=None):

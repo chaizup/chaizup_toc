@@ -866,8 +866,20 @@
 /* Sortable column headers */
 .por-th-sortable { cursor:pointer; user-select:none; position:relative; }
 .por-th-sortable:hover { background:var(--por-sl-200) !important; }
-.por-th-sortable.por-sort-asc::after  { content:" \25B2"; color:var(--por-brand); font-size:9px; }
-.por-th-sortable.por-sort-desc::after { content:" \25BC"; color:var(--por-brand); font-size:9px; }
+/* POR-019 (2026-05-06): use literal Unicode chars (▲ / ▼ / ↗) — NOT
+   CSS unicode-escape sequences (the form: backslash + 4 hex digits).
+   Frappe's html_to_js_template (frappe/build.py) wraps the entire HTML
+   in a single-quoted JS string without escaping backslashes, so a
+   sequence of backslash + digit is interpreted by the JS parser as a
+   JS OCTAL escape — the first 1-3 digits become a control char, then
+   the remaining hex digits leak through as literal text. Result:
+   "97" / "B2" / "BC" appeared next to every doclink and sort header.
+   Same family of bug as POR-013 (apostrophe rule). RESTRICT: do NOT
+   reintroduce CSS unicode-escape sequences in this file — use the
+   literal char or an HTML entity in markup. NOTE: this comment text
+   intentionally avoids the offending byte sequence. */
+.por-th-sortable.por-sort-asc::after  { content:" ▲"; color:var(--por-brand); font-size:9px; }
+.por-th-sortable.por-sort-desc::after { content:" ▼"; color:var(--por-brand); font-size:9px; }
 
 /* Doc-link styling — every doctype/name pair is a hyperlink that opens in
    a new tab. Uniform style so users learn the affordance once. */
@@ -878,7 +890,8 @@
 }
 .por-doclink:hover { border-bottom-color:var(--por-brand); color:var(--por-brand-h); }
 .por-doclink::after {
-  content:" \2197"; font-size:9px; color:var(--por-sl-400); margin-left:1px;
+  /* POR-019 (2026-05-06): literal "↗" — see above-block comment. */
+  content:" ↗"; font-size:9px; color:var(--por-sl-400); margin-left:1px;
 }
 
 /* Allow item name to wrap (full name visible). Override the earlier

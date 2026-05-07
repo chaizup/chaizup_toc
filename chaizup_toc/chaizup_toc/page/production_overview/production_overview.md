@@ -1323,3 +1323,234 @@ had not configured a real API key.
    Health Snapshot + Top Action Items preview blocks render.
    Open Simple Report — Shortage columns show coloured bars.
 
+
+---
+
+## Sync Block — 2026-05-06 (POR-019, POR-020, POR-021, POR-022)
+
+### POR-019 — "97" leaking into hyperlinks (also "B2" / "BC" on sort headers)
+
+**Symptom**: every `.por-doclink` rendered with a stray `97` after the
+target tab arrow. Sort header arrows showed `B2` / `BC` next to `▲`/`▼`.
+
+**Root cause**: CSS `content` rules used the unicode-escape syntax
+(backslash + 4 hex digits) — e.g. `content:" \2197";` for ↗,
+`content:" \25B2";` for ▲. Frappe's `html_to_js_template`
+(`apps/frappe/frappe/build.py:427`) wraps the entire HTML body in a
+single-quoted JS string WITHOUT escaping backslashes:
+
+```py
+return """frappe.templates["{key}"] = '{content}';\n""".format(...)
+```
+
+When the JS parser reads `\2197` inside a JS string, it interprets the
+leading `\2` as a JS OCTAL escape (= 0x11 DC1, a control char). The
+remaining digits `197` / `5B2` / `5BC` then leak through as literal
+text. The user sees "97" / "B2" / "BC" everywhere a doclink or sort
+indicator renders.
+
+**Same family as POR-013** (apostrophe rule) — both stem from the
+"HTML body wrapped as a single-quoted JS string" contract.
+
+**Fix**: replace every CSS unicode-escape sequence with the literal
+Unicode glyph:
+- `content:" \2197"` → `content:" ↗"`
+- `content:" \25B2"` → `content:" ▲"`
+- `content:" \25BC"` → `content:" ▼"`
+
+**Audit command** (must print 0):
+
+```sh
+grep -nE 'content:" \\\\[0-9A-Fa-f]{4}' production_overview.html
+```
+
+Stronger guard — inspect the rendered page asset:
+
+```sh
+bench --site <site> execute frappe.desk.desk_page.get \
+    --kwargs '{"name": "production-overview"}' \
+    | python -c "import sys, json, re; \
+        s = json.load(sys.stdin)['message']['script']; \
+        print('residual:', re.findall(r'\\\\[0-7][0-7A-Fa-f]+', s))"
+```
+
+Expect `residual: []`.
+
+**RESTRICT**:
+- Do NOT reintroduce CSS unicode-escape sequences in this HTML file.
+  Use the literal char or an HTML entity in markup.
+- The same rule applies to ALL Frappe page HTMLs in this app
+  (`wo_kitting_planner.html`, `toc_item_settings.html`,
+  `toc_user_guide.html`, `supply_chain_tracker.html`, etc.).
+- Comments inside the `<style>` block should also avoid the literal
+  byte sequence `backslash + digit` to prevent confusing the future
+  reader (this is what tripped my own first comment fix).
+
+### POR-020 — Column sort comparator hardening
+
+**Symptom**: clicking column headers appeared to "do nothing" or sorted
+inconsistently. Specifically:
+- "#" header → no visible reorder
+- Numeric columns with mixed null/zero rows → unstable order
+- Repeated sorts produced different orderings for equal values
+
+**Root cause** (in `_currentVisibleItems` sort branch):
+1. The `seq` column was virtual — items have no `seq` field, so both
+   `a.seq` and `b.seq` were undefined and `localeCompare("","") === 0`.
+2. JSON `null` is `typeof "object"`, NOT `"number"`. Numeric columns
+   with mixed null/number values fell into the string-compare branch
+   for null rows but the numeric branch for the rest, mixing paths.
+3. No tie-breaker — equal values rendered in dataset insertion order,
+   which changed across refreshes.
+
+**Fix**: rewritten comparator with these rules:
+- Explicit `seq` handler — sorts by `item_code` ascending (deterministic
+  visible behaviour).
+- New `numericKey(it)` helper coerces the value: numbers stay numbers,
+  numeric strings (`"12.5"`) become numbers, null/non-numeric returns
+  `null`.
+- Mixed null/number — nulls always pushed to the BOTTOM regardless of
+  direction (consistent visual: "missing data at the end").
+- Stable secondary sort: `item_code` ascending tiebreaker.
+
+All numeric columns store STOCK-UOM values from the server, so the
+sort is implicitly in stock UOM — no per-row UOM-aware comparator is
+needed (cross-row sort by Kg vs Pcs has no sensible meaning).
+
+**RESTRICT**:
+- Tie-breaker MUST be `item_code` ascending. Removing it returns the
+  "random refresh order" bug.
+- Null-to-bottom rule must apply in BOTH directions (asc + desc) — if
+  a future change pushes nulls to the top in desc, mixed columns
+  alternate between branches and the sort looks broken again.
+- The `seq` virtual-key branch must stay; otherwise that header looks
+  unresponsive.
+
+### POR-021 — "Plan" button under the item name
+
+**Why**: same UX rationale as POR-015 (SOs button move). Quick actions
+should live in the frozen Item column so they remain visible under
+horizontal scroll. Users asked for the Plan modal to be reachable
+without scrolling to the far-right "Production Plans" column.
+
+**Implementation**:
+- New `.por-pp-btn` button inside `.por-item-actions` wrapper, beside
+  the existing SOs button.
+- Disabled (with a "no active PP contains this item" tooltip) when
+  `pp_count === 0` — keeps the affordance present so users know the
+  feature exists, without faking a click.
+- Reuses the existing delegated `.por-pp-btn` click handler — no
+  event-binding change needed.
+- `pp_count` is now read EARLY in `_buildRow` (was read further down)
+  because two cells need it now.
+
+**RESTRICT**:
+- The "Production Plans" column (far right) still renders the same
+  button. Two buttons reaching the same modal is intentional —
+  removing one breaks either the workflow that asked for it or the
+  existing column users learned. Keep both.
+- Disabled state uses native `disabled` attribute + existing
+  `.por-btn:disabled` style. Don't introduce a separate visual
+  treatment.
+
+### POR-022 — Shortage modal: "Incoming (Production)" + "Incoming (Purchase)"
+
+**Why**: the shortage modal answered "what is short?" but not "what is
+already on its way?". Planners had to mentally cross-reference the
+"Open Docs" pills (which list document IDs without aggregated qty) to
+estimate how soon the shortage clears. Two new columns close that
+gap by surfacing the aggregated pending qty per channel.
+
+**Backend**: new helper `_get_incoming_supply_for_items(item_codes,
+wo_statuses, po_statuses)` in `production_overview_api.py`:
+- Returns `{item_code: {pending_wo, pending_po}}` for the input list.
+- Two SQL statements total — bulk by design. The shortage modal can
+  have 30+ short components and N+1 per-row queries would be slow.
+- WO clause: `Σ GREATEST(qty − produced_qty, 0)` filtered by
+  `production_item IN (...) AND status IN (wo_statuses)`. The
+  `GREATEST` clamps over-produced WOs to 0 so they don't negatively
+  offset the pending pool.
+- PO clause: `Σ GREATEST(poi.qty − poi.received_qty, 0)` filtered by
+  `poi.item_code IN (...) AND po.status IN (po_statuses)`.
+- INTENTIONALLY warehouse-agnostic: the shortage modal asks "what is
+  coming for this component?", and the answer is per-component, not
+  per-warehouse. If a future requirement narrows it, accept a
+  `warehouses` arg in this helper and add the
+  `wo.fg_warehouse` / `poi.warehouse` clauses there.
+
+`get_shortage_detail` now:
+- Collects every component code that appears anywhere in the modal
+  output (`aggregated[*]` + `by_wo[*].short_components[*]`).
+- Calls the helper ONCE with that set.
+- Annotates each `aggregated[*]` AND each `by_wo[*].short_components[*]`
+  with `incoming_wo` and `incoming_po` floats.
+
+**Frontend** (`_buildShortageHtml`):
+- Aggregated table — two new headers ("Incoming (Production)",
+  "Incoming (Purchase)") between Shortage and WO Count. Cells coloured
+  blue (production-tone) when `incoming_wo > 0`, green (ok-tone) when
+  `incoming_po > 0`, muted grey when zero. Renders via `_fmtQ` so the
+  per-UOM tooltip still works.
+- Per-WO breakdown table — same two columns added between Shortage
+  and UOM, identical colour rules and formatting.
+
+**RESTRICT**:
+- Helper MUST stay bulk. Do NOT call it from a per-row JS loop or
+  from inside `_walk_bom_deep` — the cost is N+1 and the modal would
+  freeze for items with deep BOMs.
+- Both columns format via `_fmtQ` so the existing UOM-tooltip
+  contract stays. Don't switch to `_formatNum` unless you also remove
+  the UOM hint or the user loses the per-UOM context.
+- Status filters mirror the page-level filter set (`wo_statuses` +
+  `_DEFAULT_PO_STATUSES`). If the user opens the modal while the
+  page-level WO Status filter is set, the incoming column reflects
+  that — by design. Don't fall back to a hard-coded set.
+- The `GREATEST(.., 0)` clamp is the same pattern the rest of the
+  codebase uses (`_get_all_pending_so_qty`, `production_plan_engine`).
+  Removing it lets over-produced/over-received documents subtract
+  from the pool, which misrepresents incoming supply.
+
+### Files changed
+
+- `chaizup_toc/api/production_overview_api.py`
+  - New `_get_incoming_supply_for_items` (around line 3720).
+  - `get_shortage_detail` annotates both views with
+    `incoming_wo` / `incoming_po` (line 482 area).
+- `chaizup_toc/page/production_overview/production_overview.html`
+  - Replaced 3 CSS unicode-escape rules with literal glyphs
+    (▲ / ▼ / ↗) — POR-019.
+- `chaizup_toc/page/production_overview/production_overview.js`
+  - `_currentVisibleItems` sort branch fully rewritten — POR-020.
+  - `_buildRow` reads `ppCount` early and emits the "Plan" button in
+    `.por-item-actions` — POR-021.
+  - `_buildShortageHtml` adds two new columns to both the aggregated
+    table and the per-WO breakdown — POR-022.
+
+### Verification
+
+1. `redis-cli -h redis-cache -p 6379 FLUSHALL`.
+2. POR-019: hard-reload `/app/production-overview`. Click any item
+   code or BOM hyperlink — only the literal "↗" arrow renders, no
+   stray "97". Click any sortable header — arrow shows "▲" / "▼"
+   only.
+3. POR-020: load data. Click each numeric column header twice
+   (asc + desc) — order reverses cleanly; equal values stay grouped
+   in `item_code` order. Click "#" — items sort by item_code asc.
+   Mixed-null columns (e.g. `target_achieved_pct` for items with no
+   target) — null rows always sit at the bottom.
+4. POR-021: confirm a "Plan" button sits under each item name beside
+   the SOs button. For an item with `pp_count > 0` it is enabled and
+   reads `Plan (N)`; clicking opens the existing PP modal. For
+   `pp_count === 0` it is disabled and the tooltip explains why.
+5. POR-022: click View on any item with shortage. Both tables show
+   the new "Incoming (Production)" + "Incoming (Purchase)" columns.
+   Components with no open supply read `0` in muted grey. Components
+   with open WOs/POs show the aggregated qty in blue / green and a
+   tooltip explains the source.
+   Backend smoke-test:
+   `bench --site <site> execute
+   chaizup_toc.api.production_overview_api.get_shortage_detail
+   --kwargs '{"item_code": "<some_code>"}'`
+   — both `aggregated[*].incoming_wo/po` and
+   `by_wo[*].short_components[*].incoming_wo/po` should be present.
+

@@ -733,17 +733,67 @@ class ProductionOverview {
             });
         }
         // Sort
+        // POR-020 (2026-05-06): comparator hardening.
+        //
+        // Old comparator quirks the user reported as "sorting not working":
+        //   1. The "seq" sort key has no backing item field — sort silently
+        //      did nothing because both `a.seq` and `b.seq` were undefined.
+        //   2. Numeric comparator only triggered when typeof was "number" —
+        //      a column where some rows had null and others had numbers
+        //      mixed paths (number row vs string row), giving inconsistent
+        //      order. JSON null is `null` (typeof "object") so the original
+        //      check missed it.
+        //   3. No tie-breaker — equal numeric values render in whatever
+        //      order they came in, which looked random when data refreshed.
+        //   4. For mostly-zero columns (most metrics for low-volume items),
+        //      sorting asc puts ALL zeroes first — visually identical to
+        //      no sort. We keep that behaviour but apply a stable
+        //      item_code tie-breaker so the order within zeroes is
+        //      deterministic.
+        //
+        // All numeric columns store STOCK-UOM values from the server (e.g.
+        // `planned_qty`, `actual_qty`, `total_curr_sales`). The sort always
+        // operates on stock-UOM numbers — there is no UOM-aware comparator
+        // because each row's UOM is independent and a cross-row sort by
+        // (e.g.) "Kg" wouldn't make sense.
         if (this._sortKey) {
             const k = this._sortKey;
             const dir = this._sortDir === "asc" ? 1 : -1;
-            items.sort((a, b) => {
-                const va = a[k]; const vb = b[k];
-                // String sort vs number sort
-                if (typeof va === "number" || typeof vb === "number") {
-                    return ((va || 0) - (vb || 0)) * dir;
+            const numericKey = (it) => {
+                if (k === "seq") {
+                    // # column: virtual key — fall back to item_code so
+                    // clicking the # header gives a deterministic ascending
+                    // alphabetical sort (visible behaviour change).
+                    return null;
                 }
-                if (typeof va === "boolean") return ((va ? 1 : 0) - (vb ? 1 : 0)) * dir;
-                return String(va || "").localeCompare(String(vb || "")) * dir;
+                const v = it[k];
+                if (v == null) return null;
+                if (typeof v === "boolean") return v ? 1 : 0;
+                if (typeof v === "number") return Number.isFinite(v) ? v : null;
+                // Numeric string ("12.5") → number. Otherwise null (string sort branch).
+                const n = parseFloat(v);
+                return Number.isFinite(n) && String(n) === String(v).trim() ? n : null;
+            };
+            items.sort((a, b) => {
+                if (k === "seq") {
+                    return String(a.item_code || "").localeCompare(String(b.item_code || "")) * dir;
+                }
+                const na = numericKey(a);
+                const nb = numericKey(b);
+                if (na !== null && nb !== null) {
+                    if (na !== nb) return (na - nb) * dir;
+                    // Tie-breaker: item_code asc (stable order within equal values)
+                    return String(a.item_code || "").localeCompare(String(b.item_code || ""));
+                }
+                // null on either side — push nulls to the bottom regardless of direction
+                if (na === null && nb !== null) return 1;
+                if (nb === null && na !== null) return -1;
+                // Both null OR both string — string compare
+                const sa = String(a[k] == null ? "" : a[k]);
+                const sb = String(b[k] == null ? "" : b[k]);
+                const cmp = sa.localeCompare(sb);
+                if (cmp !== 0) return cmp * dir;
+                return String(a.item_code || "").localeCompare(String(b.item_code || ""));
             });
         }
         return items;
@@ -906,6 +956,11 @@ class ProductionOverview {
         const uom    = item.stock_uom || "";
         const conv   = item.uom_conversions || [];
         const pm     = this._planMode;
+        // POR-021 (2026-05-06): pp_count is now read EARLY because the Plan
+        // button under the item name (.por-item-actions wrapper) needs it
+        // for label / disabled / title decisions. The Production Plans
+        // column further right also reads the same value.
+        const ppCount = item.pp_count || 0;
         // POR-009: seq cell now has TWO affordances — drag handle + editable
         // input. Drag handle is dimmed in Mode A (CSS body class). The input
         // is ignored in Mode A by `pointer-events:none`.
@@ -1025,7 +1080,7 @@ Warehouse-scoped to your filter.`;
                     : `<span class="por-ach-lo" title="${achTip}">${ach}%</span>`;
 
         // Production Plans cell — count chip + view button if any active PP
-        const ppCount = item.pp_count || 0;
+        // (ppCount is computed at the top of _buildRow — POR-021)
         const ppHtml = ppCount > 0
             ? `<span class="por-pp-chip" title="${ppCount} active Production Plan(s) contain this item">${ppCount}</span>
                <button class="por-btn por-btn-default por-btn-sm por-pp-btn" data-code="${code}" style="margin-left:4px;" title="View parent + child Work Orders for this item's Production Plans"><i class="fa-solid fa-eye"></i> Plan</button>`
@@ -1066,6 +1121,13 @@ Warehouse-scoped to your filter.`;
                       data-code="${code}"
                       title="View every Sales Order containing ${this._esc(item.item_code)} (status + customer + qty + UOM + delivery date), filtered by your selected SO statuses and warehouses.">
                 <i class="fa-solid fa-cart-shopping"></i> SOs
+              </button>
+              <button class="por-btn por-btn-default por-btn-sm por-pp-btn${ppCount > 0 ? "" : " por-btn-disabled"}"
+                      data-code="${code}"${ppCount > 0 ? "" : " disabled"}
+                      title="${ppCount > 0
+                        ? `View ${ppCount} active Production Plan${ppCount > 1 ? "s" : ""} containing ${this._esc(item.item_code)} — parent + child Work Orders.`
+                        : `No active Production Plan contains ${this._esc(item.item_code)}.`}">
+                <i class="fa-solid fa-clipboard-list"></i> Plan${ppCount > 0 ? ` (${ppCount})` : ""}
               </button>
             </div>`;
 
@@ -1353,12 +1415,30 @@ Warehouse-scoped to your filter.`;
 
         let html = `<div class="por-sec-hdr"><i class="fa-solid fa-layer-group"></i> Aggregated Shortage (sorted by value)</div>`;
         if (aggregated && aggregated.length > 0) {
+            // POR-022 (2026-05-06): two new columns —
+            //   • "Incoming (Production)" = Σ pending qty on open WOs
+            //     producing the component (uses Pending WO Qty filter +
+            //     selected WO statuses).
+            //   • "Incoming (Purchase)"   = Σ pending qty on open POs
+            //     buying the component (uses Pending PO Qty +
+            //     _DEFAULT_PO_STATUSES).
+            // Source: backend `_get_incoming_supply_for_items` — bulk
+            // SQL, populated on `aggregated[*].incoming_wo / incoming_po`
+            // and on each per-WO `short_components[*].incoming_wo /
+            // incoming_po` so the by-WO breakdown shows the same data.
             html += `<table class="por-dtable">
               <thead><tr>
-                <th>Component</th><th>Required</th><th>In Stock</th><th>Shortage</th><th>WO Count</th><th>Open Docs</th>
+                <th>Component</th><th>Required</th><th>In Stock</th><th>Shortage</th>
+                <th title="Sum of pending qty on open Work Orders that PRODUCE this component (selected WO Status filter applied). Tells you how much will arrive from in-house production.">Incoming (Production)</th>
+                <th title="Sum of pending qty on open Purchase Orders for this component (default PO statuses applied). Tells you how much will arrive from suppliers.">Incoming (Purchase)</th>
+                <th>WO Count</th><th>Open Docs</th>
               </tr></thead><tbody>`;
             for (const a of aggregated) {
                 const uomC = a.uom_conversions || [];
+                const incWo = +a.incoming_wo || 0;
+                const incPo = +a.incoming_po || 0;
+                const incWoCellTitle = `Pending Work Order qty producing ${a.item_code}: ${incWo} ${a.stock_uom || ""}.`;
+                const incPoCellTitle = `Pending Purchase Order qty for ${a.item_code}: ${incPo} ${a.stock_uom || ""}.`;
                 html += `<tr class="por-short-row-bad">
                   <td><span style="font-family:monospace;font-size:11px;color:var(--por-brand);">${this._esc(a.item_code)}</span>
                     <span style="display:block;font-size:10px;color:var(--por-muted);">${this._esc(a.item_name || "")}</span>
@@ -1366,6 +1446,8 @@ Warehouse-scoped to your filter.`;
                   <td>${this._fmtQ(a.total_required, uomC, a.stock_uom)}</td>
                   <td>${this._fmtQ(a.in_stock, uomC, a.stock_uom)}</td>
                   <td style="font-weight:700;color:var(--por-err-text);">${this._fmtQ(a.shortage, uomC, a.stock_uom)}</td>
+                  <td title="${this._esc(incWoCellTitle)}" style="${incWo > 0 ? "color:var(--por-info-text);font-weight:700;" : "color:var(--por-muted);"}">${this._fmtQ(incWo, uomC, a.stock_uom)}</td>
+                  <td title="${this._esc(incPoCellTitle)}" style="${incPo > 0 ? "color:var(--por-ok-text);font-weight:700;" : "color:var(--por-muted);"}">${this._fmtQ(incPo, uomC, a.stock_uom)}</td>
                   <td style="text-align:center;">${a.wo_count}</td>
                   <td>${this._renderOpenDocs(a.open_docs)}</td>
                 </tr>`;
@@ -1386,19 +1468,31 @@ Warehouse-scoped to your filter.`;
                   <span class="por-wo-st por-wo-st-ip" style="margin-left:6px;">${this._esc(wo.status)}</span>
                 </div>`;
                 if (wo.short_components && wo.short_components.length > 0) {
+                    // POR-022 (2026-05-06): Incoming (Production) +
+                    // Incoming (Purchase) columns mirror the aggregated
+                    // table. Backend annotates each component with
+                    // `incoming_wo` / `incoming_po` via
+                    // `_get_incoming_supply_for_items`.
                     html += `<table class="por-dtable" style="margin-bottom:8px;">
                       <thead><tr>
                         <th>Code</th><th>Item Name</th><th>Required</th>
-                        <th>Current Stock</th><th>Shortage</th><th>UOM</th>
+                        <th>Current Stock</th><th>Shortage</th>
+                        <th title="Σ pending qty on open Work Orders producing this component.">Incoming (Production)</th>
+                        <th title="Σ pending qty on open Purchase Orders for this component.">Incoming (Purchase)</th>
+                        <th>UOM</th>
                       </tr></thead>
                       <tbody>`;
                     for (const c of wo.short_components) {
+                        const incWo = +c.incoming_wo || 0;
+                        const incPo = +c.incoming_po || 0;
                         html += `<tr>
                           <td>${this._dl("Item", c.item_code)}</td>
                           <td style="color:var(--por-sl-700);">${this._esc(c.item_name || "")}</td>
                           <td style="font-family:monospace;">${this._formatNum(c.required)}</td>
                           <td style="font-family:monospace;">${this._formatNum(c.in_stock)}</td>
                           <td style="font-family:monospace;color:var(--por-err-text);font-weight:700;">${this._formatNum(c.shortage)}</td>
+                          <td style="font-family:monospace;${incWo > 0 ? "color:var(--por-info-text);font-weight:700;" : "color:var(--por-muted);"}">${this._formatNum(incWo)}</td>
+                          <td style="font-family:monospace;${incPo > 0 ? "color:var(--por-ok-text);font-weight:700;" : "color:var(--por-muted);"}">${this._formatNum(incPo)}</td>
                           <td style="font-size:10px;color:var(--por-muted);">${this._esc(c.uom || "")}</td>
                         </tr>`;
                     }
