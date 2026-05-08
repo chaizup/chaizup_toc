@@ -11,13 +11,10 @@
 # =============================================================================
 
 import json
+import os
 
 import frappe
 
-FIXTURE_PATH = (
-    "/workspace/development/frappe-bench/apps/chaizup_toc/chaizup_toc/"
-    "chaizup_toc/fixtures/custom_field.json"
-)
 NEW_FIELD_NAMES = (
     "Item-custom_toc_sec_minmfg",
     "Item-custom_minimum_manufacture",
@@ -25,7 +22,21 @@ NEW_FIELD_NAMES = (
 
 
 def execute():
-    with open(FIXTURE_PATH) as fh:
+    # Resolve the fixture path relative to the app — portable across dev
+    # benches and Frappe Cloud (which has /home/frappe/frappe-bench/...).
+    fixture_path = os.path.join(
+        frappe.get_app_path("chaizup_toc"),
+        "chaizup_toc", "fixtures", "custom_field.json",
+    )
+    if not os.path.exists(fixture_path):
+        # Belt-and-braces — never hard-fail a migration on a missing fixture.
+        # Log and move on; the fields can be created later via fixture re-export.
+        frappe.logger("chaizup_toc").warning(
+            f"sync_min_mfg_custom_fields: fixture missing at {fixture_path}; skipping"
+        )
+        return
+
+    with open(fixture_path) as fh:
         rows = json.load(fh)
 
     for row in rows:

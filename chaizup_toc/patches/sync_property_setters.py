@@ -11,17 +11,23 @@
 # =============================================================================
 
 import json
+import os
 
 import frappe
 
-FIXTURE_PATH = (
-    "/workspace/development/frappe-bench/apps/chaizup_toc/chaizup_toc/"
-    "chaizup_toc/fixtures/property_setter.json"
-)
-
 
 def execute():
-    with open(FIXTURE_PATH) as fh:
+    fixture_path = os.path.join(
+        frappe.get_app_path("chaizup_toc"),
+        "chaizup_toc", "fixtures", "property_setter.json",
+    )
+    if not os.path.exists(fixture_path):
+        frappe.logger("chaizup_toc").warning(
+            f"sync_property_setters: fixture missing at {fixture_path}; skipping"
+        )
+        return
+
+    with open(fixture_path) as fh:
         rows = json.load(fh)
 
     for row in rows:

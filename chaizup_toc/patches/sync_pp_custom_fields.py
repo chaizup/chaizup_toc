@@ -11,13 +11,10 @@
 # =============================================================================
 
 import json
+import os
 
 import frappe
 
-FIXTURE_PATH = (
-    "/workspace/development/frappe-bench/apps/chaizup_toc/chaizup_toc/"
-    "chaizup_toc/fixtures/custom_field.json"
-)
 FIELD_NAMES = (
     "Production Plan-custom_created_by",
     "Production Plan-custom_creation_reason",
@@ -26,7 +23,17 @@ FIELD_NAMES = (
 
 
 def execute():
-    with open(FIXTURE_PATH) as fh:
+    fixture_path = os.path.join(
+        frappe.get_app_path("chaizup_toc"),
+        "chaizup_toc", "fixtures", "custom_field.json",
+    )
+    if not os.path.exists(fixture_path):
+        frappe.logger("chaizup_toc").warning(
+            f"sync_pp_custom_fields: fixture missing at {fixture_path}; skipping"
+        )
+        return
+
+    with open(fixture_path) as fh:
         rows = json.load(fh)
 
     for row in rows:
