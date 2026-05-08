@@ -1,0 +1,193 @@
+{
+ "actions": [],
+ "autoname": "format:RUN-{YYYY}-{MM}-{DD}-{####}",
+ "creation": "2026-05-08 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "run_started",
+  "run_completed",
+  "triggered_by",
+  "company",
+  "col_break_meta",
+  "sales_projection",
+  "warehouse",
+  "pending_so_statuses_used",
+  "default_so_warehouse_used",
+  "section_break_summary",
+  "calc_a_created",
+  "calc_a_skipped",
+  "calc_b_created",
+  "calc_b_skipped",
+  "errors",
+  "section_break_items",
+  "items",
+  "section_break_log",
+  "engine_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "run_started",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Run Started",
+   "reqd": 1
+  },
+  {
+   "fieldname": "run_completed",
+   "fieldtype": "Datetime",
+   "label": "Run Completed"
+  },
+  {
+   "fieldname": "triggered_by",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Triggered By",
+   "options": "\nmanual\nmanual_button\nsystem\ncron",
+   "description": "manual_button = TOC Settings 'Run Now' button. cron = 02:00 AM daily scheduler."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "col_break_meta",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sales_projection",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sales Projection",
+   "options": "Sales Projection"
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Source Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "pending_so_statuses_used",
+   "fieldtype": "Small Text",
+   "label": "SO Statuses Treated as Pending",
+   "description": "Snapshot of TOC Settings 'Pending Sales Order Statuses' at run time. Pinned for audit reproducibility."
+  },
+  {
+   "fieldname": "default_so_warehouse_used",
+   "fieldtype": "Link",
+   "label": "Default SO Warehouse Used",
+   "options": "Warehouse",
+   "description": "Snapshot of TOC Settings 'Default Warehouse for Sales Orders' applied to SOs with blank warehouse."
+  },
+  {
+   "fieldname": "section_break_summary",
+   "fieldtype": "Section Break",
+   "label": "Run Summary"
+  },
+  {
+   "fieldname": "calc_a_created",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Calc A Created",
+   "description": "Number of items where Calc A (forecast) created a Production Plan."
+  },
+  {
+   "fieldname": "calc_a_skipped",
+   "fieldtype": "Int",
+   "label": "Calc A Skipped",
+   "description": "Number of items where Calc A returned a non-Created status."
+  },
+  {
+   "fieldname": "calc_b_created",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Calc B Created",
+   "description": "Number of items where Calc B (SO-driven) created a Production Plan."
+  },
+  {
+   "fieldname": "calc_b_skipped",
+   "fieldtype": "Int",
+   "label": "Calc B Skipped",
+   "description": "Number of items where Calc B returned a non-Created status."
+  },
+  {
+   "fieldname": "errors",
+   "fieldtype": "Int",
+   "label": "Errors",
+   "description": "Number of items where the engine raised an exception."
+  },
+  {
+   "fieldname": "section_break_items",
+   "fieldtype": "Section Break",
+   "label": "Per-Item Decisions"
+  },
+  {
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "Item Decisions",
+   "options": "TOC Production Plan Run Item",
+   "description": "One row per (item × warehouse × calc). For each item, you'll typically see two rows: one for Calc A and one for Calc B."
+  },
+  {
+   "fieldname": "section_break_log",
+   "fieldtype": "Section Break",
+   "label": "Engine Log",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "engine_log",
+   "fieldtype": "Long Text",
+   "label": "Engine Log",
+   "description": "Free-form text dumped by the engine — exceptions, traceback excerpts, configuration warnings."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-08 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Chaizup Toc",
+ "name": "TOC Production Plan Run Log",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Manufacturing Manager"
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Manufacturing User"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "run_started",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

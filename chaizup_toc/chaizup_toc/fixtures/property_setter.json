@@ -1,0 +1,24 @@
+[
+ {
+  "doctype": "Property Setter",
+  "name": "Work Order-item_name-in_list_view",
+  "doctype_or_field": "DocField",
+  "doc_type": "Work Order",
+  "field_name": "item_name",
+  "property": "in_list_view",
+  "property_type": "Check",
+  "value": "1",
+  "module": "Chaizup Toc"
+ },
+ {
+  "doctype": "Property Setter",
+  "name": "Work Order-item_name-columns",
+  "doctype_or_field": "DocField",
+  "doc_type": "Work Order",
+  "field_name": "item_name",
+  "property": "columns",
+  "property_type": "Int",
+  "value": "4",
+  "module": "Chaizup Toc"
+ }
+]

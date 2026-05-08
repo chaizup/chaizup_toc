@@ -252,6 +252,29 @@
  },
  {
   "doctype": "Custom Field",
+  "name": "Item-custom_toc_sec_minmfg",
+  "dt": "Item",
+  "fieldname": "custom_toc_sec_minmfg",
+  "label": "6. Minimum Purchase / Production Qty per Warehouse",
+  "fieldtype": "Section Break",
+  "insert_after": "custom_toc_buffer_rules",
+  "description": "Add one row per warehouse: the minimum batch the line is willing to produce / the minimum lot the supplier is willing to ship. Auto Production Plan automation raises shortage qty up to this floor before creating the PP. Auto-seeded from Work Order history at 00:00 daily for items without rows.",
+  "module": "Chaizup Toc"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-custom_minimum_manufacture",
+  "dt": "Item",
+  "fieldname": "custom_minimum_manufacture",
+  "label": "Minimum Manufacture / Purchase Qty per Warehouse",
+  "fieldtype": "Table",
+  "options": "Item Minimum Manufacture",
+  "insert_after": "custom_toc_sec_minmfg",
+  "description": "Per-warehouse minimum batch size. Columns: Warehouse · Min Purchase / Production Qty · UOM. Used by Production Plan automation (Calc A + Calc B) to raise shortage qty when below this floor.",
+  "module": "Chaizup Toc"
+ },
+ {
+  "doctype": "Custom Field",
   "name": "Material Request-custom_toc_tab",
   "dt": "Material Request",
   "fieldname": "custom_toc_tab",

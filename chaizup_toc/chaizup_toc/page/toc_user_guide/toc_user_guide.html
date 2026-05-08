@@ -949,16 +949,47 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
   automatically translates forecast lines into Draft Work Orders — bridging forecast
   → production planning without manual Production Plan creation.</p>
 
-  <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Net Demand Formula</h3>
+  <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Dual-Calc Engine (2026-05-08)</h3>
+  <p>Each item in a submitted Sales Projection runs through TWO sequential formulas every day at 02:00 AM (or on demand from the TOC Settings <em>Run Now</em> button). One PP per calc per item maximum (dedup-guarded). Both calcs always run — Calc A confirms forecast supply, Calc B catches over-projection demand that Calc A would silently miss.</p>
+
   <div class="tug-formula-card" style="margin-bottom:16px">
-    <div class="tug-formula-label">Net Required</div>
+    <div class="tug-formula-label">Calc A — Forecast Shortage</div>
     <div class="tug-formula-expr">
-      Net = (projected_qty + prev_month_pending_SO)<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;− curr_month_pending_SO<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;− (current_stock + open_WO_remaining)
+      Qty<sub>A</sub> = (SPOW + PRVSO) − (CURRALSO + ITMWO + ITMWSTK)
     </div>
-    <div class="tug-formula-desc">All SO filtering uses delivery_date (not transaction_date).
-    WO qty = min(net_required, production_capacity). If net ≤ 0 or production_capacity = 0, skip.</div>
+    <div class="tug-formula-desc">Confirms a Production Plan exists for the projection itself. <code class="tug-code">CURRALSO</code> is ALL current-month SOs (completed + pending) so already-shipped or already-booked demand reduces the planning gap.</div>
+  </div>
+
+  <div class="tug-formula-card" style="margin-bottom:16px">
+    <div class="tug-formula-label">Calc B — SO-Driven Safety Net</div>
+    <div class="tug-formula-expr">
+      Qty<sub>B</sub> = (PRVSO + CURRSO) − (ITMWSTK + ITMWO)
+    </div>
+    <div class="tug-formula-desc">Confirms a Production Plan exists for actual pending Sales Orders, regardless of projection. Solves the "over-projection silent stockout" — when actual SO &gt; projection, Calc A skips, Calc B catches the residual.</div>
+  </div>
+
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">⚙️</span>
+    <div><strong>For both:</strong> if shortage &gt; 0, <code class="tug-code">production_qty = max(shortage, MINMFG)</code> where <code class="tug-code">MINMFG</code> comes from <em>Item → TOC Setting → 6. Minimum Purchase / Production Qty per Warehouse</em>. Then a Production Plan is inserted (with <code class="tug-code">custom_created_by = "System"</code>) and submitted, which triggers ERPNext's standard PP-submit pipeline to create main + sub-assembly Work Orders. Direct WO creation is forbidden.</div>
+  </div>
+
+  <h4 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Variables</h4>
+  <div class="tug-table-wrap">
+    <table class="tug-table">
+      <tr><th>Symbol</th><th>Definition</th></tr>
+      <tr><td><code class="tug-code">SPOW</code></td><td>Sales Projection Of Warehouse — qty in stock UOM from the Sales Projection child table</td></tr>
+      <tr><td><code class="tug-code">PRVSO</code></td><td>Previous-month pending SO qty (delivery_date &lt; current month start, item × warehouse)</td></tr>
+      <tr><td><code class="tug-code">CURRSO</code></td><td>Current-month pending SO qty (delivery_date in current month)</td></tr>
+      <tr><td><code class="tug-code">CURRALSO</code></td><td>Current-month ALL SO qty (completed + pending; excludes only Cancelled)</td></tr>
+      <tr><td><code class="tug-code">ITMWO</code></td><td>Pending Work Order qty (qty − produced_qty) for item × fg_warehouse</td></tr>
+      <tr><td><code class="tug-code">ITMWSTK</code></td><td>Bin actual_qty for item × warehouse</td></tr>
+      <tr><td><code class="tug-code">MINMFG</code></td><td>Minimum manufacturing / purchase batch floor from Item.custom_minimum_manufacture (per warehouse, converted to stock UOM)</td></tr>
+    </table>
+  </div>
+
+  <div class="tug-callout tug-callout-warn">
+    <span class="tug-callout-icon">⚠️</span>
+    <div>Calc B reads <code class="tug-code">ITMWO</code> and <code class="tug-code">ITMWSTK</code> <strong>after</strong> Calc A's PP+WO commit, so it never double-counts what Calc A just created. Removing the intermediate <code class="tug-code">frappe.db.commit()</code> would cause duplicate Production Plans.</div>
   </div>
 
   <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">SO Eligibility — Two Paths</h3>
@@ -1011,10 +1042,25 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
 
   <div class="tug-callout tug-callout-info">
     <span class="tug-callout-icon">💡</span>
-    <div><strong>Manual run:</strong> On a submitted Sales Projection for the current month, a
-    <em>Run Projection Automation</em> button appears in the document toolbar.
-    This calls <code class="tug-code">run_projection_automation</code> with your user as triggered_by.
-    Only TOC Manager and System Manager roles can use it.</div>
+    <div><strong>Manual run (system-wide):</strong> Open <em>TOC Settings</em> → scroll to <em>Sales Projection Automation</em> → click <strong>Run Now (Calc A + Calc B)</strong>. This calls <code class="tug-code">run_projection_automation_for_all_warehouses</code> for every submitted Sales Projection of the current month. The 02:00 AM cron uses the same entry point — manual and scheduled runs are guaranteed identical.</div>
+  </div>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Audit Trail — TOC Production Plan Run Log</h3>
+  <p>Every run (manual or scheduled) writes one parent <strong>TOC Production Plan Run Log</strong> with summary counts, and one child row per <em>(item × calc)</em> in <strong>TOC Production Plan Run Item</strong>. Each item shows two rows — one for Calc A, one for Calc B — with the full formula breakdown, every input variable, the resulting shortage, the production qty after MINMFG floor, the linked Production Plan name, and a comma-separated list of created Work Order names (parent + sub-assembly).</p>
+  <p>Open <code class="tug-code">/app/toc-production-plan-run-log</code> to browse history. The log preserves a snapshot of <em>which SO statuses were treated as pending</em> and <em>which default warehouse was used</em> at run time, so re-running with different settings does not retroactively mutate prior decisions.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Default Warehouse Fallback</h3>
+  <p>Set <em>TOC Settings → Default Warehouse for Sales Orders</em> to the godown your sales reps most commonly omit on the SO header. When the projection runs against that warehouse, Sales Orders with blank <code class="tug-code">set_warehouse</code> are counted toward PRVSO / CURRSO / CURRALSO. Without this fallback, those SO lines are silently dropped — exactly the demand the projection should be planning for.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Auto-Generated PP Configuration</h3>
+  <p>Every TOC-created Production Plan has the UI checkbox <strong>"Consider Projected Qty in Calculation"</strong> set to <em>unchecked</em>. This forces ERPNext's sub-assembly fetch to use <code class="tug-code">Bin.actual_qty</code> alone — the TOC dual-calc engine already accounts for pending Work Orders, pending Sales Orders, and projection demand, so letting ERPNext re-deduct <code class="tug-code">projected_qty</code> would double-count and silently shrink sub-assembly demand. The PP also stamps <code class="tug-code">Created By = System</code> (visible in the Production Plan list view) and <code class="tug-code">Source Projection</code> for traceability.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Email Notifications After Each Run</h3>
+  <p>After every projection run (manual or 02:00 cron), the engine queues a single HTML summary email to every user listed in <em>TOC Settings → Notification Users</em> who has <strong>On WO Run</strong> ticked. The email contains: 4 KPI tiles (Calc A Created / Skipped, Calc B Created / Skipped), a per-item × per-calc table with full formula breakdown, deep-links to the Run Log + each Production Plan + each Work Order, and the snapshot of pending-SO statuses + default-warehouse used at run time.</p>
+
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">📬</span>
+    <div>The email is <strong>queued</strong> (not sent synchronously) so a transient mail-server failure cannot crash the engine. Check Email Queue if a recipient says they didn't receive it.</div>
   </div>
 </div>
 

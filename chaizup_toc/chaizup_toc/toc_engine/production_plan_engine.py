@@ -113,7 +113,7 @@ import datetime
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now_datetime, today
+from frappe.utils import cint, flt, now_datetime, today
 
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
@@ -192,42 +192,22 @@ def run_production_plan_automation(projection_name, triggered_by="manual"):
 #     January → index 0, December → index 11. Do NOT reorder MONTH_NAMES.
 # =============================================================================
 def daily_production_plan_automation():
-    """02:00 AM daily — create Production Plans for ALL current-month submitted projections."""
+    """02:00 AM daily — runs the v2 dual-calc engine (Calc A + Calc B) for every
+    current-month submitted Sales Projection.
+
+    DESIGN (2026-05-08): delegates to run_projection_automation_for_all_warehouses
+    so cron and the TOC Settings 'Run Now' button share identical behaviour,
+    including TOC Production Plan Run Log writes and per-calc dedup. Do NOT
+    re-implement the loop here — divergence between cron and manual paths has
+    historically caused duplicate PPs.
+    """
     try:
         settings = frappe.get_cached_doc("TOC Settings")
         if not settings.enable_projection_automation:
             return
 
-        now = now_datetime()
-        month_name = MONTH_NAMES[now.month - 1]
-        year = now.year
-
-        sp_names = frappe.get_all(
-            "Sales Projection",
-            filters={
-                "projection_month": month_name,
-                "projection_year": year,
-                "docstatus": 1,
-            },
-            pluck="name",
-        )
-
-        if not sp_names:
-            frappe.logger("chaizup_toc").info(
-                f"PP Automation: No submitted projections for {month_name} {year} — skipping."
-            )
-            return
-
         frappe.set_user("Administrator")
-        for sp_name in sp_names:
-            frappe.logger("chaizup_toc").info(f"PP Automation: Starting for {sp_name}")
-            try:
-                run_production_plan_automation(sp_name, triggered_by="system")
-            except Exception:
-                frappe.log_error(
-                    frappe.get_traceback(),
-                    f"TOC PP Automation FAILED for projection {sp_name}",
-                )
+        run_projection_automation_for_all_warehouses(triggered_by="cron")
 
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC PP Automation daily runner FAILED")
@@ -423,7 +403,22 @@ def _process_item(row, sp_doc, pending_statuses, confirmed_states,
 #     It is the dedup key used by _pp_exists_for_item(). Blank for buffer-triggered PPs.
 # =============================================================================
 def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, projection_ref):
-    """Insert a Draft Production Plan for one item. Returns the new PP document name."""
+    """Insert a Draft Production Plan for one item. Returns the new PP document name.
+
+    CRITICAL (2026-05-08): the PP field LABELLED "Consider Projected Qty in Calculation"
+    is INTERNALLY named `skip_available_sub_assembly_item` — the label and fieldname
+    diverge in ERPNext v16. We force it to 0 so ERPNext's get_sub_assembly_items runs
+    against Bin.actual_qty alone, NOT Bin.projected_qty. Without this:
+
+      - Bin.projected_qty already nets out Sales Order pending qty + open WO + open PO.
+      - TOC's dual-calc engine ALSO accounts for those (via ITMWO, CURRSO, PRVSO).
+      - Result: double-counted supply → zero or negative sub-assembly demand → BOM
+        components silently skipped → operator sees "no sub-assembly WO needed" when
+        in fact the line will starve.
+
+    Forcing the flag to 0 keeps TOC's formula as the SINGLE source of truth for what
+    qty to plan; ERPNext's sub-assembly tree just walks the BOM at the qty TOC chose.
+    """
     pp = frappe.new_doc("Production Plan")
     pp.company = company
     pp.planned_start_date = today()
@@ -434,6 +429,12 @@ def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, 
     # Warehouse scope — used by get_sub_assembly_items and get_items_for_material_requests
     pp.for_warehouse = warehouse
     pp.sub_assembly_warehouse = warehouse
+
+    # Sub-assembly calculation flags (forced for TOC determinism).
+    # skip_available_sub_assembly_item is the INTERNAL fieldname for the UI checkbox
+    # labelled "Consider Projected Qty in Calculation". 0 = ignore Bin.projected_qty.
+    # See `apps/erpnext/.../production_plan.json:411` for the label↔fieldname divergence.
+    pp.skip_available_sub_assembly_item = 0
 
     pp.append("po_items", {
         "item_code": item_code,
@@ -1143,3 +1144,802 @@ def _send_pp_notification(sp_doc, results, triggered_by, settings):
     # though the automation already succeeded. Queue mode (default, now=False) isolates
     # email failures in the background worker — they appear in Email Queue, not as 500s.
     frappe.sendmail(recipients=recipients, subject=subject, message=message, now=False)
+
+
+# =============================================================================
+# 2026-05-08 · DUAL-CALC ENGINE (Calc A + Calc B)
+# =============================================================================
+#
+# CONTEXT: New per-item driver that runs TWO sequential formulas:
+#
+#   Calc A — Forecast-driven (confirms PP exists for the projection):
+#       Qty_A = (SPOW + PRVSO) − (CURRALSO + ITMWO + ITMWSTK)
+#
+#   Calc B — SO-driven safety net (catches over-projection silent-skip bug):
+#       Qty_B = (PRVSO + CURRSO) − (ITMWSTK + ITMWO)
+#
+#   Both run per item; Calc A commits its PP+WO before Calc B reads ITMWO,
+#   so Calc B sees fresh supply and never double-creates.
+#
+#   Variables:
+#     SPOW      — Sales Projection of specific warehouse (Sales Projected Items.qty_in_stock_uom)
+#     PRVSO     — Previous-month pending Sales Order qty (delivery_date < month_start)
+#     CURRSO    — Current-month pending Sales Order qty (delivery_date in current month)
+#     CURRALSO  — Current-month ALL Sales Order qty (completed + incomplete)
+#     ITMWO     — Pending Work Order qty (qty - produced_qty) for item × FG warehouse
+#     ITMWSTK   — Bin actual_qty for item × warehouse
+#     MINMFG    — Item Minimum Manufacture row for warehouse, in stock UOM
+#
+# RESTRICT (do NOT change without review):
+#   - Sequencing: Calc A → frappe.db.commit() → re-read ITMWO/ITMWSTK → Calc B.
+#     Without the commit, Calc B sees stale supply and double-creates PPs.
+#   - WO creation MUST go through Production Plan submit. Direct WO creation is forbidden.
+#   - Field name `currALso` (mixed case) on TOC Production Plan Run Item is intentional
+#     spec-literal; do NOT rename without updating the writer.
+#   - default_so_warehouse fallback only activates when projection.source_warehouse equals
+#     the configured default — never broadcast to other warehouses.
+#   - Each per-item exception is caught and logged as one Run Item row with status="Error"
+#     so a single bad item does not abort the whole run.
+#   - frappe.db.commit() between Calc A and Calc B; Run Log parent updated atomically
+#     after each per-item processing so partial run survives a worker timeout.
+# =============================================================================
+
+
+def _so_warehouse_filter(projection_warehouse, default_so_warehouse):
+    """
+    Build the warehouse-side WHERE fragment + params for SO queries.
+    If projection's warehouse matches the configured default, we ALSO include
+    SOs with blank set_warehouse (the fallback the user spec'd).
+    """
+    if default_so_warehouse and default_so_warehouse == projection_warehouse:
+        clause = "(so.set_warehouse = %s OR COALESCE(NULLIF(so.set_warehouse, ''), '') = '')"
+    else:
+        clause = "so.set_warehouse = %s"
+    return clause, [projection_warehouse]
+
+
+def _prev_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                          month_start, warehouse, default_so_warehouse=None):
+    """PRVSO with default-warehouse fallback. Pending qty (stock_uom)."""
+    so_conditions, params = _so_conditions_and_params(item_code, pending_statuses, confirmed_states)
+    if not so_conditions:
+        return 0.0
+    wh_clause, wh_params = _so_warehouse_filter(warehouse, default_so_warehouse)
+    params.append(month_start)
+    params.extend(wh_params)
+    result = frappe.db.sql(
+        f"""
+        SELECT COALESCE(SUM(
+            soi.stock_qty - IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+        ), 0) AS qty
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE soi.item_code = %s
+          AND ({" OR ".join(so_conditions)})
+          AND so.delivery_date < %s
+          AND soi.stock_qty > IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+          AND {wh_clause}
+        """,
+        params,
+        as_dict=True,
+    )
+    return flt(result[0].qty if result else 0)
+
+
+def _curr_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                          month_start, next_month_start, warehouse, default_so_warehouse=None):
+    """CURRSO with default-warehouse fallback. Pending qty (stock_uom)."""
+    so_conditions, params = _so_conditions_and_params(item_code, pending_statuses, confirmed_states)
+    if not so_conditions:
+        return 0.0
+    wh_clause, wh_params = _so_warehouse_filter(warehouse, default_so_warehouse)
+    params.extend([month_start, next_month_start])
+    params.extend(wh_params)
+    result = frappe.db.sql(
+        f"""
+        SELECT COALESCE(SUM(
+            soi.stock_qty - IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+        ), 0) AS qty
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE soi.item_code = %s
+          AND ({" OR ".join(so_conditions)})
+          AND so.delivery_date >= %s
+          AND so.delivery_date < %s
+          AND soi.stock_qty > IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+          AND {wh_clause}
+        """,
+        params,
+        as_dict=True,
+    )
+    return flt(result[0].qty if result else 0)
+
+
+def _curr_month_all_so_qty(item_code, month_start, next_month_start, warehouse, default_so_warehouse=None):
+    """
+    CURRALSO — All current-month Sales Order qty (completed + pending), in stock UOM.
+
+    Excludes only Cancelled (docstatus=2). Sums soi.stock_qty (gross ordered, no
+    delivered subtraction) so completed orders count too — CURRALSO is "demand
+    that's already booked / consumed" within the month per the user spec.
+    """
+    wh_clause, wh_params = _so_warehouse_filter(warehouse, default_so_warehouse)
+    params = [item_code, month_start, next_month_start] + wh_params
+    result = frappe.db.sql(
+        f"""
+        SELECT COALESCE(SUM(soi.stock_qty), 0) AS qty
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE soi.item_code = %s
+          AND so.docstatus IN (0, 1)
+          AND so.delivery_date >= %s
+          AND so.delivery_date < %s
+          AND {wh_clause}
+        """,
+        params,
+        as_dict=True,
+    )
+    return flt(result[0].qty if result else 0)
+
+
+def _pending_wo_qty(item_code, warehouse):
+    """
+    ITMWO — Pending Work Order qty (qty - produced_qty) for item × fg_warehouse.
+    Only submitted WOs in active statuses; excludes Completed / Stopped / Cancelled.
+    """
+    result = frappe.db.sql(
+        """
+        SELECT COALESCE(SUM(GREATEST(qty - IFNULL(produced_qty, 0), 0)), 0) AS qty
+        FROM `tabWork Order`
+        WHERE production_item = %s
+          AND fg_warehouse = %s
+          AND docstatus = 1
+          AND status IN ('Not Started', 'In Process', 'Material Transferred')
+        """,
+        [item_code, warehouse],
+        as_dict=True,
+    )
+    return flt(result[0].qty if result else 0)
+
+
+def _pp_exists_for_calc(projection_name, item_code, calc_label):
+    """
+    Per-calc dedup. Distinct from the v1 _pp_exists_for_item — we allow ONE PP per
+    (projection, item, calc), so Calc A's PP doesn't block Calc B from creating its own.
+    Looks at custom_creation_reason field to tell calcs apart.
+    """
+    if not projection_name:
+        return None
+    rows = frappe.db.sql(
+        """
+        SELECT pp.name
+        FROM `tabProduction Plan` pp
+        JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
+        WHERE pp.docstatus != 2
+          AND pp.custom_projection_reference = %s
+          AND ppi.item_code = %s
+          AND pp.custom_creation_reason LIKE %s
+        LIMIT 1
+        """,
+        [projection_name, item_code, f"%[{calc_label}]%"],
+    )
+    return rows[0][0] if rows else None
+
+
+def _wo_names_for_pp(pp_name):
+    """Return a comma-separated string of Work Order names linked to this PP."""
+    if not pp_name:
+        return ""
+    rows = frappe.db.sql_list(
+        """
+        SELECT name FROM `tabWork Order`
+        WHERE production_plan = %s AND docstatus != 2
+        ORDER BY production_item
+        """,
+        pp_name,
+    )
+    return ", ".join(rows) if rows else ""
+
+
+def _append_run_item(run_log_doc, payload):
+    """Insert one TOC Production Plan Run Item row on the parent."""
+    run_log_doc.append("items", {
+        "item_code": payload.get("item_code"),
+        "item_name": payload.get("item_name"),
+        "warehouse": payload.get("warehouse"),
+        "calc_used": payload.get("calc_used"),
+        "status": payload.get("status"),
+        "spow": flt(payload.get("spow")),
+        "prvso": flt(payload.get("prvso")),
+        "currso": flt(payload.get("currso")),
+        "currALso": flt(payload.get("currALso")),
+        "itmwo": flt(payload.get("itmwo")),
+        "itmwstk": flt(payload.get("itmwstk")),
+        "minmfg": flt(payload.get("minmfg")),
+        "qty_of_shortage": flt(payload.get("qty_of_shortage")),
+        "production_qty": flt(payload.get("production_qty")),
+        "production_plan": payload.get("production_plan") or "",
+        "work_orders": payload.get("work_orders") or "",
+        "reason": payload.get("reason") or "",
+    })
+
+
+def _process_item_v2(row, sp_doc, settings, run_log_doc,
+                    pending_statuses, confirmed_states,
+                    month_start, next_month_start, company,
+                    min_mfg_map, default_so_warehouse):
+    """
+    Run Calc A then (after commit) Calc B for a single item.
+    Writes one or two rows to run_log_doc.items and returns summary counts.
+    """
+    item_code = row.item
+    item_name = row.item_name or item_code
+    warehouse = sp_doc.source_warehouse
+    spow_qty  = flt(row.qty_in_stock_uom)
+    summary = {"calc_a_created": 0, "calc_a_skipped": 0,
+               "calc_b_created": 0, "calc_b_skipped": 0, "errors": 0}
+
+    if not warehouse:
+        if default_so_warehouse:
+            warehouse = default_so_warehouse
+        else:
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": "", "calc_used": "Calc A — Forecast",
+                "status": "Skipped - No Warehouse",
+                "spow": spow_qty,
+                "reason": ("Sales Projection has no source_warehouse and "
+                           "TOC Settings.default_so_warehouse is blank. "
+                           "Cannot resolve which warehouse to plan for."),
+            })
+            summary["calc_a_skipped"] += 1
+            summary["calc_b_skipped"] += 1
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": "", "calc_used": "Calc B — SO-driven",
+                "status": "Skipped - No Warehouse",
+                "spow": spow_qty,
+                "reason": "Same as Calc A — no warehouse to plan for.",
+            })
+            return summary
+
+    # ── BOM gate (applies to both calcs) ─────────────────────────────────────
+    bom_no = frappe.db.get_value(
+        "BOM",
+        {"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
+        "name",
+    )
+    if not bom_no:
+        msg = (f"Item {item_code} has no active default submitted BOM. "
+               f"Create a BOM, mark it Default + Active, and submit it.")
+        for calc_label in ("Calc A — Forecast", "Calc B — SO-driven"):
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": calc_label,
+                "status": "Skipped - No BOM",
+                "spow": spow_qty,
+                "reason": msg,
+            })
+        summary["calc_a_skipped"] += 1
+        summary["calc_b_skipped"] += 1
+        return summary
+
+    minmfg = flt(min_mfg_map.get((item_code, warehouse), 0.0))
+
+    # ── Compute Calc A inputs ────────────────────────────────────────────────
+    try:
+        prvso    = _prev_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                                         month_start, warehouse, default_so_warehouse)
+        currso   = _curr_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                                         month_start, next_month_start, warehouse,
+                                         default_so_warehouse)
+        currALso = _curr_month_all_so_qty(item_code, month_start, next_month_start,
+                                          warehouse, default_so_warehouse)
+        itmwo    = _pending_wo_qty(item_code, warehouse)
+        itmwstk  = _warehouse_stock(item_code, warehouse)
+
+        qty_a = (spow_qty + prvso) - (currALso + itmwo + itmwstk)
+        breakdown_a = (
+            f"Calc A: ({spow_qty:.2f} SPOW + {prvso:.2f} PRVSO) − "
+            f"({currALso:.2f} CURRALSO + {itmwo:.2f} ITMWO + {itmwstk:.2f} ITMWSTK) "
+            f"= {qty_a:.2f}"
+        )
+
+        if qty_a <= 0:
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc A — Forecast",
+                "status": "Skipped - No Shortage",
+                "spow": spow_qty, "prvso": prvso, "currso": currso,
+                "currALso": currALso, "itmwo": itmwo, "itmwstk": itmwstk,
+                "minmfg": minmfg, "qty_of_shortage": qty_a,
+                "reason": breakdown_a + " — projection met or oversupplied.",
+            })
+            summary["calc_a_skipped"] += 1
+        elif _pp_exists_for_calc(sp_doc.name, item_code, "Calc A"):
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc A — Forecast",
+                "status": "Skipped - PP Exists",
+                "spow": spow_qty, "prvso": prvso, "currso": currso,
+                "currALso": currALso, "itmwo": itmwo, "itmwstk": itmwstk,
+                "minmfg": minmfg, "qty_of_shortage": qty_a,
+                "reason": (f"{breakdown_a} — but a PP for [Calc A] already "
+                           f"exists for this projection × item. Dedup."),
+            })
+            summary["calc_a_skipped"] += 1
+        else:
+            production_qty = max(qty_a, minmfg)
+            reason_text = (
+                f"[Calc A] {breakdown_a}. Floor (MINMFG) = {minmfg:.2f}. "
+                f"Production qty = max(shortage, MINMFG) = {production_qty:.2f}. "
+                f"Created from projection {sp_doc.name} for "
+                f"{sp_doc.projection_month} {sp_doc.projection_year}."
+            )
+            pp_name = _create_production_plan(
+                item_code, bom_no, production_qty, warehouse,
+                reason_text, company, sp_doc.name,
+            )
+            frappe.db.commit()
+            _submit_pp_and_create_work_orders(pp_name)
+            frappe.db.commit()
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc A — Forecast",
+                "status": "Created",
+                "spow": spow_qty, "prvso": prvso, "currso": currso,
+                "currALso": currALso, "itmwo": itmwo, "itmwstk": itmwstk,
+                "minmfg": minmfg, "qty_of_shortage": qty_a,
+                "production_qty": production_qty,
+                "production_plan": pp_name,
+                "work_orders": _wo_names_for_pp(pp_name),
+                "reason": reason_text,
+            })
+            summary["calc_a_created"] += 1
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"TOC PP Automation v2: Calc A error for {item_code}",
+        )
+        _append_run_item(run_log_doc, {
+            "item_code": item_code, "item_name": item_name,
+            "warehouse": warehouse, "calc_used": "Calc A — Forecast",
+            "status": "Error",
+            "spow": spow_qty,
+            "reason": f"Calc A raised: {str(frappe.get_traceback()[:500])}",
+        })
+        summary["errors"] += 1
+
+    # ── Calc B — re-read ITMWO/ITMWSTK so Calc A's WO is reflected ──────────
+    try:
+        prvso_b    = _prev_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                                           month_start, warehouse, default_so_warehouse)
+        currso_b   = _curr_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                                           month_start, next_month_start, warehouse,
+                                           default_so_warehouse)
+        itmwo_b    = _pending_wo_qty(item_code, warehouse)        # FRESH read
+        itmwstk_b  = _warehouse_stock(item_code, warehouse)       # FRESH read
+
+        qty_b = (prvso_b + currso_b) - (itmwstk_b + itmwo_b)
+        breakdown_b = (
+            f"Calc B: ({prvso_b:.2f} PRVSO + {currso_b:.2f} CURRSO) − "
+            f"({itmwstk_b:.2f} ITMWSTK + {itmwo_b:.2f} ITMWO) = {qty_b:.2f}"
+        )
+
+        if (prvso_b + currso_b) <= 0:
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc B — SO-driven",
+                "status": "Skipped - No Demand",
+                "spow": spow_qty, "prvso": prvso_b, "currso": currso_b,
+                "itmwo": itmwo_b, "itmwstk": itmwstk_b, "minmfg": minmfg,
+                "qty_of_shortage": qty_b,
+                "reason": (f"{breakdown_b} — no pending Sales Order demand "
+                           f"(PRVSO + CURRSO = 0)."),
+            })
+            summary["calc_b_skipped"] += 1
+        elif qty_b <= 0:
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc B — SO-driven",
+                "status": "Skipped - No Shortage",
+                "spow": spow_qty, "prvso": prvso_b, "currso": currso_b,
+                "itmwo": itmwo_b, "itmwstk": itmwstk_b, "minmfg": minmfg,
+                "qty_of_shortage": qty_b,
+                "reason": (f"{breakdown_b} — stock + WO already cover SO demand "
+                           f"(possibly because Calc A just created a WO)."),
+            })
+            summary["calc_b_skipped"] += 1
+        elif _pp_exists_for_calc(sp_doc.name, item_code, "Calc B"):
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc B — SO-driven",
+                "status": "Skipped - PP Exists",
+                "spow": spow_qty, "prvso": prvso_b, "currso": currso_b,
+                "itmwo": itmwo_b, "itmwstk": itmwstk_b, "minmfg": minmfg,
+                "qty_of_shortage": qty_b,
+                "reason": (f"{breakdown_b} — but a PP for [Calc B] already "
+                           f"exists for this projection × item. Dedup."),
+            })
+            summary["calc_b_skipped"] += 1
+        else:
+            production_qty_b = max(qty_b, minmfg)
+            reason_text = (
+                f"[Calc B] {breakdown_b}. Floor (MINMFG) = {minmfg:.2f}. "
+                f"Production qty = max(shortage, MINMFG) = {production_qty_b:.2f}. "
+                f"Safety net for SO demand not covered by Calc A."
+            )
+            pp_name_b = _create_production_plan(
+                item_code, bom_no, production_qty_b, warehouse,
+                reason_text, company, sp_doc.name,
+            )
+            frappe.db.commit()
+            _submit_pp_and_create_work_orders(pp_name_b)
+            frappe.db.commit()
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc B — SO-driven",
+                "status": "Created",
+                "spow": spow_qty, "prvso": prvso_b, "currso": currso_b,
+                "itmwo": itmwo_b, "itmwstk": itmwstk_b, "minmfg": minmfg,
+                "qty_of_shortage": qty_b,
+                "production_qty": production_qty_b,
+                "production_plan": pp_name_b,
+                "work_orders": _wo_names_for_pp(pp_name_b),
+                "reason": reason_text,
+            })
+            summary["calc_b_created"] += 1
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"TOC PP Automation v2: Calc B error for {item_code}",
+        )
+        _append_run_item(run_log_doc, {
+            "item_code": item_code, "item_name": item_name,
+            "warehouse": warehouse, "calc_used": "Calc B — SO-driven",
+            "status": "Error",
+            "spow": spow_qty,
+            "reason": f"Calc B raised: {str(frappe.get_traceback()[:500])}",
+        })
+        summary["errors"] += 1
+
+    return summary
+
+
+def _run_for_projection(sp_doc, triggered_by, settings):
+    """
+    Drive one Sales Projection through Calc A + Calc B for every row.
+    Creates ONE TOC Production Plan Run Log; returns the summary dict.
+    """
+    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
+    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
+    month_start, next_month_start = _month_boundaries(sp_doc)
+    company = _get_company()
+    default_so_warehouse = settings.get("default_so_warehouse") or None
+    min_mfg_map = _build_min_mfg_map([row.item for row in sp_doc.table_mibv])
+
+    run_log = frappe.new_doc("TOC Production Plan Run Log")
+    run_log.run_started = now_datetime()
+    run_log.triggered_by = triggered_by
+    run_log.company = company
+    run_log.sales_projection = sp_doc.name
+    run_log.warehouse = sp_doc.source_warehouse or default_so_warehouse or ""
+    run_log.pending_so_statuses_used = "\n".join(pending_statuses) if pending_statuses else ""
+    run_log.default_so_warehouse_used = default_so_warehouse or ""
+    run_log.calc_a_created = 0
+    run_log.calc_a_skipped = 0
+    run_log.calc_b_created = 0
+    run_log.calc_b_skipped = 0
+    run_log.errors = 0
+    run_log.flags.ignore_mandatory = True
+    run_log.insert(ignore_permissions=True)
+
+    summary = {"calc_a_created": 0, "calc_a_skipped": 0,
+               "calc_b_created": 0, "calc_b_skipped": 0, "errors": 0}
+
+    for row in sp_doc.table_mibv:
+        item_summary = _process_item_v2(
+            row, sp_doc, settings, run_log,
+            pending_statuses, confirmed_states,
+            month_start, next_month_start, company,
+            min_mfg_map, default_so_warehouse,
+        )
+        for k in summary:
+            summary[k] += item_summary.get(k, 0)
+
+        # Persist incremental state per item so a later worker timeout
+        # leaves a partial-but-correct log.
+        run_log.calc_a_created = summary["calc_a_created"]
+        run_log.calc_a_skipped = summary["calc_a_skipped"]
+        run_log.calc_b_created = summary["calc_b_created"]
+        run_log.calc_b_skipped = summary["calc_b_skipped"]
+        run_log.errors = summary["errors"]
+        run_log.save(ignore_permissions=True)
+        frappe.db.commit()
+
+    run_log.run_completed = now_datetime()
+    run_log.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    # Email the run summary to opted-in TOC notification users (notify_on_wo_create=1).
+    # Wrapped in its own try/except inside _send_run_log_email so a mail failure
+    # cannot mask a successful run.
+    _send_run_log_email(run_log, sp_doc, triggered_by, settings)
+
+    return summary, run_log.name
+
+
+@frappe.whitelist()
+def run_projection_automation_for_all_warehouses(triggered_by="manual_button"):
+    """
+    PUBLIC API — entry point for both the TOC Settings 'Run Now' button and
+    the 02:00 AM daily cron. Iterates every submitted Sales Projection of the
+    current month and runs Calc A + Calc B per item.
+
+    Returns aggregated summary dict {calc_a_created, calc_a_skipped, ...}.
+    """
+    frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
+
+    settings = frappe.get_cached_doc("TOC Settings")
+    if not settings.enable_projection_automation:
+        frappe.throw(_(
+            "Projection Automation is disabled. "
+            "Enable it in TOC Settings → Sales Projection Automation."
+        ))
+
+    now_dt = now_datetime()
+    month_name = MONTH_NAMES[now_dt.month - 1]
+    year = now_dt.year
+
+    sp_names = frappe.get_all(
+        "Sales Projection",
+        filters={
+            "projection_month": month_name,
+            "projection_year": year,
+            "docstatus": 1,
+        },
+        pluck="name",
+    )
+
+    aggregated = {"calc_a_created": 0, "calc_a_skipped": 0,
+                  "calc_b_created": 0, "calc_b_skipped": 0, "errors": 0,
+                  "run_logs": []}
+
+    if not sp_names:
+        aggregated["message"] = (
+            f"No submitted Sales Projection found for {month_name} {year}."
+        )
+        return aggregated
+
+    for sp_name in sp_names:
+        try:
+            sp_doc = frappe.get_doc("Sales Projection", sp_name)
+            summary, log_name = _run_for_projection(sp_doc, triggered_by, settings)
+            for k in ("calc_a_created", "calc_a_skipped",
+                      "calc_b_created", "calc_b_skipped", "errors"):
+                aggregated[k] += summary.get(k, 0)
+            aggregated["run_logs"].append(log_name)
+            # Stamp last_auto_run on the projection
+            frappe.db.set_value(
+                "Sales Projection", sp_name,
+                "last_auto_run", now_datetime(),
+                update_modified=False,
+            )
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(),
+                f"TOC PP Automation v2: projection {sp_name} failed",
+            )
+            aggregated["errors"] += 1
+
+    frappe.db.commit()
+    return aggregated
+
+
+# =============================================================================
+# 2026-05-08 · RUN LOG EMAIL NOTIFIER (v2)
+# =============================================================================
+#
+# CONTEXT: After each Sales Projection processing pass, compose a single HTML
+#   email summarising the per-item × per-calc decisions and send to every user
+#   in TOC Settings → projection_notification_users where notify_on_wo_create=1.
+#
+# DESIGN:
+#   - Identical recipient list to the v1 _send_pp_notification (consistent UX).
+#   - Sent from the run-log writer (_run_for_projection) ONCE per projection.
+#   - Email body lifts directly off the run log — no DB re-read.
+#   - HTML template uses Frappe email-friendly inline styles (no class deps).
+#   - Wrapped in try/except so a mail server failure cannot break the engine.
+#   - frappe.sendmail(..., now=False) so the email queue absorbs failures.
+#
+# RESTRICT:
+#   - Do NOT call now=True. If email password decryption fails, now=True
+#     bubbles a 500 back to the engine even though PPs were created correctly.
+#   - Do NOT include items table for runs with > 200 item-calc rows. Email
+#     bodies above ~500 KB get rejected by some MTAs. Truncate gracefully.
+#   - Recipient list MUST be filtered by notify_on_wo_create — we do NOT spam
+#     "On Edit" subscribers with engine summaries.
+# =============================================================================
+
+
+def _format_qty(v):
+    """Render a Float for HTML email — comma-thousands, 2 dp, blank if 0."""
+    if v is None or v == 0:
+        return "—"
+    return f"{flt(v):,.2f}"
+
+
+def _row_color_for_status(status):
+    if not status:
+        return "#f8fafc"
+    if status == "Created":
+        return "#ecfdf5"  # green-50
+    if status == "Error":
+        return "#fef2f2"  # red-50
+    return "#f8fafc"
+
+
+def _send_run_log_email(run_log_doc, sp_doc, triggered_by, settings):
+    """Compose and queue one summary email per Sales Projection run."""
+    try:
+        recipients = [
+            row.user for row in (settings.projection_notification_users or [])
+            if row.user and cint(row.notify_on_wo_create)
+        ]
+        if not recipients:
+            return
+
+        # Re-read child rows from DB so we get persisted state (the in-memory
+        # run_log_doc has them too but DB is canonical).
+        rows = frappe.db.sql("""
+            SELECT item_code, item_name, warehouse, calc_used, status,
+                   spow, prvso, currso, currALso, itmwo, itmwstk, minmfg,
+                   qty_of_shortage, production_qty, production_plan,
+                   work_orders, reason
+            FROM `tabTOC Production Plan Run Item`
+            WHERE parent=%s
+            ORDER BY item_code, calc_used
+        """, (run_log_doc.name,), as_dict=True)
+
+        site_url = frappe.utils.get_url()
+        log_url = f"{site_url}/app/toc-production-plan-run-log/{run_log_doc.name}"
+        sp_url  = f"{site_url}/app/sales-projection/{sp_doc.name}"
+
+        summary_color = "#dc2626" if run_log_doc.errors else (
+            "#16a34a" if (run_log_doc.calc_a_created + run_log_doc.calc_b_created) else "#64748b"
+        )
+
+        rows_html = []
+        max_rows = 200
+        for r in rows[:max_rows]:
+            color = _row_color_for_status(r.status)
+            pp_link = (
+                f'<a href="{site_url}/app/production-plan/{r.production_plan}" '
+                f'style="color:#1e40af;text-decoration:none">{r.production_plan}</a>'
+                if r.production_plan else "—"
+            )
+            wo_html = ""
+            if r.work_orders:
+                wos = [w.strip() for w in r.work_orders.split(",") if w.strip()]
+                wo_html = " · ".join(
+                    f'<a href="{site_url}/app/work-order/{wo}" '
+                    f'style="color:#1e40af;text-decoration:none">{wo}</a>'
+                    for wo in wos
+                )
+
+            rows_html.append(f"""
+              <tr style="background:{color};border-bottom:1px solid #e2e8f0">
+                <td style="padding:8px 10px;font-size:13px;font-weight:600">{r.item_code}<br><span style="color:#64748b;font-weight:400;font-size:11px">{r.item_name or ''}</span></td>
+                <td style="padding:8px 10px;font-size:12px;color:#475569">{r.calc_used or '-'}</td>
+                <td style="padding:8px 10px;font-size:12px;font-weight:600">{r.status or '-'}</td>
+                <td style="padding:8px 10px;font-size:11px;font-family:Menlo,monospace;color:#1e293b">{r.reason or ''}</td>
+                <td style="padding:8px 10px;font-size:12px;text-align:right">{_format_qty(r.qty_of_shortage)}</td>
+                <td style="padding:8px 10px;font-size:12px;text-align:right;font-weight:600">{_format_qty(r.production_qty)}</td>
+                <td style="padding:8px 10px;font-size:12px">{pp_link}</td>
+                <td style="padding:8px 10px;font-size:11px;color:#475569">{wo_html or '—'}</td>
+              </tr>
+            """)
+        if len(rows) > max_rows:
+            rows_html.append(f"""
+              <tr><td colspan="8" style="padding:8px 10px;font-size:12px;color:#94a3b8;text-align:center;font-style:italic">
+                … {len(rows) - max_rows} more rows truncated. View full log →
+                <a href="{log_url}" style="color:#1e40af">{run_log_doc.name}</a>
+              </td></tr>
+            """)
+
+        subject = (
+            f"[TOC] Production Plan Automation — {sp_doc.name} · "
+            f"{sp_doc.projection_month} {sp_doc.projection_year} · "
+            f"{run_log_doc.calc_a_created + run_log_doc.calc_b_created} created"
+        )
+
+        message = f"""
+        <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#1f2937;max-width:880px">
+          <div style="border-left:4px solid {summary_color};padding:14px 18px;background:#f8fafc;border-radius:0 6px 6px 0;margin-bottom:18px">
+            <div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#64748b">
+              TOC Production Plan Automation Run
+            </div>
+            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-top:4px">
+              <a href="{log_url}" style="color:#1e3a8a;text-decoration:none">{run_log_doc.name}</a>
+            </div>
+            <div style="font-size:13px;color:#475569;margin-top:6px">
+              Sales Projection &nbsp;<a href="{sp_url}" style="color:#1e40af;text-decoration:none">{sp_doc.name}</a>
+              &nbsp;·&nbsp; {sp_doc.projection_month} {sp_doc.projection_year}
+              &nbsp;·&nbsp; Warehouse <strong>{sp_doc.source_warehouse or '—'}</strong>
+              &nbsp;·&nbsp; Triggered by <strong>{triggered_by}</strong>
+            </div>
+          </div>
+
+          <table style="width:100%;border-collapse:collapse;margin-bottom:14px">
+            <tr>
+              <td style="padding:10px;background:#ecfdf5;border:1px solid #d1fae5;border-radius:6px;text-align:center;width:25%">
+                <div style="font-size:11px;text-transform:uppercase;color:#047857;letter-spacing:.05em">Calc A Created</div>
+                <div style="font-size:22px;font-weight:700;color:#065f46;margin-top:4px">{run_log_doc.calc_a_created}</div>
+              </td>
+              <td style="width:8px"></td>
+              <td style="padding:10px;background:#fef9c3;border:1px solid #fef08a;border-radius:6px;text-align:center;width:25%">
+                <div style="font-size:11px;text-transform:uppercase;color:#854d0e;letter-spacing:.05em">Calc A Skipped</div>
+                <div style="font-size:22px;font-weight:700;color:#713f12;margin-top:4px">{run_log_doc.calc_a_skipped}</div>
+              </td>
+              <td style="width:8px"></td>
+              <td style="padding:10px;background:#dbeafe;border:1px solid #bfdbfe;border-radius:6px;text-align:center;width:25%">
+                <div style="font-size:11px;text-transform:uppercase;color:#1e40af;letter-spacing:.05em">Calc B Created</div>
+                <div style="font-size:22px;font-weight:700;color:#1e3a8a;margin-top:4px">{run_log_doc.calc_b_created}</div>
+              </td>
+              <td style="width:8px"></td>
+              <td style="padding:10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;text-align:center;width:25%">
+                <div style="font-size:11px;text-transform:uppercase;color:#475569;letter-spacing:.05em">Calc B Skipped</div>
+                <div style="font-size:22px;font-weight:700;color:#0f172a;margin-top:4px">{run_log_doc.calc_b_skipped}</div>
+              </td>
+            </tr>
+          </table>
+
+          {f'<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:14px"><strong>{run_log_doc.errors} error(s)</strong> during this run. See engine log on the run document.</div>' if run_log_doc.errors else ''}
+
+          <div style="font-size:13px;color:#0f172a;margin-bottom:8px;font-weight:600">Per-item decisions</div>
+          <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:6px">
+            <table style="width:100%;border-collapse:collapse;background:white">
+              <thead>
+                <tr style="background:#0f172a;color:#f8fafc">
+                  <th style="padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Item</th>
+                  <th style="padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Calc</th>
+                  <th style="padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Status</th>
+                  <th style="padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Formula / Reason</th>
+                  <th style="padding:9px 10px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Shortage</th>
+                  <th style="padding:9px 10px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Prod Qty</th>
+                  <th style="padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Production Plan</th>
+                  <th style="padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Work Orders</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(rows_html)}
+              </tbody>
+            </table>
+          </div>
+
+          <div style="font-size:12px;color:#64748b;margin-top:14px;padding-top:12px;border-top:1px dashed #cbd5e1">
+            Snapshot at run time: pending SO statuses = <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px">{(run_log_doc.pending_so_statuses_used or '').replace(chr(10), ', ')}</code>
+            &nbsp;·&nbsp; Default SO warehouse = <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px">{run_log_doc.default_so_warehouse_used or '—'}</code>
+            &nbsp;·&nbsp; Engine v2 (Calc A + Calc B dual-run, intermediate commit guarantees no double-count).
+            <br>
+            <a href="{log_url}" style="color:#1e40af;text-decoration:none">→ Open the full run log on the site</a>
+          </div>
+        </div>
+        """
+
+        # NOTE: now=False → email is queued. Email Queue absorbs MTA failures so
+        # they do not bubble back into the engine. See DANGER ZONE on
+        # _send_pp_notification (v1) for the full rationale.
+        frappe.sendmail(
+            recipients=recipients,
+            subject=subject,
+            message=message,
+            now=False,
+            reference_doctype="TOC Production Plan Run Log",
+            reference_name=run_log_doc.name,
+        )
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"TOC PP Automation v2: email failed for {run_log_doc.name}",
+        )

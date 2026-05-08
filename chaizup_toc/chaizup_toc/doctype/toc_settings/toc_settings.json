@@ -35,9 +35,11 @@
   "custom_deepseek_api_key",
   "projection_section",
   "enable_projection_automation",
+  "default_so_warehouse",
   "projection_pending_so_statuses",
   "projection_confirmed_so_workflow_states",
   "col_projection",
+  "run_projection_automation_now",
   "projection_notification_users",
   "demo_section",
   "demo_data_manifest"
@@ -266,6 +268,13 @@
    "label": "Pending Sales Order Statuses — Submitted SOs (one per line)"
   },
   {
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📦</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Default Warehouse for Sales Orders</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        When a Sales Order line item has <b>no Warehouse</b> set, this fallback warehouse is used by the Production Plan automation to compute stock and route shortages. Leave blank to skip such SO lines silently.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Tip:</b> If your sales reps frequently leave Warehouse blank, set this to your primary distribution warehouse so the engine never silently drops their orders.\n    </div>\n</div>",
+   "fieldname": "default_so_warehouse",
+   "fieldtype": "Link",
+   "options": "Warehouse",
+   "label": "Default Warehouse for Sales Orders"
+  },
+  {
    "default": "Confirmed",
    "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">🔗</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Draft Demand Logic</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Define specific <b>Workflow States</b> for Draft Sales Orders ($docstatus=0$) that should be treated as committed demand, bypassing the standard status list above.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#6366f1;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">DRAFT ONLY</div>\n            <div style=\"font-size:12px;color:#444\">\n                Counted as <b>Committed Demand</b> regardless of the main statuses. \n                <br><i style=\"color:#64748b\">Standard Default: <b>Confirmed</b></i>\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#f1f5f9;border-radius:4px;border-left:3px solid #4f46e5\">\n        <div style=\"font-size:11px;color:#475569;line-height:1.4\">\n            <b>Custom Workflows:</b> If your internal Sales Order approval process uses different state names (e.g., \"Validated\", \"Pre-Approved\"), update this list to ensure accurate demand tracking.\n        </div>\n    </div>\n</div>",
    "fieldname": "projection_confirmed_so_workflow_states",
@@ -275,6 +284,12 @@
   {
    "fieldname": "col_projection",
    "fieldtype": "Column Break"
+  },
+  {
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;font-family:sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:8px\">\n        <span style=\"font-size:15px;margin-right:8px\">▶</span>\n        <strong style=\"font-size:12px;text-transform:uppercase;letter-spacing:0.025em;color:#1e40af\">Manual Run Trigger</strong>\n    </div>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:0;line-height:1.5\">\n        Click <b>Run Now</b> to execute Calc A (forecast) and Calc B (SO-driven) for every submitted Sales Projection of the current month. Each per-item decision is recorded in the <b>TOC Production Plan Run Log</b>.\n    </p>\n</div>",
+   "fieldname": "run_projection_automation_now",
+   "fieldtype": "Button",
+   "label": "Run Now (Calc A + Calc B)"
   },
   {
    "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📧</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Email Notification Settings</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Add users to the table below to subscribe them to automated alerts. Each user can receive three types of updates:\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#2490ef;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON EDIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered every time a <b>Sales Projection</b> draft is saved.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON SUBMIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered when a Sales Projection is officially finalized/submitted.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#ff9800;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON WO RUN</div>\n            <div style=\"font-size:12px;color:#444\">\n                Full summary report (daily or manual) including:\n                <ul style=\"margin:4px 0 0 0;padding-left:18px;color:#666;font-size:11px\">\n                    <li>List of Work Orders created</li>\n                    <li>Items skipped and specific reasons (Capacity/BOM)</li>\n                </ul>\n            </div>\n        </div>\n    </div>\n</div>",

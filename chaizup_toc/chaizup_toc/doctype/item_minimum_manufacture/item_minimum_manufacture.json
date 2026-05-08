@@ -22,12 +22,12 @@
    "reqd": 1
   },
   {
-   "columns": 2,
+   "columns": 5,
    "description": "Minimum units to produce per run (in the selected UOM). If the calculated shortage is less than this, the Production Plan qty is raised to this value to avoid under-utilising production machines.",
    "fieldname": "min_manufacturing_qty",
    "fieldtype": "Float",
    "in_list_view": 1,
-   "label": "Min Manufacturing Qty",
+   "label": "Min Purchase / Production Qty",
    "non_negative": 1,
    "reqd": 1
   },
