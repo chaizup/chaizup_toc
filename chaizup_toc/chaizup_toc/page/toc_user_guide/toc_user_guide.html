@@ -1062,6 +1062,18 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
   <p>Assign the role via <em>User → Roles → "Sales Projection Admin"</em>, or from the shell:</p>
   <div class="tug-code-block"><code class="tug-code">bench --site &lt;site&gt; add-role &lt;user@example.com&gt; "Sales Projection Admin"</code></div>
 
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Cancelling Projections &amp; Linked Production Plans</h3>
+  <p>The PP Automation engine stamps <code class="tug-code">Production Plan.custom_projection_reference</code> with the source Sales Projection's name, and writes the PP name back to the SP's <code class="tug-code">Sales Projected Items.wo_name</code> column. Until 2026-05-12 these two Link fields produced a <strong>circular cancellation deadlock</strong> — cancelling the Sales Projection threw <em>"linked with Production Plan"</em>, while cancelling the Production Plan threw <em>"linked with Sales Projection"</em>, with no way out.</p>
+  <p>The deadlock is now broken from both sides:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Cancel SP:</strong> the controller's <code class="tug-code">before_cancel</code> sets <code class="tug-code">self.flags.ignore_links = True</code>, so Frappe's back-link guard skips the inbound PP traceability reference. The linked PP keeps its <code class="tug-code">custom_projection_reference</code> for audit — the SP doc still exists, just at docstatus = 2.</li>
+    <li><strong>Cancel PP:</strong> a <code class="tug-code">before_cancel</code> doc_event hook (<code class="tug-code">on_production_plan_before_cancel</code>) clears <code class="tug-code">wo_name</code> and <code class="tug-code">wo_status</code> on every SP child row pointing to this PP, just before Frappe runs its back-link check. This is targeted — the normal Work Order / Material Request / Stock Entry inbound link guards on PP remain intact, so users can still NOT cancel a PP that has active WOs against it.</li>
+  </ul>
+  <div class="tug-callout tug-callout-info">
+    <span class="tug-callout-icon">🔄</span>
+    <div>Both cancel orders are supported: <strong>SP-first then PP</strong>, and <strong>PP-first then SP</strong>. Either path works, and either order preserves the <code class="tug-code">custom_projection_reference</code> on the PP for audit traceability.</div>
+  </div>
+
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Cancelled Projections &amp; the Duplicate Check</h3>
   <p>The "one projection per <em>month × year × warehouse</em>" rule applies only to <strong>active</strong> projections — Draft (<code class="tug-code">docstatus=0</code>) and Submitted (<code class="tug-code">docstatus=1</code>). Cancelled projections (<code class="tug-code">docstatus=2</code>) are <em>silently excluded</em> from the validator, so you can cancel a stale projection and immediately create a brand-new one for the same period+warehouse without going through the Amend flow.</p>
   <p>If the duplicate validator does block your save, the error message now spells out whether the offender is a <strong>Draft</strong> (delete or re-open it) or a <strong>Submitted</strong> doc (cancel it, then either Amend or create new). Internally this is enforced by a positive allowlist <code class="tug-code">docstatus IN (0, 1)</code> in <code class="tug-code">_validate_unique_period_warehouse()</code>.</p>

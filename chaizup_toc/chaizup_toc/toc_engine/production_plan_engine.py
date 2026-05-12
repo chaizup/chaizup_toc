@@ -226,6 +226,69 @@ def on_production_plan_before_insert(doc, method):
 
 
 # =============================================================================
+# DOC EVENT — Production Plan: before_cancel
+# CONTEXT (CIRCULAR CANCEL DEADLOCK FIX — 2026-05-12):
+#   `Sales Projected Items.wo_name` is a Link → Production Plan (set by the
+#   automation engine after PP creation). When the user tries to cancel a PP,
+#   Frappe's `check_no_back_links_exist` finds those SP child rows and throws
+#   "Cannot cancel — linked with Sales Projection". This is the PP-side half of
+#   the SP↔PP circular cancel deadlock (the SP side is fixed in
+#   `SalesProjection.before_cancel` via `self.flags.ignore_links = True`).
+#
+#   Approach (asymmetric, intentional):
+#     - SP side: full back-link bypass via flags.ignore_links. Safe because the
+#       ONLY inbound link to SP is `PP.custom_projection_reference`, which is
+#       benign to leave hanging.
+#     - PP side (THIS HOOK): TARGETED clear of just the
+#       Sales Projected Items.wo_name + .wo_status fields for rows pointing to
+#       this PP. We do NOT use flags.ignore_links here — that would also bypass
+#       the legitimate Work Order / Material Request / Stock Entry guards.
+#       Cancelling a PP that has active Work Orders against it MUST still be
+#       blocked by ERPNext's standard guard.
+#
+# DANGER ZONE:
+#   - This runs `frappe.db.set_value` on a Sales Projected Items child row
+#     of a (likely submitted) Sales Projection parent. Direct DB write
+#     bypasses Frappe document validation — which is exactly what we want
+#     here, because both wo_name and wo_status are read_only display fields
+#     that the engine itself writes via the same db.set_value path AFTER
+#     submit. Do NOT switch to `doc.save()` — that would touch the parent's
+#     modified timestamp and re-trigger SP.validate().
+#   - update_modified=False on the SP child write so the parent SP's
+#     "modified" timestamp does not shift just because a PP underneath it
+#     got cancelled. Audit trail on the SP stays clean.
+#   - This hook runs BEFORE Frappe's own back-link existence check (which
+#     fires inside `_cancel`). By the time the check runs, the child rows
+#     no longer have `wo_name = doc.name`, so the check passes.
+# RESTRICT:
+#   - Do NOT widen the cleared field set. Only `wo_name` is the Link field
+#     that triggers Frappe's back-link guard; `wo_status` is cleared as a
+#     paired cosmetic update so the SP doesn't show a misleading "Created"
+#     status pointing at a now-cancelled PP.
+#   - Do NOT remove this hook even if the SP-side fix alone seems to work.
+#     The deadlock is symmetric — both sides are needed to keep ALL
+#     operator-cancel paths green (SP-first AND PP-first).
+#   - Hook signature `(doc, method)` is fixed by Frappe — the `method` arg
+#     comes from the doc_event registration and equals "before_cancel" here.
+# =============================================================================
+def on_production_plan_before_cancel(doc, method=None):
+    """Clear SP child-row wo_name references before PP cancel, so Frappe's
+    back-link guard does not block. Keeps WO/MR/SE inbound link checks intact."""
+    linked_rows = frappe.get_all(
+        "Sales Projected Items",
+        filters={"wo_name": doc.name},
+        fields=["name", "parent"],
+    )
+    for row in linked_rows:
+        frappe.db.set_value(
+            "Sales Projected Items",
+            row["name"],
+            {"wo_name": None, "wo_status": None},
+            update_modified=False,
+        )
+
+
+# =============================================================================
 # CORE ITEM PROCESSOR
 # CONTEXT: Runs BOM gate, shortage formula (Calc 1 or Calc 2), min-mfg floor,
 #   dedup check, PP creation, then auto-submit + Work Order creation.

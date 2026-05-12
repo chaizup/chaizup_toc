@@ -116,6 +116,26 @@ COALESCE(SUM(soi.qty - soi.delivered_qty), 0)
 - **Never** use `ppi.qty` — that column does not exist in `tabProduction Plan Item`. The correct column is `ppi.planned_qty`.
 - ERPNext Production Plan Item schema (confirmed): `planned_qty`, `pending_qty`, `produced_qty`, `ordered_qty`. There is no `qty` column.
 
+### RESTRICT — Circular Cancel Deadlock Fix (added 2026-05-12)
+- The doc_event `before_cancel` on Production Plan is hooked to
+  `on_production_plan_before_cancel(doc, method)` in this module. It clears
+  `Sales Projected Items.wo_name` and `.wo_status` for every SPI row pointing
+  at the PP being cancelled, so Frappe's back-link guard does not block.
+- This is the PP-side half of the SP↔PP circular cancel deadlock fix. The
+  SP-side half lives in `SalesProjection.before_cancel` and uses
+  `self.flags.ignore_links = True` (full bypass, safe because the only
+  inbound link to SP is `PP.custom_projection_reference`).
+- **Do NOT** use `flags.ignore_links` on the PP side. PP has legitimate
+  inbound links from Work Order / Material Request / Stock Entry / Purchase
+  Order that MUST still block cancel when those linked docs are active.
+- The hook uses `update_modified=False` so cancelling a PP does NOT bump the
+  parent SP's `modified` timestamp. The SP audit trail stays clean —
+  cancellation of a child PP is not a "change to the SP".
+- The hook does NOT clear `Production Plan.custom_projection_reference`.
+  Cancelling the PP preserves the source-projection link for audit. Engine
+  dedup queries already filter out cancelled PPs, so this stale-on-cancelled
+  reference is benign.
+
 ### RESTRICT — stock_uom on po_items (added 2026-05-12)
 - `Production Plan Item.stock_uom` is `reqd=1` and `read_only=1` in ERPNext v16. ERPNext's own `get_items()` always passes it (`item_details.stock_uom`).
 - `_create_production_plan()` MUST fetch `Item.stock_uom` and pass it in the `po_items.append({...})` dict. Without this:

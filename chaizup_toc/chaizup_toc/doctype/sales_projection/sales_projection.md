@@ -84,6 +84,65 @@ Or via UI: **User → Roles → add "Sales Projection Admin"**.
 
 Both duplicate-item and uniqueness rules run in `validate()` and `before_submit()`.
 
+---
+
+## SP ↔ PP Circular Cancel Deadlock (Fix landed 2026-05-12)
+
+### The deadlock
+
+Two link fields create a symmetric back-link guard that traps users in a loop:
+
+| Direction | Field | Frappe behaviour |
+|-----------|-------|------------------|
+| **PP → SP** | `Production Plan.custom_projection_reference` (Link → Sales Projection) | When user tries to cancel the **SP**, Frappe scans for inbound Link fields and finds the PP → throws `LinkExistsError: Cannot cancel because linked with Production Plan`. |
+| **SP → PP** | `Sales Projected Items.wo_name` (Link → Production Plan, on the SP's child table) | When user tries to cancel the **PP**, Frappe finds the SP child row pointing to it → throws `LinkExistsError: Cannot cancel because linked with Sales Projection`. |
+
+Each side tells the user to cancel the other one first → no cancellation path is reachable.
+
+### The fix (asymmetric on purpose)
+
+**SP side** — `SalesProjection.before_cancel()` (in `sales_projection.py`):
+```python
+def before_cancel(self):
+    self.flags.ignore_links = True
+```
+- Tells Frappe's `check_no_back_links_exist` to skip the inbound-link scan.
+- Safe because the **only** inbound link to Sales Projection in this app is the PP traceability reference, which is benign to leave hanging on a cancelled SP.
+- The PP keeps `custom_projection_reference = <sp_name>` after the SP is cancelled — engine dedup, run log, and email reports all query by docname, not by docstatus.
+
+**PP side** — `on_production_plan_before_cancel(doc, method)` (doc_event registered in `hooks.py`, code in `toc_engine/production_plan_engine.py`):
+```python
+linked_rows = frappe.get_all(
+    "Sales Projected Items",
+    filters={"wo_name": doc.name},
+    fields=["name"],
+)
+for row in linked_rows:
+    frappe.db.set_value(
+        "Sales Projected Items", row["name"],
+        {"wo_name": None, "wo_status": None},
+        update_modified=False,
+    )
+```
+- **Targeted clear**, not a blanket bypass. We deliberately do NOT use `flags.ignore_links` on the PP side because PP has legitimate inbound links (Work Order, Material Request, Stock Entry) that MUST still block cancel when active.
+- `update_modified=False` so the parent SP's audit timestamp doesn't shift just because a PP underneath it got cancelled.
+- After this hook, Frappe's back-link scan finds no `wo_name = pp.name` rows → cancel proceeds.
+
+### Verified workflows (after fix)
+
+| Order | Result |
+|-------|--------|
+| Cancel SP only | ✅ Succeeds. PPs remain submitted with link preserved. |
+| Cancel SP, then later cancel PP | ✅ Both succeed. SP child row's `wo_name` cleared by PP hook. |
+| Cancel PP only (SP still submitted) | ✅ Succeeds. Engine dedup still recognises this projection if user re-runs (PP is cancelled, dedup query filters cancelled out). |
+| Cancel PP, then later cancel SP | ✅ Both succeed. |
+
+### RESTRICT — do not touch
+
+- Do not collapse the two halves of this fix into one place. SP side and PP side each own their own back-link guard; merging them would either over-bypass (PP side losing WO guard) or under-bypass (SP side still trapped).
+- Do not switch the SP-side mechanism to module-level `frappe.flags.ignore_links`. The instance flag (`self.flags.ignore_links`) is scoped to this single cancel call; the module flag leaks into unrelated cancels in the same request.
+- Do not clear `Production Plan.custom_projection_reference` on SP cancel. Audit traceability + engine dedup both depend on it. The link is preserved by design — the cancelled SP doc still exists as a target.
+
 #### Cancel → New Projection workflow (2026-05-12)
 
 | Step | What | Effect |

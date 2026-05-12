@@ -59,6 +59,53 @@ class SalesProjection(Document):
 		self._validate_unique_period_warehouse()
 
 	# =========================================================================
+	# CONTEXT (CIRCULAR CANCEL DEADLOCK FIX — 2026-05-12):
+	#   The PP Automation engine writes the Sales Projection's docname into
+	#   `Production Plan.custom_projection_reference` (Link field). Frappe's
+	#   default cancellation guard (`check_no_back_links_exist`) scans every
+	#   DocType in the system for inbound Link fields pointing to this doc
+	#   AND a docstatus < 2 — finds those PPs and throws LinkExistsError
+	#   ("Cannot cancel — linked with Production Plan").
+	#
+	#   At the same time, the SP's own child table (Sales Projected Items)
+	#   has `wo_name` as a Link → Production Plan, so the symmetric guard on
+	#   the PP side blocks PP cancel ("Cannot cancel — linked with Sales
+	#   Projection"). The user-visible result is a circular deadlock: each
+	#   document tells the user to cancel the OTHER one first.
+	#
+	#   The break-out: tell Frappe to skip the back-link guard ONLY for this
+	#   SP cancel. `self.flags.ignore_links = True` is the documented hook
+	#   that `check_no_back_links_exist` honours (frappe/model/document.py).
+	#
+	# DANGER ZONE:
+	#   - This bypass is scoped to ONE docstatus transition (1 → 2) of THIS
+	#     SP only. It does NOT affect future cancels of other docs.
+	#   - The PP keeps its `custom_projection_reference` value after the SP
+	#     is cancelled. That's intentional — the reference is to a Sales
+	#     Projection docname, which still exists (just with docstatus=2).
+	#     Engine dedup, run-log linkage, and email reports all keep working
+	#     because they query by docname, not docstatus.
+	#   - The complementary PP-side severing of `Sales Projected Items.wo_name`
+	#     happens in the `Production Plan.before_cancel` hook registered in
+	#     hooks.py, NOT here. Do NOT collapse the two fixes into one place —
+	#     each side owns its own half of the deadlock.
+	# RESTRICT:
+	#   - Do NOT switch the bypass mechanism to `frappe.flags.ignore_links`
+	#     (the module-level flag). The instance flag is contained to this
+	#     cancel call; the module flag leaks into unrelated cancels in the
+	#     same request.
+	#   - Do NOT clear `custom_projection_reference` on linked PPs here.
+	#     Severing the link destroys audit traceability AND breaks the PP
+	#     Automation dedup query that uses this field. Always keep the link
+	#     value; only skip the existence check.
+	#   - Do NOT remove this method. The SP→PP→SP deadlock is a hard block
+	#     on operator workflows (cancel + new, cancel + amend); without it,
+	#     users cannot cancel any SP that has produced PPs.
+	# =========================================================================
+	def before_cancel(self):
+		self.flags.ignore_links = True
+
+	# =========================================================================
 	# CONTEXT: Blocks saving or submitting a Sales Projection for a past month.
 	#   Users may only create/edit projections for the current month or future
 	#   months. projection_month is a Select string ("January"…"December");

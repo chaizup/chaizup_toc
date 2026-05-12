@@ -446,6 +446,28 @@ frappe.db.commit()
 - `chaizup_toc/patches/v1_0/add_sales_projection_admin_role.py` — new
 - `chaizup_toc/patches.txt` — registered the new patch
 
+### SP ↔ PP circular cancel deadlock fix (2026-05-12)
+Two Link fields produced a symmetric back-link guard:
+
+- `Production Plan.custom_projection_reference` → Sales Projection blocked SP cancel.
+- `Sales Projected Items.wo_name` → Production Plan blocked PP cancel.
+
+Each side told the user "cancel the other one first" → deadlock.
+
+**Fix is asymmetric on purpose:**
+- **SP side** (`SalesProjection.before_cancel`): `self.flags.ignore_links = True`.
+  Full bypass — safe because the only inbound link to SP is the PP traceability
+  reference, which is benign to leave hanging.
+- **PP side** (doc_event `before_cancel` on Production Plan, registered in
+  `hooks.py`, body in `production_plan_engine.on_production_plan_before_cancel`):
+  TARGETED clear of `Sales Projected Items.wo_name` + `.wo_status` for SPI rows
+  pointing to this PP. Not a blanket bypass — Work Order / Material Request /
+  Stock Entry inbound link guards on PP MUST stay intact.
+
+**Verified live (real SP `16fsbjan8i` + PP `MFG-PP-2026-00046`):**
+- Cancel SP alone → succeeded; PP retains `custom_projection_reference`.
+- Cancel PP alone → succeeded; SP child row `16fscs2k6j` had `wo_name` + `wo_status` cleared by the hook.
+
 ### Cancelled-doc handling in duplicate check (2026-05-12)
 - `_validate_unique_period_warehouse()` now uses an explicit positive allowlist
   `docstatus IN (0, 1)` instead of the previous negative `docstatus != 2`. Same

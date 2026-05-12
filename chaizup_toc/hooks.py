@@ -143,8 +143,15 @@ doc_events = {
     },
     # Production Plan — auto-set custom_created_by = "User" for manually created plans.
     # The automation pre-sets "System" before insert; this hook only fires for blank field.
+    #
+    # before_cancel: severs `Sales Projected Items.wo_name` references to this PP
+    # before Frappe's back-link guard fires. This is the PP-side half of the SP↔PP
+    # circular-cancel deadlock fix (the SP side lives in SalesProjection.before_cancel,
+    # which uses self.flags.ignore_links = True). See production_plan_engine.py for the
+    # full reasoning + DANGER/RESTRICT notes.
     "Production Plan": {
         "before_insert": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_production_plan_before_insert",
+        "before_cancel": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_production_plan_before_cancel",
     },
     # NOTE: TOC Item Buffer calculations (F1/F6/zone thresholds) are handled
     # entirely by TOCItemBuffer.validate() in the controller. No doc_event needed.
