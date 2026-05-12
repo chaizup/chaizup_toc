@@ -418,7 +418,33 @@ def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, 
 
     Forcing the flag to 0 keeps TOC's formula as the SINGLE source of truth for what
     qty to plan; ERPNext's sub-assembly tree just walks the BOM at the qty TOC chose.
+
+    # =========================================================================
+    # CONTEXT (UOM CAPTURE — 2026-05-12):
+    #   Production Plan Item.stock_uom is reqd=1 + read_only=1 in ERPNext.
+    #   When ERPNext's own get_items() builds po_items from SO/MR, it passes
+    #   `item_details.stock_uom` (see production_plan.py:531). Our automation
+    #   bypasses that path and used to leave stock_uom blank, which caused:
+    #     - PP form showed empty UOM column on the Items table
+    #     - Downstream sub_assembly_items / mr_items inherited blank UOM
+    #     - validate_uom_is_integer() in PP.validate could not enforce integer
+    #       qty rule because it had no UOM to look up
+    #   Fix: fetch Item.stock_uom and pass it explicitly to the po_items append.
+    # DANGER ZONE:
+    #   - `qty` arriving into this function is ALREADY in stock_uom — both
+    #     _process_item (formula `production_qty = max(shortage, min_in_stock_uom)`)
+    #     and _process_item_v2 (`production_qty = max(qty_a, minmfg)`) compute
+    #     in stock_uom. Do NOT apply a second conversion here.
+    #   - Item.stock_uom is mandatory on the Item DocType, so the fetch is safe.
+    #     If item_code is invalid the get_value returns None and PP.validate will
+    #     surface the error before insert.
+    # RESTRICT:
+    #   - Always pass stock_uom on the po_items dict — leaving it blank silently
+    #     breaks the PP Items grid display AND ERPNext's UOM-integer validation.
+    # =========================================================================
     """
+    stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or ""
+
     pp = frappe.new_doc("Production Plan")
     pp.company = company
     pp.planned_start_date = today()
@@ -440,6 +466,8 @@ def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, 
         "item_code": item_code,
         "qty": flt(qty),
         "planned_qty": flt(qty),
+        "pending_qty": flt(qty),
+        "stock_uom": stock_uom,
         "bom_no": bom_no or "",
         "warehouse": warehouse,
         "planned_start_date": today(),

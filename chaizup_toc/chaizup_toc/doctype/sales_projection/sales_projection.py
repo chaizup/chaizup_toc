@@ -14,8 +14,10 @@
 # DANGER ZONE:
 #   - `table_mibv` is the actual DB fieldname (from JSON) — not `projected_items`.
 #     Renaming the JSON fieldname without updating this file breaks every method.
-#   - _validate_unique_period_warehouse() excludes docstatus=2 (Cancelled) intentionally.
-#     Without this, a cancelled projection would block re-creation for the same period+warehouse.
+#   - _validate_unique_period_warehouse() filters `docstatus IN (0, 1)` —
+#     a POSITIVE allowlist of Draft + Submitted. Cancelled docs are skipped by
+#     omission, so a cancelled projection can NEVER block re-creation for the
+#     same period+warehouse (this is the cancel→amend→resubmit unlock).
 #   - self.name for a new (unsaved) document is a Frappe temp hash, never equal to
 #     an existing doc name — the ("!=", self.name) filter is always safe.
 #   - source_warehouse is reqd=1 in JSON AND checked in _validate_required_header_fields.
@@ -26,6 +28,9 @@
 #   - Do not remove _validate_unique_period_warehouse. Two projections for the same
 #     period+warehouse create conflicting production targets with no clear winner.
 #   - Do not remove before_submit() — JS validate hook can be bypassed via API calls.
+#   - Do not flip the docstatus filter back to a negative `!= 2` form. The positive
+#     allowlist `["in", [0, 1]]` is intentional — it future-proofs against new
+#     docstatus enum values and reads clearly as "Draft + Submitted block; nothing else".
 #   - Do not collapse the uniqueness key back to month+year only — warehouse was added
 #     intentionally to allow separate projections per warehouse per period.
 # =============================================================================
@@ -140,20 +145,36 @@ class SalesProjection(Document):
 			)
 
 	# =========================================================================
-	# CONTEXT: Prevents two non-cancelled Sales Projections for the same
-	#   projection_month + projection_year + source_warehouse combination.
-	#   The same month+year is allowed if the warehouse differs, and vice versa.
-	#   Queries DB excluding self and all cancelled docs.
+	# CONTEXT: Prevents two ACTIVE Sales Projections (Draft + Submitted only)
+	#   for the same projection_month + projection_year + source_warehouse
+	#   combination. The same month+year is allowed if the warehouse differs,
+	#   and vice versa. Queries DB excluding self and ALL cancelled docs.
+	#
+	#   Filter uses an explicit positive allowlist `docstatus IN (0, 1)` rather
+	#   than the negative `docstatus != 2` we previously had. The two are
+	#   semantically equivalent today (docstatus is enum 0/1/2), but the
+	#   allowlist form is more defensive — if Frappe ever introduces a new
+	#   docstatus state (e.g. Pending), the allowlist auto-excludes it from
+	#   "blocking duplicates" instead of silently treating it as active.
+	#
 	# DANGER ZONE:
-	#   - docstatus ("!=", 2) filter is critical — Cancelled docs must not block
-	#     re-creation for the same period+warehouse after a correction workflow.
-	#   - get_value returns the doc name for the error message, not just True/False.
-	#     Do not replace with db.exists() — we need the name in the error.
+	#   - docstatus must be on `["in", [0, 1]]` — Cancelled (docstatus=2) docs
+	#     must NEVER block re-creation for the same period+warehouse after a
+	#     correction workflow.
+	#   - get_value here returns BOTH `name` and `docstatus` so the error
+	#     message can label the blocker as Draft or Submitted. Do not collapse
+	#     back to a single field — the user-facing distinction matters when
+	#     the operator is trying to figure out which doc is in the way.
 	#   - All three key fields (month, year, warehouse) must be in the filter.
 	#     Removing any one turns this into a weaker partial-key check.
 	# RESTRICT:
-	#   - Do not add a docstatus=1 filter — Draft projections should also conflict.
-	#     A Draft for April 2026 / WH-A must block a second Draft for the same key.
+	#   - Do not narrow the allowlist to [1] (Submitted only) — Draft
+	#     projections must also block a second Draft for the same key, or
+	#     two operators editing in parallel will silently produce conflicting
+	#     forecasts.
+	#   - Do not flip the allowlist back to a negative `!= 2` filter. The
+	#     positive list reads better and is robust against future docstatus
+	#     enum additions.
 	# =========================================================================
 	def _validate_unique_period_warehouse(self):
 		existing = frappe.db.get_value(
@@ -163,14 +184,23 @@ class SalesProjection(Document):
 				"projection_year": self.projection_year,
 				"source_warehouse": self.source_warehouse,
 				"name": ("!=", self.name),
-				"docstatus": ("!=", 2),
+				"docstatus": ["in", [0, 1]],
 			},
-			"name",
+			["name", "docstatus"],
+			as_dict=True,
 		)
 		if existing:
+			state_label = "Submitted" if existing.docstatus == 1 else "Draft"
 			frappe.throw(
 				_(
-					"A Sales Projection for <b>{0} {1}</b> and warehouse <b>{2}</b> already exists: "
-					'<a href="/app/sales-projection/{3}">{3}</a>'
-				).format(self.projection_month, self.projection_year, self.source_warehouse, existing)
+					"A {0} Sales Projection for <b>{1} {2}</b> and warehouse <b>{3}</b> already exists: "
+					'<a href="/app/sales-projection/{4}">{4}</a>. '
+					"Cancelled projections are ignored — only Draft and Submitted projections block re-creation."
+				).format(
+					state_label,
+					self.projection_month,
+					self.projection_year,
+					self.source_warehouse,
+					existing.name,
+				)
 			)

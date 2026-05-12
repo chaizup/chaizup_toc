@@ -116,6 +116,14 @@ COALESCE(SUM(soi.qty - soi.delivered_qty), 0)
 - **Never** use `ppi.qty` — that column does not exist in `tabProduction Plan Item`. The correct column is `ppi.planned_qty`.
 - ERPNext Production Plan Item schema (confirmed): `planned_qty`, `pending_qty`, `produced_qty`, `ordered_qty`. There is no `qty` column.
 
+### RESTRICT — stock_uom on po_items (added 2026-05-12)
+- `Production Plan Item.stock_uom` is `reqd=1` and `read_only=1` in ERPNext v16. ERPNext's own `get_items()` always passes it (`item_details.stock_uom`).
+- `_create_production_plan()` MUST fetch `Item.stock_uom` and pass it in the `po_items.append({...})` dict. Without this:
+    - The PP Items grid shows an empty UOM column.
+    - `validate_uom_is_integer(self, "stock_uom", "planned_qty")` becomes a no-op (no UOM → no integer check).
+    - Sub-assembly + MR rows generated downstream inherit the blank UOM, breaking unit display in `tabWork Order` and component shortage MRs.
+- The qty arriving into `_create_production_plan` is ALREADY in stock_uom (the formula resolves shortage + minmfg in stock_uom). **Do not** apply a second conversion at PP creation time.
+
 ---
 
 ## Pending Sales Order Eligibility

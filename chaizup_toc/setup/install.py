@@ -321,8 +321,30 @@ def _install_custom_fields():
     frappe.logger("chaizup_toc").info("Custom fields installed on Item, Material Request, Work Order")
 
 
+# =============================================================================
+# CONTEXT: Ensures all TOC roles exist on a fresh install.
+#   Frappe DOES NOT auto-create roles referenced in DocType JSON `permissions`;
+#   the role row must exist in `tabRole` first or the perm rule is silently
+#   dropped at sync_doctype time. Each role here pairs with a permission entry
+#   in one or more DocType JSONs:
+#     - TOC Manager / TOC User: legacy roles, used across TOC Buffer, Settings,
+#       etc. (kept as-is for back-compat).
+#     - Sales Projection Admin: added 2026-05-12. Holds elevated permissions on
+#       Sales Projection (write/submit/cancel/amend/delete). Authorised power
+#       users can cancel a Sales Projection, amend it, and resubmit without
+#       needing the full System Manager role.
+# DANGER ZONE:
+#   - desk_access MUST stay 1 — without it, holders of the role cannot reach the
+#     /app desk where Sales Projection lives.
+#   - The role NAME ("Sales Projection Admin") is referenced verbatim in
+#     sales_projection.json `permissions` list. Renaming requires updating both
+#     places + a data-migration patch.
+# RESTRICT:
+#   - Do not add a `customize: 1` flag to this role — it would let holders
+#     change the Sales Projection schema. Keep them scoped to document data only.
+# =============================================================================
 def _setup_roles():
-    for role_name in ["TOC Manager", "TOC User"]:
+    for role_name in ["TOC Manager", "TOC User", "Sales Projection Admin"]:
         if not frappe.db.exists("Role", role_name):
             r = frappe.new_doc("Role")
             r.role_name = role_name

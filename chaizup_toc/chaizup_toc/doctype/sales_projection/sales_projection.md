@@ -37,6 +37,29 @@ at 02:00 AM and creates Draft Production Plans for items with unmet demand.
 
 ---
 
+## Permissions & Roles
+
+The Sales Projection DocType grants permission to two roles:
+
+| Role | Read | Write | Create | Submit | Cancel | Amend | Delete | Notes |
+|------|------|-------|--------|--------|--------|-------|--------|-------|
+| **System Manager** | ✓ | ✓ | ✓ | ✓ |   |   | ✓ | Full admin (legacy default — does NOT grant cancel/amend; rely on Sales Projection Admin for those rights or grant via Customize). |
+| **Sales Projection Admin** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Power-user role for the projection lifecycle: can cancel a submitted projection, **amend** it (Frappe creates a new draft tied via `amended_from`), edit, and resubmit. Added 2026-05-12. |
+
+> **Workflow for "cancel + edit + resubmit":** ❶ Cancel the submitted Sales Projection (`cancel` permission). ❷ Click **Amend** on the cancelled doc — Frappe creates a fresh draft with `amended_from` pointing to the cancelled name and a `-1` / `-2` suffix on the docname. ❸ Edit the draft. ❹ Submit the amended draft (`submit` permission). The `_validate_unique_period_warehouse()` check intentionally excludes `docstatus = 2` so the amend flow does not collide with the cancelled original.
+
+### Role setup
+- **Fresh install:** `setup/install.py::_setup_roles()` creates the "Sales Projection Admin" role automatically (alongside "TOC Manager" and "TOC User").
+- **Existing installs:** the patch `chaizup_toc.patches.v1_0.add_sales_projection_admin_role` is registered in `patches.txt` and runs on the next `bench migrate` — it creates the role row + reloads the DocType so the new perm syncs into `tabDocPerm`.
+
+### Assigning the role
+```bash
+bench --site <site> add-role <user@example.com> "Sales Projection Admin"
+```
+Or via UI: **User → Roles → add "Sales Projection Admin"**.
+
+---
+
 ## Validation Rules
 
 ### 1. Required Fields
@@ -54,10 +77,22 @@ at 02:00 AM and creates Draft Production Plans for items with unmet demand.
 ### 3. Unique Month + Year + Warehouse
 
 `_validate_unique_period_warehouse()`:
-- No two non-cancelled Sales Projections with the same month+year+warehouse
-- Cancelled (docstatus=2) docs do NOT block re-creation
+- No two **active** Sales Projections (Draft `docstatus=0` or Submitted `docstatus=1`) with the same `projection_month + projection_year + source_warehouse`.
+- **Cancelled docs (`docstatus=2`) are silently excluded** from the duplicate check — they neither block re-creation nor surface in the error message.
+- The DB filter uses an explicit positive allowlist: `"docstatus": ["in", [0, 1]]`. This is more defensive than the previous `("!=", 2)` form — if Frappe ever introduces a new docstatus state (e.g. Pending), the allowlist auto-excludes it from "blocking duplicates".
+- Error message labels the offender as **Draft** or **Submitted**, so the operator knows whether to delete (Draft) or cancel-then-amend (Submitted) the blocker.
 
 Both duplicate-item and uniqueness rules run in `validate()` and `before_submit()`.
+
+#### Cancel → New Projection workflow (2026-05-12)
+
+| Step | What | Effect |
+|------|------|--------|
+| ❶ | Cancel an existing submitted projection for May 2026 / WH-A | docstatus flips to 2 |
+| ❷ | Click "New Sales Projection" for the same May 2026 / WH-A | No duplicate error — cancelled docs are invisible to the validator |
+| ❸ | Save / submit | Allowed |
+
+The cancel → **amend** workflow continues to work as before (Frappe creates a fresh draft with `amended_from` set to the cancelled name).
 
 ---
 

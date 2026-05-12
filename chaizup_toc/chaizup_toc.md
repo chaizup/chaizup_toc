@@ -406,3 +406,54 @@ doc2 = frappe.get_doc({
 doc2.insert(ignore_permissions=True)
 frappe.db.commit()
 ```
+
+---
+
+## Sync Block — Session 2026-05-12 (Sales Projection Admin role + PP UOM capture)
+
+### New role: `Sales Projection Admin`
+- Created by `setup/install.py::_setup_roles()` (fresh install) and by the patch
+  `chaizup_toc.patches.v1_0.add_sales_projection_admin_role` (existing installs).
+- Granted on the **Sales Projection** DocType: `read`, `write`, `create`, `submit`,
+  `cancel`, `amend`, `delete`, `print`, `email`, `export`, `report`, `share`.
+- Workflow it enables: **cancel a submitted projection → Amend → edit → resubmit**.
+  Frappe's standard `amend` action creates a new draft with `amended_from` set
+  to the cancelled doc's name. The uniqueness validator already excludes
+  `docstatus = 2`, so the amend flow does not collide.
+- `desk_access = 1` is required — without it the holder cannot reach `/app/sales-projection`.
+
+### PP UOM capture bug fix
+- **Bug:** `_create_production_plan()` was not setting `stock_uom` on the
+  `po_items` row. ERPNext's own `get_items()` (`production_plan.py:531`) always
+  passes `item_details.stock_uom` — our automation bypassed that path. With
+  `flags.ignore_mandatory = True` the insert succeeded but the PP Items grid
+  showed an empty UOM column and `validate_uom_is_integer()` became a no-op.
+- **Fix (`toc_engine/production_plan_engine.py::_create_production_plan`):**
+  fetch `Item.stock_uom` once at the top of the function and pass it in the
+  `po_items.append({...})` dict. Also added `pending_qty` so the initial
+  pending balance equals planned_qty (matches ERPNext defaults).
+- **Invariant:** `qty` arriving into `_create_production_plan` is already in
+  stock_uom (the formula resolves shortage + minmfg in stock_uom). Do NOT apply
+  a second conversion at PP creation time.
+
+### Files touched
+- `chaizup_toc/doctype/sales_projection/sales_projection.json` — perm row added (System Manager + Sales Projection Admin both get cancel/amend)
+- `chaizup_toc/doctype/sales_projection/sales_projection.md` — Permissions section + explicit-allowlist note for duplicate check
+- `chaizup_toc/doctype/sales_projection/sales_projection.py` — docstatus filter switched to explicit allowlist `["in", [0, 1]]`; error message now labels blocker as Draft / Submitted
+- `chaizup_toc/toc_engine/production_plan_engine.py` — UOM capture in `_create_production_plan`
+- `chaizup_toc/toc_engine/production_plan_engine.md` — RESTRICT note for stock_uom
+- `chaizup_toc/setup/install.py` — added role to `_setup_roles()`
+- `chaizup_toc/patches/v1_0/add_sales_projection_admin_role.py` — new
+- `chaizup_toc/patches.txt` — registered the new patch
+
+### Cancelled-doc handling in duplicate check (2026-05-12)
+- `_validate_unique_period_warehouse()` now uses an explicit positive allowlist
+  `docstatus IN (0, 1)` instead of the previous negative `docstatus != 2`. Same
+  semantic outcome (Draft + Submitted block duplicates; Cancelled is invisible),
+  but more robust against future docstatus enum changes and clearer at first read.
+- The error message now labels the blocker as **Draft** or **Submitted**, so the
+  operator immediately knows whether to delete it or cancel/amend it.
+- The user-visible workflow this unlocks: cancel a submitted projection → create
+  a brand-new projection for the same period+warehouse without going through the
+  amend flow. Both cancel→new and cancel→amend now work cleanly.
+

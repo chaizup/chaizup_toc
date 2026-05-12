@@ -6,3 +6,4 @@ chaizup_toc.patches.v1_0.hide_item_buffer_type_field
 chaizup_toc.patches.sync_min_mfg_custom_fields
 chaizup_toc.patches.sync_pp_custom_fields
 chaizup_toc.patches.sync_property_setters
+chaizup_toc.patches.v1_0.add_sales_projection_admin_role
