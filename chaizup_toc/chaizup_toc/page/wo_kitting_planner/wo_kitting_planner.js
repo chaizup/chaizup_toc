@@ -604,8 +604,18 @@ class WOKittingPlanner {
     this.stockMode    = "current_only";
     this.calcMode     = "isolated";
     this.multiLevel   = false;
-    this.statusFilter = "";
+    this.statusFilter = "";              // BACK-COMPAT: legacy single-status filter
     this._company     = frappe.defaults.get_default("company") || "";
+
+    // WKP-034 — Multi-select status filters (WO / SO / PO).
+    // Empty array = "use defaults" on the server (matches the Production
+    // Overview pattern). Populated by _loadDynamicFilters() at on_page_load
+    // and re-read on every load()/simulate()/_fetch* call.
+    this._selWo            = [];        // selected WO statuses (subset of universe)
+    this._selSo            = [];        // selected SO statuses (+ "Workflow: <state>")
+    this._selPo            = [];        // selected PO statuses
+    this._statusUniverse   = null;      // last wkp_get_default_statuses response
+    this._statusFiltersDirty = false;   // true if user changed any after the last Load
 
     this.woOrder  = [];
     this.rows     = [];
@@ -854,6 +864,59 @@ class WOKittingPlanner {
       }
     });
 
+    // ── WKP-036: tab-scoped summary strip click handler (delegated) ──────
+    // Every tab that injects a `.wkp-tab-sum` strip auto-wires here. The
+    // active card toggles a row-level filter on the sibling table by
+    // matching `data-cat` (or `data-urgent` for the special "urgent"
+    // bucket). Clicking the active card again clears the filter. The
+    // filter is independent of the global search and the item-group
+    // selector — it stacks on top via the data-cat-match attribute.
+    document.addEventListener("click", e => {
+      const card = e.target.closest(".wkp-tab-sum-card");
+      if (!card) return;
+      const strip = card.parentElement;
+      if (!strip || !strip.classList.contains("wkp-tab-sum")) return;
+      const wantCat = card.dataset.cat || "";
+      const alreadyActive = card.classList.contains("active");
+
+      // Clear sibling cards
+      strip.querySelectorAll(".wkp-tab-sum-card").forEach(c => c.classList.remove("active"));
+      if (!alreadyActive) card.classList.add("active");
+
+      // Apply the row filter on the next sibling table.
+      const tableWrap = strip.nextElementSibling;
+      const table = tableWrap ? (tableWrap.querySelector("table") || tableWrap) : null;
+      if (!table) return;
+      const newActive = !alreadyActive;
+      table.classList.toggle("wkp-tab-sum-active", newActive);
+      table.querySelectorAll("tbody tr[data-cat]").forEach(tr => {
+        let match;
+        if (wantCat === "urgent") match = tr.dataset.urgent === "1";
+        else                       match = tr.dataset.cat === wantCat;
+        tr.dataset.catMatch = (newActive && match) ? "1" : "";
+      });
+      // Collapse paired detail rows of hidden main rows so the user does
+      // not see orphan detail content sticking around.
+      table.querySelectorAll("tbody tr.wkp-sr-detail-row").forEach(dt => {
+        if (!dt.id) return;
+        // The id encodes the main row's item code (sanitised). Look for the
+        // paired main row by walking the previous sibling chain.
+        let prev = dt.previousElementSibling;
+        while (prev && prev.classList.contains("wkp-sr-detail-row")) {
+          prev = prev.previousElementSibling;
+        }
+        if (!prev) return;
+        const hidden = newActive && prev.dataset.catMatch !== "1";
+        if (hidden) {
+          dt.style.display = "none";
+          const btn = prev.querySelector("button[onclick]");
+          if (btn && btn.textContent && btn.textContent.indexOf("Hide") !== -1) {
+            btn.textContent = "▼ Details";
+          }
+        }
+      });
+    });
+
     // Stock X / Y toggle
     document.querySelectorAll("#wkp-seg-stock .wkp-seg-btn").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -909,14 +972,76 @@ class WOKittingPlanner {
       });
     }
 
-    // Status filter
-    document.getElementById("wkp-status-filter").addEventListener("change", e => {
-      this.statusFilter = e.target.value;
-      this.load();
+    // Legacy single-select (kept hidden for back-compat; ignored by new code).
+    const legacy = document.getElementById("wkp-status-filter");
+    if (legacy) {
+      legacy.addEventListener("change", e => {
+        this.statusFilter = e.target.value;
+        // Do NOT auto-load; user clicks the Load button to apply.
+      });
+    }
+
+    // ── WKP-034: Multi-select filters (WO / SO / PO) ─────────────────────
+    // Click anywhere → toggle a panel if the click landed on a .wkp-ms-btn;
+    // or hit an All / None action button inside a panel; or close any open
+    // panel when the click is outside .wkp-ms-wrap.
+    document.addEventListener("click", e => {
+      const btn = e.target.closest(".wkp-ms-btn");
+      if (btn && btn.dataset.msPanel) {
+        this._toggleMsPanel(btn.dataset.msPanel, btn);
+        return;
+      }
+      const action = e.target.closest("[data-ms-select]");
+      if (action) {
+        e.preventDefault();
+        e.stopPropagation();
+        this._selectAllMs(action.dataset.msSelect, action.dataset.val === "all");
+        this._readStatusSelections();
+        this._markStatusFiltersDirty();
+        return;
+      }
+      if (!e.target.closest(".wkp-ms-wrap")) {
+        document.querySelectorAll(".wkp-ms-panel.open").forEach(p => {
+          p.classList.remove("open");
+          const b = document.querySelector("[data-ms-panel=\"" + p.id + "\"]");
+          if (b) b.classList.remove("active");
+        });
+      }
     });
 
-    // Refresh
-    document.getElementById("wkp-refresh").addEventListener("click", () => this.load());
+    // Checkbox change inside any of the three panels → update label + mark dirty.
+    document.addEventListener("change", e => {
+      if (!e.target.classList || !e.target.classList.contains("wkp-ms-chk")) return;
+      const panel = e.target.closest(".wkp-ms-panel");
+      if (!panel) return;
+      const labelMap = {
+        "wkp-wo-panel": "wkp-wo-label",
+        "wkp-so-panel": "wkp-so-label",
+        "wkp-po-panel": "wkp-po-label",
+      };
+      this._updateMsLabel(panel.id, labelMap[panel.id]);
+      this._readStatusSelections();
+      this._markStatusFiltersDirty();
+    });
+
+    // Explicit "Load" button — applies the current selections by re-running
+    // load() (which pulls fresh WOs and chains into simulate()).
+    const loadBtn = document.getElementById("wkp-load-btn");
+    if (loadBtn) {
+      loadBtn.addEventListener("click", () => {
+        this._readStatusSelections();
+        this._clearStatusFiltersDirty();
+        this.load();
+      });
+    }
+
+    // Refresh — also re-reads selections so the user does not have to click
+    // Load separately.
+    document.getElementById("wkp-refresh").addEventListener("click", () => {
+      this._readStatusSelections();
+      this._clearStatusFiltersDirty();
+      this.load();
+    });
 
     // Export / Email buttons
     const csvBtn   = document.getElementById("wkp-export-csv");
@@ -1023,16 +1148,88 @@ class WOKittingPlanner {
     const active = q.length >= 2;
     if (table) table.classList.toggle("wkp-search-active", active);
 
-    // WKP-029: skip .wkp-sr-detail-row — they are expand rows, not searchable items.
-    // Classifying them as no-match hides them via CSS and blocks the Detail onclick expand.
+    // WKP-035 (2026-05-13): generalised detail-row handling.
+    //
+    // Detail / expand rows are interleaved in tbody (sibling of their main row)
+    // and use either:
+    //   - class="wkp-sr-detail-row"  (shortage report, purchase priority, etc.)
+    //   - id starting with "wkp-sr-d-", "wkp-pp-d-", "wkp-iv-d-"
+    // Classifying them as a search hit/miss is wrong — they have no item code
+    // text of their own and they break the user's manual Details-toggle.
+    //
+    // PRIOR BUG (czmat/1278 reproduction): the inline onclick toggle that
+    // expands a detail row relied on `r.style.display === ''` being true for
+    // "currently shown". When the search loop ran on the same tbody, it
+    // (correctly) skipped the detail row but it ALSO did not reset stale
+    // visibility state on it — so when the user typed a search that matched
+    // the main row, then clicked Details, the toggle could land in the wrong
+    // half of the ternary depending on prior interaction and end up hiding
+    // instead of showing. The fix below uses a generic "detail row" predicate
+    // AND, when a detail row exists for a hidden main row, force-collapses
+    // the detail row so subsequent Details clicks always start from a known
+    // collapsed state.
+    const isDetailRow = (tr) =>
+      tr.classList.contains("wkp-sr-detail-row") ||
+      (tr.id && (tr.id.indexOf("wkp-sr-d-") === 0 ||
+                 tr.id.indexOf("wkp-pp-d-") === 0 ||
+                 tr.id.indexOf("wkp-iv-d-") === 0));
+
+    // Index detail rows by id so we can look up the paired one for any main row.
+    const detailById = {};
+    tbody.querySelectorAll("tr").forEach(tr => {
+      if (isDetailRow(tr) && tr.id) detailById[tr.id] = tr;
+    });
+
     const rows = tbody.querySelectorAll("tr");
     rows.forEach(tr => {
-      if (tr.classList.contains("wkp-sr-detail-row")) return;
+      if (isDetailRow(tr)) return;
       tr.classList.remove("wkp-search-match", "wkp-search-no-match");
       if (!active) return;
       const text = tr.textContent.toLowerCase();
       if (text.includes(q)) tr.classList.add("wkp-search-match");
       else tr.classList.add("wkp-search-no-match");
+    });
+
+    // Sync paired detail rows.
+    //   - Main row data-item attribute → detail id "wkp-pp-d-<sanitised>" /
+    //     "wkp-sr-d-<sanitised>" depending on tab.
+    //   - When the main row is search-no-match (hidden), force-collapse the
+    //     detail row (display:none) + reset the Details button text. This
+    //     prevents the user from clicking a button on a row that is now
+    //     filtered out and observing an inconsistent expanded state.
+    //   - When the main row is search-match (visible), guarantee the detail
+    //     row carries the wkp-search-match class itself so the CSS rule
+    //     `.wkp-search-active tr.wkp-search-no-match { display:none }` never
+    //     applies to it. The user's open/closed state (inline style.display)
+    //     is preserved.
+    const detailIdPrefixes = ["wkp-pp-d-", "wkp-sr-d-", "wkp-iv-d-"];
+    const sanitise = (s) => String(s || "").replace(/[^a-zA-Z0-9]/g, "_");
+    rows.forEach(tr => {
+      if (isDetailRow(tr)) return;
+      const itemCode = tr.dataset && tr.dataset.item;
+      if (!itemCode) return;
+      const sanitised = sanitise(itemCode);
+      detailIdPrefixes.forEach(pfx => {
+        const dt = detailById[pfx + sanitised];
+        if (!dt) return;
+        dt.classList.remove("wkp-search-match", "wkp-search-no-match");
+        if (!active) return;
+        if (tr.classList.contains("wkp-search-match")) {
+          // Mirror the match class onto the detail row so CSS hide rules cannot
+          // touch it; do NOT change inline display (preserve user toggle state).
+          dt.classList.add("wkp-search-match");
+        } else if (tr.classList.contains("wkp-search-no-match")) {
+          // Force-collapse: the main row is hidden, so the detail row should be too.
+          dt.classList.add("wkp-search-no-match");
+          dt.style.display = "none";
+          // Reset the Details button text on the (still in-DOM) main row so
+          // the user sees a consistent state when they next clear the search.
+          const btn = tr.querySelector("button[onclick]");
+          if (btn && btn.textContent && btn.textContent.indexOf("Hide") !== -1) {
+            btn.textContent = "▼ Details";
+          }
+        }
+      });
     });
   }
 
@@ -1042,9 +1239,16 @@ class WOKittingPlanner {
 
   load() {
     this._showLoader(true);
+    // WKP-034: ensure the current selection state is read just-in-time.
+    // The Load button click handler already does this; the back-compat
+    // refresh button + the post-init bootstrap call go through here too.
+    this._readStatusSelections();
     frappe.call({
       method: "chaizup_toc.api.wo_kitting_api.get_open_work_orders",
-      args: { status_filter: this.statusFilter },
+      args: {
+        status_filter: this.statusFilter,
+        wo_statuses  : JSON.stringify(this._selWo || []),
+      },
       callback: r => {
         if (r.exc) {
           this._showLoader(false);
@@ -1077,6 +1281,9 @@ class WOKittingPlanner {
         stock_mode       : this.stockMode,
         calc_mode        : this.calcMode,
         multi_level      : this.multiLevel ? 1 : 0,
+        // WKP-034: supply pool calc honours the user-selected WO + PO statuses
+        wo_statuses      : JSON.stringify(this._selWo || []),
+        po_statuses      : JSON.stringify(this._selPo || []),
       },
       callback: r => {
         this._showLoader(false);
@@ -1544,9 +1751,29 @@ class WOKittingPlanner {
       btn.classList.toggle("active", btn.dataset.tab === this._activeTab);
     });
 
-    // Show/hide filter bar (only relevant for WO plan tab)
+    // WKP-036 (2026-05-13): chrome visibility per tab — show only the
+    // filter + summary content that is relevant for the active tab so the
+    // table claims the rest of the viewport (helpful on small / low-PPI
+    // screens). Each tab declares which header chrome it needs; everything
+    // else gets `display:none`. The arrays are intentionally short and
+    // explicit (vs. a CSS body class with selectors) because the filter
+    // bar contains WO-plan-only controls that would be wrong on other tabs
+    // even if rendered hidden.
+    const chromePerTab = {
+      "wo-plan"          : { filterBar: true,  summary: true  },
+      "shortage-report"  : { filterBar: false, summary: true  },
+      "emergency"        : { filterBar: false, summary: false },
+      "dispatch"         : { filterBar: false, summary: false },
+      "ai-chat"          : { filterBar: false, summary: false },
+      "item-view"        : { filterBar: false, summary: false },
+      "purchase-priority": { filterBar: false, summary: false },
+    };
+    const chrome = chromePerTab[this._activeTab] || { filterBar: false, summary: true };
+
     const filterBar = document.getElementById("wkp-filter-bar");
-    if (filterBar) filterBar.style.display = this._activeTab === "wo-plan" ? "" : "none";
+    if (filterBar) filterBar.style.display = chrome.filterBar ? "" : "none";
+    const summaryEl = document.getElementById("wkp-summary");
+    if (summaryEl) summaryEl.style.display = chrome.summary ? "" : "none";
 
     // Show/hide panes
     const panes = {
@@ -1669,27 +1896,186 @@ class WOKittingPlanner {
   }
 
   _loadDynamicFilters() {
-    // WKP-028: Fetch Work Order statuses dynamically instead of hardcoding
-    // to support custom ERPNext setups and avoid "Not Started" missing etc.
-    // 🔒 RESTRICTED: Never hardcode ERPNext document statuses in HTML/JS.
-    // DOM ID #wkp-status-filter is used to bind the change event.
+    // WKP-034 (2026-05-13): Replaces the single-status legacy filter with
+    // three multi-select panels (WO / SO / PO). The universe of options for
+    // each is fetched DYNAMICALLY from the user data via the new endpoint
+    // `wkp_get_default_statuses`. Sales Order workflow_state values are
+    // surfaced as "Workflow: <state>" entries so a Draft SO with a custom
+    // workflow can count as pending. Same pattern as Production Overview.
+    //
+    // 🔒 RESTRICTED: Never hardcode ERPNext document statuses anywhere in
+    //                this file. The universe must always come from the
+    //                server endpoint.
     frappe.call({
-      method: "chaizup_toc.api.wo_kitting_api.get_work_order_statuses",
+      method: "chaizup_toc.api.wo_kitting_api.wkp_get_default_statuses",
       callback: r => {
-        const statuses = r.message || [];
-        const sel = document.getElementById("wkp-status-filter");
-        if (!sel || !statuses.length) return;
+        const u = r.message || {};
+        this._statusUniverse = u;
 
-        // Preserve "All Open WOs"
-        while (sel.options.length > 1) sel.remove(1);
-        statuses.forEach(s => {
-          const opt = document.createElement("option");
-          opt.value = s;
-          opt.textContent = s;
-          sel.appendChild(opt);
+        // Initialise selections to the server-supplied defaults (intersection
+        // of the preferred default set with statuses that actually exist).
+        this._selWo = (u.wo_statuses || []).slice();
+        this._selSo = (u.so_statuses || []).slice();
+        this._selPo = (u.po_statuses || []).slice();
+
+        // WKP-034+ (2026-05-13 update): show a "Workflow: …" hint per panel
+        // when that doctype has at least one workflow_state value in the
+        // user data. SO is the common case; WO / PO surface when the site
+        // has bespoke Workflows on those doctypes (e.g. PO Vendor
+        // Confirmation, WO Quality Hold).
+        const wfHint = (hasCol, wfList) =>
+          (hasCol && (wfList || []).length)
+            ? "Includes \"Workflow: …\" entries for Draft docs."
+            : "";
+
+        this._populateMsPanel(
+          "wkp-wo-status-list", "wkp-wo-panel", "wkp-wo-label",
+          u.all_wo_statuses || [], this._selWo,
+          wfHint(u.wo_has_workflow_column, u.wo_workflow_states),
+        );
+        this._populateMsPanel(
+          "wkp-so-status-list", "wkp-so-panel", "wkp-so-label",
+          u.all_so_statuses || [], this._selSo,
+          wfHint(u.so_has_workflow_column, u.so_workflow_states),
+        );
+        this._populateMsPanel(
+          "wkp-po-status-list", "wkp-po-panel", "wkp-po-label",
+          u.all_po_statuses || [], this._selPo,
+          wfHint(u.po_has_workflow_column, u.po_workflow_states),
+        );
+
+        // Reflect into the hidden back-compat single select too (first option
+        // = empty / "all"). Keeps any external script that polls the legacy
+        // id working without recompute thrash.
+        const legacy = document.getElementById("wkp-status-filter");
+        if (legacy) {
+          while (legacy.options.length > 1) legacy.remove(1);
+          (u.all_wo_statuses || []).forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s;
+            opt.textContent = s;
+            legacy.appendChild(opt);
+          });
+        }
+
+        this._clearStatusFiltersDirty();
+      },
+      error: () => {
+        // Fall back to the old single-status endpoint so the page is still
+        // partly usable (WO filter only) when the new endpoint is missing.
+        frappe.call({
+          method: "chaizup_toc.api.wo_kitting_api.get_work_order_statuses",
+          callback: rr => {
+            const list = rr.message || [];
+            this._populateMsPanel(
+              "wkp-wo-status-list", "wkp-wo-panel", "wkp-wo-label",
+              list, list,
+            );
+            this._selWo = list.slice();
+          },
         });
+      },
+    });
+  }
+
+  // ── WKP-034 helpers — Multi-select panel internals ─────────────────────
+
+  _populateMsPanel(listId, panelId, labelId, allOptions, defaults, hint) {
+    const container = document.getElementById(listId);
+    if (!container) return;
+    const defaultSet = new Set(defaults);
+    const esc = (s) => String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+    const itemHtml = (allOptions || []).map(opt => {
+      const isWf = typeof opt === "string" && opt.indexOf("Workflow: ") === 0;
+      const tag  = isWf
+        ? `<span class="wkp-ms-wf-tag" title="workflow_state value">WF</span>`
+        : "";
+      return `<label class="wkp-ms-item">
+        <input type="checkbox" class="wkp-ms-chk" value="${esc(opt)}"${defaultSet.has(opt) ? " checked" : ""}>
+        <span>${esc(opt)}</span>${tag}
+      </label>`;
+    }).join("");
+    const hintHtml = hint
+      ? `<div class="wkp-ms-hint">${esc(hint)}</div><div class="wkp-ms-divider"></div>`
+      : "";
+    container.innerHTML = hintHtml + itemHtml;
+    this._updateMsLabel(panelId, labelId);
+  }
+
+  _toggleMsPanel(panelId, triggerBtn) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    // Close any other open panel first
+    document.querySelectorAll(".wkp-ms-panel.open").forEach(p => {
+      if (p.id !== panelId) {
+        p.classList.remove("open");
+        const b = document.querySelector("[data-ms-panel=\"" + p.id + "\"]");
+        if (b) b.classList.remove("active");
       }
     });
+    panel.classList.toggle("open");
+    if (triggerBtn) triggerBtn.classList.toggle("active", panel.classList.contains("open"));
+  }
+
+  _selectAllMs(panelId, checked) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    panel.querySelectorAll(".wkp-ms-chk").forEach(c => { c.checked = !!checked; });
+    const labelMap = {
+      "wkp-wo-panel": "wkp-wo-label",
+      "wkp-so-panel": "wkp-so-label",
+      "wkp-po-panel": "wkp-po-label",
+    };
+    this._updateMsLabel(panelId, labelMap[panelId]);
+  }
+
+  _updateMsLabel(panelId, labelId) {
+    const panel = document.getElementById(panelId);
+    const label = document.getElementById(labelId);
+    if (!panel || !label) return;
+    const all     = panel.querySelectorAll(".wkp-ms-chk");
+    const checked = panel.querySelectorAll(".wkp-ms-chk:checked");
+    const btn = document.querySelector("[data-ms-panel=\"" + panelId + "\"]");
+    if (checked.length === 0)            label.textContent = "None";
+    else if (checked.length === all.length) label.textContent = "Default";
+    else                                  label.textContent = checked.length + " selected";
+    if (btn) {
+      if (checked.length !== 0 && checked.length !== all.length) btn.classList.add("active");
+      else btn.classList.remove("active");
+    }
+  }
+
+  _readMsSelections(listId) {
+    const list = document.getElementById(listId);
+    if (!list) return [];
+    return Array.from(list.querySelectorAll(".wkp-ms-chk:checked")).map(c => c.value);
+  }
+
+  _readStatusSelections() {
+    this._selWo = this._readMsSelections("wkp-wo-status-list");
+    this._selSo = this._readMsSelections("wkp-so-status-list");
+    this._selPo = this._readMsSelections("wkp-po-status-list");
+  }
+
+  _markStatusFiltersDirty() {
+    if (this._statusFiltersDirty) return;
+    this._statusFiltersDirty = true;
+    const btn = document.getElementById("wkp-load-btn");
+    if (btn) btn.classList.add("dirty");
+    if (typeof frappe !== "undefined" && frappe.show_alert) {
+      frappe.show_alert({
+        message: "Status filter changed. Click <b>Load</b> to recalculate.",
+        indicator: "blue",
+      }, 4);
+    }
+  }
+
+  _clearStatusFiltersDirty() {
+    this._statusFiltersDirty = false;
+    const btn = document.getElementById("wkp-load-btn");
+    if (btn) btn.classList.remove("dirty");
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -1911,7 +2297,7 @@ class WOKittingPlanner {
   <td class="ta-c" data-tip="Click Details to see which Work Orders need this material and how much each one requires.">
     ${a.wo_list.length > 0
       ? `<button class="wkp-btn wkp-btn-sm"
-           onclick="var r=document.getElementById('${detailId}');if(r){r.style.display=r.style.display==='none'?'':'none';this.textContent=r.style.display===''?'\u25B2 Hide':'\u25BC Details'}"
+           onclick="var r=document.getElementById('${detailId}');if(r){var open=(r.style.display!=='none')&&(r.offsetHeight>0);r.style.display=open?'none':'table-row';this.textContent=open?'\u25BC Details':'\u25B2 Hide'}"
            title="Show which Work Orders need this material">
            \u25BC Details
          </button>`
@@ -3848,7 +4234,11 @@ ${decisionHtml}
 
     frappe.call({
       method: "chaizup_toc.api.wo_kitting_api.get_item_wo_summary",
-      args: {},
+      args: {
+        // WKP-034: thread the user-selected WO + SO statuses through.
+        wo_statuses : JSON.stringify(this._selWo || []),
+        so_statuses : JSON.stringify(this._selSo || []),
+      },
       callback: r => {
         this._itemViewLoading = false;
         this._itemViewLoaded  = true;
@@ -3958,8 +4348,18 @@ ${decisionHtml}
         ? `<span style="font-size:10px;color:var(--stone-400)">+${item.wo_list.length - 5} more</span>`
         : "";
 
+      // WKP-036: classify into buckets for the tab-scoped summary strip.
+      //   "active_wo"  → has at least one open Work Order
+      //   "pending_so" → no open WO, but customer demand exists
+      //   "blocked"    → has at least one blocked-kit WO
+      //   "ok"         → has WOs and none blocked
+      let _ivCat = "ok";
+      if ((kit.block || 0) > 0)                            _ivCat = "blocked";
+      else if ((item.wo_count || 0) > 0)                   _ivCat = "active_wo";
+      else if ((item.so_count || 0) > 0)                   _ivCat = "pending_so";
+
       return `
-<tr class="wkp-iv-tr" data-item="${_esc(item.item_code)}">
+<tr class="wkp-iv-tr" data-item="${_esc(item.item_code)}" data-cat="${_ivCat}">
   <td>
     <div class="wkp-item-name">${_esc(item.item_name || item.item_code)}</div>
     <div class="wkp-item-code">${_esc(item.item_code)}</div>
@@ -4005,7 +4405,58 @@ ${decisionHtml}
 </tr>`;
     }).join("");
 
-    body.innerHTML = `
+    // WKP-036: compute Item View bucket counts for the tab-scoped summary strip.
+    const _ivCounts = { active_wo: 0, pending_so: 0, blocked: 0, ok: 0 };
+    items.forEach(it => {
+      const k = kitByItem[it.item_code] || {};
+      let c = "ok";
+      if ((k.block || 0) > 0)                  c = "blocked";
+      else if ((it.wo_count || 0) > 0)         c = "active_wo";
+      else if ((it.so_count || 0) > 0)         c = "pending_so";
+      _ivCounts[c]++;
+    });
+
+    const _ivSumStrip = `
+<div class="wkp-tab-sum" data-strip="item-view">
+  <div class="wkp-tab-sum-card err" data-cat="blocked" tabindex="0"
+       title="Items where at least one Work Order has component shortages and cannot start.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-ban"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ivCounts.blocked}</span>
+      <span class="wkp-tab-sum-lbl">Blocked WO</span>
+      <span class="wkp-tab-sum-hint">Shortage stops production</span>
+    </span>
+  </div>
+  <div class="wkp-tab-sum-card ok" data-cat="active_wo" tabindex="0"
+       title="Items with at least one open Work Order and no blocked kit status.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-hammer"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ivCounts.active_wo}</span>
+      <span class="wkp-tab-sum-lbl">Active WO</span>
+      <span class="wkp-tab-sum-hint">In production</span>
+    </span>
+  </div>
+  <div class="wkp-tab-sum-card warn" data-cat="pending_so" tabindex="0"
+       title="Items with customer demand but no open Work Order yet. Candidates for new WO creation.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-file-invoice"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ivCounts.pending_so}</span>
+      <span class="wkp-tab-sum-lbl">SO, No WO</span>
+      <span class="wkp-tab-sum-hint">Demand without production</span>
+    </span>
+  </div>
+  <div class="wkp-tab-sum-card info" data-cat="ok" tabindex="0"
+       title="Items with WOs in good kit status and no pending shortage signals.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-circle-check"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ivCounts.ok}</span>
+      <span class="wkp-tab-sum-lbl">On Track</span>
+      <span class="wkp-tab-sum-hint">Healthy items</span>
+    </span>
+  </div>
+</div>`;
+
+    body.innerHTML = _ivSumStrip + `
 <div class="wkp-iv-table-wrap">
   <table class="wkp-iv-table">
     <thead>
@@ -4154,7 +4605,16 @@ ${decisionHtml}
         </tr>`;
       }).join("");
 
-      return `<tr data-item="${_esc(item.item_code)}" data-idx="${idx}" data-group="${_esc(item.item_group)}">
+      // WKP-036: classify each row into a bucket for the tab-sum strip click filter.
+      // Buckets must match the data-cat values the strip emits.
+      let _ppCat = "covered";
+      if (item.net_gap > 0)                  _ppCat = "critical";
+      else if ((item.open_po_qty || 0) + (item.open_mr_qty || 0) > 0)
+                                              _ppCat = "in_procurement";
+      const _ppUrgent =
+        item.urgency === "overdue" || item.urgency === "this_week";
+
+      return `<tr data-item="${_esc(item.item_code)}" data-idx="${idx}" data-group="${_esc(item.item_group)}" data-cat="${_ppCat}" data-urgent="${_ppUrgent ? "1" : "0"}">
   <td class="ta-c wkp-sr-chk-cell"><input type="checkbox" class="wkp-pp-chk" data-item="${_esc(item.item_code)}" data-idx="${idx}"></td>
   <td>
     <button class="wkp-sr-item-btn" data-item="${_esc(item.item_code)}"
@@ -4178,7 +4638,7 @@ ${decisionHtml}
   <td class="ta-c">
     ${item.wo_count > 0
       ? `<button class="wkp-btn wkp-btn-sm"
-           onclick="var r=document.getElementById('${detailId}');if(r){r.style.display=r.style.display===''?'none':'';this.textContent=r.style.display===''?'\u25B2 Hide':'\u25BC Details'}"
+           onclick="var r=document.getElementById('${detailId}');if(r){var open=(r.style.display!=='none')&&(r.offsetHeight>0);r.style.display=open?'none':'table-row';this.textContent=open?'\u25BC Details':'\u25B2 Hide'}"
            title="Show linked Work Orders and Sales Orders">\u25BC Details</button>`
       : "\u2014"}
   </td>
@@ -4213,7 +4673,57 @@ ${decisionHtml}
 </tr>`;
     }).join("");
 
-    bodyEl.innerHTML = `
+    // WKP-036: compute bucket counts for the tab-scoped summary strip.
+    const _ppCounts = { critical: 0, in_procurement: 0, covered: 0, urgent: 0 };
+    data.forEach(it => {
+      const cat = (it.net_gap > 0)
+        ? "critical"
+        : (((it.open_po_qty || 0) + (it.open_mr_qty || 0)) > 0 ? "in_procurement" : "covered");
+      _ppCounts[cat]++;
+      if (it.urgency === "overdue" || it.urgency === "this_week") _ppCounts.urgent++;
+    });
+
+    const _ppSumStrip = `
+<div class="wkp-tab-sum" data-strip="pp">
+  <div class="wkp-tab-sum-card err" data-cat="critical" tabindex="0"
+       title="Items where Required minus In Stock minus Open PO minus Open MR is positive — must be ordered to avoid a stock-out.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-circle-exclamation"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ppCounts.critical}</span>
+      <span class="wkp-tab-sum-lbl">Critical Gap</span>
+      <span class="wkp-tab-sum-hint">Net gap &gt; 0</span>
+    </span>
+  </div>
+  <div class="wkp-tab-sum-card info" data-cat="in_procurement" tabindex="0"
+       title="Items where the gap is closed but at least one Open PO or Open MR is in flight. Watch lead times.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-truck-fast"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ppCounts.in_procurement}</span>
+      <span class="wkp-tab-sum-lbl">In Procurement</span>
+      <span class="wkp-tab-sum-hint">Open PO / MR in flight</span>
+    </span>
+  </div>
+  <div class="wkp-tab-sum-card ok" data-cat="covered" tabindex="0"
+       title="Items where stock alone covers all linked Work Order demand. Listed for visibility only.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-circle-check"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ppCounts.covered}</span>
+      <span class="wkp-tab-sum-lbl">Fully Covered</span>
+      <span class="wkp-tab-sum-hint">Stock &ge; demand</span>
+    </span>
+  </div>
+  <div class="wkp-tab-sum-card warn" data-cat="urgent" tabindex="0"
+       title="Items linked to a Sales Order that is overdue or due within 7 days. Highest procurement priority regardless of net gap.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-bolt"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${_ppCounts.urgent}</span>
+      <span class="wkp-tab-sum-lbl">Urgent SO</span>
+      <span class="wkp-tab-sum-hint">Overdue or due in 7 d</span>
+    </span>
+  </div>
+</div>`;
+
+    bodyEl.innerHTML = _ppSumStrip + `
 <div style="overflow-x:auto">
 <table class="wkp-modal-table wkp-shortage-table" id="wkp-pp-table">
   <thead>
@@ -4832,7 +5342,12 @@ ${decisionHtml}
 
     frappe.call({
       method: "chaizup_toc.api.wo_kitting_api.get_dispatch_bottleneck",
-      args: { stock_mode: this.stockMode },
+      args: {
+        stock_mode  : this.stockMode,
+        // WKP-034: thread the user-selected SO + PO statuses through.
+        so_statuses : JSON.stringify(this._selSo || []),
+        po_statuses : JSON.stringify(this._selPo || []),
+      },
       callback: r => {
         this._dispatchLoading = false;
         this._dispatchLoaded  = true;
@@ -5066,7 +5581,7 @@ ${decisionHtml}
       const soDetailId = "wkp-dsp-so-" + item.item_code.replace(/[^a-zA-Z0-9]/g, "_");
 
       return `
-<tr class="wkp-dsp-row wkp-dsp-${item.dsp_status}" data-item="${_esc(item.item_code)}">
+<tr class="wkp-dsp-row wkp-dsp-${item.dsp_status}" data-item="${_esc(item.item_code)}" data-cat="${_esc(item.dsp_status)}">
   <td>
     <span class="wkp-dsp-status-badge ${statusCfg.cls}" data-tip="${statusCfg.tip}">
       ${statusCfg.icon} ${statusCfg.label}
@@ -5156,23 +5671,50 @@ ${decisionHtml}
     const riskCount = items.filter(i => i.dsp_status === "atrisk").length;
     const okCount   = items.filter(i => i.dsp_status === "ok").length;
 
+    // WKP-036: switch to the generic .wkp-tab-sum click-to-filter strip.
+    // The old .wkp-dispatch-sum-card cards remain in CSS but are no longer
+    // rendered. data-cat values must match the dsp_status values that
+    // _renderDispatchBottleneck assigns to each <tr> (critical / atrisk /
+    // ok / surplus). The fourth card is a "Total" card (clickable; clears
+    // the filter back to all items).
+    const surplusCount = items.filter(i => i.dsp_status === "surplus").length;
     const bannerHtml = `
-<div class="wkp-dispatch-summary">
-  <div class="wkp-dispatch-sum-card wkp-dsp-critical" data-tip="Items where customer demand exceeds total supply. Immediate action required.">
-    <div class="wkp-dispatch-sum-num">${critCount}</div>
-    <div class="wkp-dispatch-sum-lbl">\uD83D\uDD34 Critical</div>
+<div class="wkp-tab-sum" data-strip="dispatch">
+  <div class="wkp-tab-sum-card err" data-cat="critical" tabindex="0"
+       title="Items where customer demand exceeds total supply (FG stock + planned production). Immediate action required.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-circle-exclamation"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${critCount}</span>
+      <span class="wkp-tab-sum-lbl">Critical</span>
+      <span class="wkp-tab-sum-hint">Demand &gt; supply</span>
+    </span>
   </div>
-  <div class="wkp-dispatch-sum-card wkp-dsp-atrisk" data-tip="Items with enough coverage IF all WOs complete, but some WOs are blocked.">
-    <div class="wkp-dispatch-sum-num">${riskCount}</div>
-    <div class="wkp-dispatch-sum-lbl">\uD83D\uDFE1 At Risk</div>
+  <div class="wkp-tab-sum-card warn" data-cat="atrisk" tabindex="0"
+       title="Items with enough coverage if all open WOs complete, but at least one WO is blocked or partial.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${riskCount}</span>
+      <span class="wkp-tab-sum-lbl">At Risk</span>
+      <span class="wkp-tab-sum-hint">WO blocked or partial</span>
+    </span>
   </div>
-  <div class="wkp-dispatch-sum-card wkp-dsp-ok" data-tip="Items fully covered with all WOs on track.">
-    <div class="wkp-dispatch-sum-num">${okCount}</div>
-    <div class="wkp-dispatch-sum-lbl">\uD83D\uDFE2 On Track</div>
+  <div class="wkp-tab-sum-card ok" data-cat="ok" tabindex="0"
+       title="Items fully covered (stock + planned production &ge; customer demand) with all WOs on track.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-circle-check"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${okCount}</span>
+      <span class="wkp-tab-sum-lbl">On Track</span>
+      <span class="wkp-tab-sum-hint">Coverage healthy</span>
+    </span>
   </div>
-  <div class="wkp-dispatch-sum-card" style="background:var(--stone-50);border-color:var(--stone-200)" data-tip="Unique finished-good items across all open Work Orders.">
-    <div class="wkp-dispatch-sum-num">${items.length}</div>
-    <div class="wkp-dispatch-sum-lbl">Total Items</div>
+  <div class="wkp-tab-sum-card info" data-cat="surplus" tabindex="0"
+       title="Items where production output already exceeds customer demand. Consider reviewing WO quantity.">
+    <span class="wkp-tab-sum-icon"><i class="fa-solid fa-circle-arrow-up"></i></span>
+    <span class="wkp-tab-sum-body">
+      <span class="wkp-tab-sum-val">${surplusCount}</span>
+      <span class="wkp-tab-sum-lbl">Surplus</span>
+      <span class="wkp-tab-sum-hint">Supply &gt; demand</span>
+    </span>
   </div>
 </div>`;
 

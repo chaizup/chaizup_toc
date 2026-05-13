@@ -26,6 +26,13 @@
     - Do NOT use single quotes inside any HTML attribute string values — Frappe wraps
       templates in JS single-quoted strings; a raw apostrophe causes SyntaxError.
       Use &apos; for possessives and double-quote attribute values always.
+    - The apostrophe rule applies to the ENTIRE file body — markup, attributes,
+      &lt;style&gt; CSS rules, AND &lt;style&gt; CSS comments. CSS /* */ comments are NOT
+      stripped by frappe.build.scrub_html_template (only HTML &lt;!-- --&gt; comments
+      are), and frappe/build.py line 424 has been a NO-OP for years
+      (content.replace literal-apostrophe -&gt; literal-apostrophe). One raw
+      apostrophe anywhere outside HTML comments BLANKS the page — see
+      production_overview.md POR-023 (2026-05-13).
     - NEVER write CSS like width:40%} — the %} sequence is the Frappe microtemplate
       end-of-block marker. Always write width:40%;} (trailing semicolon before }).
       Any CSS percentage value directly followed by } breaks template compilation.
@@ -970,7 +977,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
 
   <div class="tug-callout tug-callout-info">
     <span class="tug-callout-icon">⚙️</span>
-    <div><strong>For both:</strong> if shortage &gt; 0, <code class="tug-code">production_qty = max(shortage, MINMFG)</code> where <code class="tug-code">MINMFG</code> comes from <em>Item → TOC Setting → 6. Minimum Purchase / Production Qty per Warehouse</em>. Then a Production Plan is inserted (with <code class="tug-code">custom_created_by = "System"</code>) and submitted, which triggers ERPNext's standard PP-submit pipeline to create main + sub-assembly Work Orders. Direct WO creation is forbidden.</div>
+    <div><strong>For both:</strong> if shortage &gt; 0, <code class="tug-code">production_qty = max(shortage, MINMFG)</code> where <code class="tug-code">MINMFG</code> comes from <em>Item → TOC Setting → 6. Minimum Purchase / Production Qty per Warehouse</em>. Then a Production Plan is inserted (with <code class="tug-code">custom_created_by = "System"</code>) and submitted, which triggers the ERPNext standard PP-submit pipeline to create main + sub-assembly Work Orders. Direct WO creation is forbidden.</div>
   </div>
 
   <h4 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Variables</h4>
@@ -989,7 +996,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
 
   <div class="tug-callout tug-callout-warn">
     <span class="tug-callout-icon">⚠️</span>
-    <div>Calc B reads <code class="tug-code">ITMWO</code> and <code class="tug-code">ITMWSTK</code> <strong>after</strong> Calc A's PP+WO commit, so it never double-counts what Calc A just created. Removing the intermediate <code class="tug-code">frappe.db.commit()</code> would cause duplicate Production Plans.</div>
+    <div>Calc B reads <code class="tug-code">ITMWO</code> and <code class="tug-code">ITMWSTK</code> <strong>after</strong> the Calc A PP+WO commit, so it never double-counts what Calc A just created. Removing the intermediate <code class="tug-code">frappe.db.commit()</code> would cause duplicate Production Plans.</div>
   </div>
 
   <h3 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">SO Eligibility — Two Paths</h3>
@@ -1053,9 +1060,9 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
   <p>Set <em>TOC Settings → Default Warehouse for Sales Orders</em> to the godown your sales reps most commonly omit on the SO header. When the projection runs against that warehouse, Sales Orders with blank <code class="tug-code">set_warehouse</code> are counted toward PRVSO / CURRSO / CURRALSO. Without this fallback, those SO lines are silently dropped — exactly the demand the projection should be planning for.</p>
 
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Auto-Generated PP Configuration</h3>
-  <p>Every TOC-created Production Plan has the UI checkbox <strong>"Consider Projected Qty in Calculation"</strong> set to <em>unchecked</em>. This forces ERPNext's sub-assembly fetch to use <code class="tug-code">Bin.actual_qty</code> alone — the TOC dual-calc engine already accounts for pending Work Orders, pending Sales Orders, and projection demand, so letting ERPNext re-deduct <code class="tug-code">projected_qty</code> would double-count and silently shrink sub-assembly demand. The PP also stamps <code class="tug-code">Created By = System</code> (visible in the Production Plan list view) and <code class="tug-code">Source Projection</code> for traceability.</p>
+  <p>Every TOC-created Production Plan has the UI checkbox <strong>"Consider Projected Qty in Calculation"</strong> set to <em>unchecked</em>. This forces the ERPNext sub-assembly fetch to use <code class="tug-code">Bin.actual_qty</code> alone — the TOC dual-calc engine already accounts for pending Work Orders, pending Sales Orders, and projection demand, so letting ERPNext deduct again <code class="tug-code">projected_qty</code> would double-count and silently shrink sub-assembly demand. The PP also stamps <code class="tug-code">Created By = System</code> (visible in the Production Plan list view) and <code class="tug-code">Source Projection</code> for traceability.</p>
 
-  <p>The PP Items row also captures the item's <strong>Stock UOM</strong> (e.g. <em>Pcs</em>, <em>Kg</em>) from the Item Master. This was a silent gap until 2026-05-12 — the UOM column on the PP Items grid would render empty for engine-created plans, and ERPNext's <code class="tug-code">validate_uom_is_integer</code> check became a no-op. The qty itself has always been in stock UOM (the formula resolves shortage + MINMFG in stock UOM); only the display column was missing the unit label.</p>
+  <p>The PP Items row also captures the item&apos;s <strong>Stock UOM</strong> (e.g. <em>Pcs</em>, <em>Kg</em>) from the Item Master. This was a silent gap until 2026-05-12 — the UOM column on the PP Items grid would render empty for engine-created plans, and the ERPNext <code class="tug-code">validate_uom_is_integer</code> check became a no-op. The qty itself has always been in stock UOM (the formula resolves shortage + MINMFG in stock UOM); only the display column was missing the unit label.</p>
 
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Sales Projection Admin Role</h3>
   <p>A dedicated role, <strong>Sales Projection Admin</strong>, was introduced on 2026-05-12 for power users who need to correct submitted projections without holding the full System Manager role. Holders can <em>cancel</em> a submitted Sales Projection, <em>amend</em> it (Frappe creates a fresh draft with <code class="tug-code">amended_from</code> set to the cancelled name), <em>edit</em> any field, and <em>resubmit</em>. The <em>System Manager</em> role also now carries cancel + amend on Sales Projection.</p>
@@ -1063,10 +1070,10 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
   <div class="tug-code-block"><code class="tug-code">bench --site &lt;site&gt; add-role &lt;user@example.com&gt; "Sales Projection Admin"</code></div>
 
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Cancelling Projections &amp; Linked Production Plans</h3>
-  <p>The PP Automation engine stamps <code class="tug-code">Production Plan.custom_projection_reference</code> with the source Sales Projection's name, and writes the PP name back to the SP's <code class="tug-code">Sales Projected Items.wo_name</code> column. Until 2026-05-12 these two Link fields produced a <strong>circular cancellation deadlock</strong> — cancelling the Sales Projection threw <em>"linked with Production Plan"</em>, while cancelling the Production Plan threw <em>"linked with Sales Projection"</em>, with no way out.</p>
+  <p>The PP Automation engine stamps <code class="tug-code">Production Plan.custom_projection_reference</code> with the source Sales Projection name, and writes the PP name back to the parent SP <code class="tug-code">Sales Projected Items.wo_name</code> column. Until 2026-05-12 these two Link fields produced a <strong>circular cancellation deadlock</strong> — cancelling the Sales Projection threw <em>"linked with Production Plan"</em>, while cancelling the Production Plan threw <em>"linked with Sales Projection"</em>, with no way out.</p>
   <p>The deadlock is now broken from both sides:</p>
   <ul style="margin:8px 0 12px 22px">
-    <li><strong>Cancel SP:</strong> the controller's <code class="tug-code">before_cancel</code> sets <code class="tug-code">self.flags.ignore_links = True</code>, so Frappe's back-link guard skips the inbound PP traceability reference. The linked PP keeps its <code class="tug-code">custom_projection_reference</code> for audit — the SP doc still exists, just at docstatus = 2.</li>
+    <li><strong>Cancel SP:</strong> the controller method <code class="tug-code">before_cancel</code> sets <code class="tug-code">self.flags.ignore_links = True</code>, so the Frappe back-link guard skips the inbound PP traceability reference. The linked PP keeps its <code class="tug-code">custom_projection_reference</code> for audit — the SP doc still exists, just at docstatus = 2.</li>
     <li><strong>Cancel PP:</strong> a <code class="tug-code">before_cancel</code> doc_event hook (<code class="tug-code">on_production_plan_before_cancel</code>) clears <code class="tug-code">wo_name</code> and <code class="tug-code">wo_status</code> on every SP child row pointing to this PP, just before Frappe runs its back-link check. This is targeted — the normal Work Order / Material Request / Stock Entry inbound link guards on PP remain intact, so users can still NOT cancel a PP that has active WOs against it.</li>
   </ul>
   <div class="tug-callout tug-callout-info">
@@ -1083,7 +1090,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
 
   <div class="tug-callout tug-callout-info">
     <span class="tug-callout-icon">📬</span>
-    <div>The email is <strong>queued</strong> (not sent synchronously) so a transient mail-server failure cannot crash the engine. Check Email Queue if a recipient says they didn't receive it.</div>
+    <div>The email is <strong>queued</strong> (not sent synchronously) so a transient mail-server failure cannot crash the engine. Check Email Queue if a recipient says they did not receive it.</div>
   </div>
 </div>
 

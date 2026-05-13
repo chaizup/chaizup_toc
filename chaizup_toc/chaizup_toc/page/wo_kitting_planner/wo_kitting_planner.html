@@ -222,14 +222,81 @@
                 data-tip="Clear search">&times;</button>
       </div>
 
-      <!-- Status filter -->
-      <div class="wkp-filter-group">
-        <label class="wkp-filter-label" for="wkp-status-filter">Show WOs:</label>
-        <select class="wkp-select" id="wkp-status-filter"
-                data-tip="Filter by production stage:&#10;&bull; All Open WOs = everything not yet completed&#10;&bull; Other statuses (e.g. Not Started, In Process) are fetched dynamically from your current Work Orders.">
-          <option value="">All Open WOs</option>
-        </select>
+      <!-- WO Status multi-select (WKP-034) -->
+      <div class="wkp-filter-group"
+           data-tip="Statuses to treat as OPEN for Work Orders.&#10;Affects every tab on this page: WO Plan, Material Shortage, Dispatch, Item View, Purchase Priority, and the AI Advisor.&#10;Default = Not Started, In Process, Material Transferred.&#10;Universe is dynamic — pulled from your actual Work Order data.">
+        <label class="wkp-filter-label">WO Status:</label>
+        <div class="wkp-ms-wrap">
+          <button type="button" class="wkp-ms-btn" id="wkp-wo-btn" data-ms-panel="wkp-wo-panel">
+            <i class="fa-solid fa-hammer" style="font-size:10px;"></i>
+            <span id="wkp-wo-label">Default</span>
+            <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+          </button>
+          <div class="wkp-ms-panel" id="wkp-wo-panel">
+            <div class="wkp-ms-actions">
+              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-wo-panel" data-val="all">All</button>
+              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-wo-panel" data-val="none">None</button>
+            </div>
+            <div class="wkp-ms-divider"></div>
+            <div id="wkp-wo-status-list"><div class="wkp-ms-hint">Loading&hellip;</div></div>
+          </div>
+        </div>
       </div>
+
+      <!-- SO Status multi-select (WKP-034) -->
+      <div class="wkp-filter-group"
+           data-tip="Statuses considered as PENDING for Sales Orders.&#10;Includes any custom workflow_state on Sales Order surfaced as &quot;Workflow: &lt;state&gt;&quot; entries so a Draft SO with workflow_state=Confirmed counts as pending without flipping its docstatus.&#10;Affects: Dispatch Bottleneck and Item View tabs, AI demand context.">
+        <label class="wkp-filter-label">SO Status:</label>
+        <div class="wkp-ms-wrap">
+          <button type="button" class="wkp-ms-btn" id="wkp-so-btn" data-ms-panel="wkp-so-panel">
+            <i class="fa-solid fa-file-invoice" style="font-size:10px;"></i>
+            <span id="wkp-so-label">Default</span>
+            <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+          </button>
+          <div class="wkp-ms-panel" id="wkp-so-panel">
+            <div class="wkp-ms-actions">
+              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-so-panel" data-val="all">All</button>
+              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-so-panel" data-val="none">None</button>
+            </div>
+            <div class="wkp-ms-divider"></div>
+            <div id="wkp-so-status-list"><div class="wkp-ms-hint">Loading&hellip;</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PO Status multi-select (WKP-034) -->
+      <div class="wkp-filter-group"
+           data-tip="Statuses considered as PENDING for Purchase Orders.&#10;Used by the &quot;Current &amp; Expected&quot; stock mode and the Purchase Priority tab to count incoming supply.&#10;Default = To Receive and Bill, To Receive.&#10;Universe is dynamic — pulled from your actual PO data.">
+        <label class="wkp-filter-label">PO Status:</label>
+        <div class="wkp-ms-wrap">
+          <button type="button" class="wkp-ms-btn" id="wkp-po-btn" data-ms-panel="wkp-po-panel">
+            <i class="fa-solid fa-cart-shopping" style="font-size:10px;"></i>
+            <span id="wkp-po-label">Default</span>
+            <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
+          </button>
+          <div class="wkp-ms-panel" id="wkp-po-panel">
+            <div class="wkp-ms-actions">
+              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-po-panel" data-val="all">All</button>
+              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-po-panel" data-val="none">None</button>
+            </div>
+            <div class="wkp-ms-divider"></div>
+            <div id="wkp-po-status-list"><div class="wkp-ms-hint">Loading&hellip;</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Load button (recalculates everything with the current status selection) -->
+      <button type="button" class="wkp-load-btn" id="wkp-load-btn"
+              data-tip="Recalculate every tab with the currently selected WO / SO / PO statuses.&#10;The button pulses whenever a filter changes to remind you to apply it.">
+        <i class="fa-solid fa-rotate"></i> Load
+      </button>
+
+      <!-- Back-compat: hidden legacy single-status select. Some tests / external
+           callers still bind to #wkp-status-filter; the new multi-select drives
+           the data. Kept off-screen so existing selectors do not throw. -->
+      <select id="wkp-status-filter" style="display:none">
+        <option value=""></option>
+      </select>
 
       <!-- Export / Email controls -->
       <div class="wkp-export-group" id="wkp-export-group">

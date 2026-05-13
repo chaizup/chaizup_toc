@@ -783,6 +783,149 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 .wkp-filter-label { font-size: 11px; font-weight: 600; color: var(--stone-500);
                     white-space: nowrap; }
 
+/* ═══════════════════════════════════════════════════════
+   MULTI-SELECT DROPDOWN (WKP-034 — WO / SO / PO Status filter)
+   ─────────────────────────────────────────────────────
+   Mirrors the Production Overview pattern with WKP palette.
+   ZERO raw apostrophes anywhere in this block (POR-023 lesson).
+   ═══════════════════════════════════════════════════════ */
+.wkp-ms-wrap { position: relative; }
+.wkp-ms-btn {
+  height: 28px; padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px; color: var(--slate-800); font-family: inherit;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.wkp-ms-btn:hover  { border-color: var(--slate-400); }
+.wkp-ms-btn.active {
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
+}
+.wkp-ms-panel {
+  display: none; position: absolute;
+  top: calc(100% + 4px); left: 0;
+  min-width: 220px; max-height: 280px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.15);
+  z-index: 220; padding: 4px 0;
+}
+.wkp-ms-panel.open { display: block; }
+.wkp-ms-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px; cursor: pointer;
+  transition: background 0.1s;
+  color: var(--slate-800);
+}
+.wkp-ms-item:hover { background: var(--slate-50); }
+.wkp-ms-item input[type=checkbox] { accent-color: var(--brand-500); }
+.wkp-ms-actions   { display: flex; gap: 6px; padding: 6px 12px; }
+.wkp-ms-divider   { height: 1px; background: var(--border); margin: 2px 0; }
+.wkp-ms-hint      {
+  font-size: 10px; padding: 4px 12px;
+  color: var(--slate-500); font-style: italic;
+}
+.wkp-ms-wf-tag    {
+  display: inline-block; margin-left: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 1px 5px; border-radius: 3px;
+  background: var(--slate-100); color: var(--slate-700);
+  text-transform: uppercase;
+}
+
+/* ═══════════════════════════════════════════════════════
+   TAB-SCOPED SUMMARY STRIP (WKP-036 — 2026-05-13)
+   ─────────────────────────────────────────────────────
+   Mini click-to-filter cards rendered INSIDE each tab pane
+   (Dispatch, Item View, Purchase Priority). Distinct from
+   the global #wkp-summary which is WO-plan-derived. Same
+   visual language as .wkp-sum-card but compact so the table
+   keeps maximum vertical room on small screens.
+   ═══════════════════════════════════════════════════════ */
+.wkp-tab-sum {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 8px 12px 4px;
+  background: var(--bg-surface, #fff);
+}
+.wkp-tab-sum-card {
+  flex: 1 1 0;
+  min-width: 160px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.wkp-tab-sum-card:hover {
+  border-color: var(--brand-500);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+.wkp-tab-sum-card.active {
+  border-color: var(--brand-500);
+  background: rgba(245, 158, 11, 0.06);
+  box-shadow: inset 0 0 0 1px var(--brand-500);
+}
+.wkp-tab-sum-card .wkp-tab-sum-icon {
+  font-size: 18px;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--slate-100); color: var(--slate-700);
+  flex-shrink: 0;
+}
+.wkp-tab-sum-card.ok   .wkp-tab-sum-icon { background: rgba(16, 185, 129, 0.12); color: var(--ok-text); }
+.wkp-tab-sum-card.warn .wkp-tab-sum-icon { background: rgba(245, 158, 11, 0.12); color: var(--brand-700); }
+.wkp-tab-sum-card.err  .wkp-tab-sum-icon { background: rgba(239, 68, 68, 0.12); color: var(--err-text); }
+.wkp-tab-sum-card.info .wkp-tab-sum-icon { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
+.wkp-tab-sum-card .wkp-tab-sum-body { display: flex; flex-direction: column; line-height: 1.1; }
+.wkp-tab-sum-card .wkp-tab-sum-val  {
+  font-family: var(--font-display, inherit);
+  font-size: 18px; font-weight: 700; color: var(--slate-900);
+}
+.wkp-tab-sum-card .wkp-tab-sum-lbl  {
+  font-size: 11px; font-weight: 600; color: var(--slate-500);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.wkp-tab-sum-card .wkp-tab-sum-hint {
+  font-size: 10px; color: var(--slate-400); margin-top: 1px;
+}
+
+/* When ANY tab-sum card is in active state, dim non-matching rows on the
+   sibling table. The active class on a card sets data-cat on the parent
+   strip; JS sets data-filter-cat on the closest table. */
+.wkp-tab-sum-active tbody tr[data-cat]:not([data-cat-match="1"]) { display: none; }
+
+/* Load button — pulses when a filter changes to nudge user to apply */
+.wkp-load-btn {
+  height: 28px; padding: 0 14px;
+  border: 1px solid var(--brand-500);
+  background: var(--brand-500); color: #fff;
+  font-size: 12px; font-weight: 600;
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  transition: background 0.15s, transform 0.1s;
+}
+.wkp-load-btn:hover  { background: var(--brand-600); border-color: var(--brand-600); }
+.wkp-load-btn:active { transform: translateY(1px); }
+.wkp-load-btn.dirty  {
+  animation: wkp-load-pulse 1.5s ease-in-out infinite;
+}
+@keyframes wkp-load-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+  50%      { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+}
+
 
 /* ═══════════════════════════════════════════════════════
    CONTEXT BAR (hint bar) ENHANCEMENTS

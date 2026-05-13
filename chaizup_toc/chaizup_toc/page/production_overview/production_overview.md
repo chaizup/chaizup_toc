@@ -139,6 +139,7 @@ Session storage key: `por_ai_session` (UUID for chat continuity).
 | `_esc()` in JS | Inline entity replacement; do NOT swap to `frappe.dom.escape` — that swallows undefined and breaks template strings. |
 | Redis prefix `por:chat:` | Distinct from `wkp:chat:`. Sharing keys would let WO Kitting Planner and Production Overview overwrite each other's chat history. |
 | HTML — no single quotes in event handlers | Frappe wraps templates in a single-quoted JS string. Use `&quot;` for string args. |
+| HTML — **zero raw apostrophes anywhere in the file** (POR-023, 2026-05-13) | `frappe.build.scrub_html_template` strips ONLY HTML `<!-- -->` comments. CSS comments inside `<style>…</style>` are NOT stripped. `frappe/build.py:424` is literally `content.replace("'", "'")` — a NO-OP (intended escape was lost long ago). Any unescaped apostrophe (markup, attr, CSS rule, CSS comment text) terminates the wrapping JS string → SyntaxError → **blank page** when the user clicks Production Overview. Rephrase possessives / contractions; use `&apos;` only inside HTML comments (where it stays literal but harmless). |
 | `_get_active_bom` filters `is_active=1` | Removing this returns ALL historical BOMs and explodes the BOM walk. |
 
 ## Spec Compliance Map (Session 2026-04-30 — Full Spec Pass)
@@ -1553,4 +1554,119 @@ wo_statuses, po_statuses)` in `production_overview_api.py`:
    --kwargs '{"item_code": "<some_code>"}'`
    — both `aggregated[*].incoming_wo/po` and
    `by_wo[*].short_components[*].incoming_wo/po` should be present.
+
+---
+
+## POR-023 (2026-05-13) — page-blank-on-click fix + apostrophe RESTRICT
+
+### Symptom
+Clicking the "Production Overview" desk menu navigated to
+`/app/production-overview` and the page rendered **completely blank** —
+no error visible in the desk UI; only the browser console showed
+`SyntaxError: Invalid or unexpected token` inside an inline
+`frappe.templates["production_overview"] = '...'` assignment.
+
+### Root cause
+A single raw apostrophe in the word "Frappe&apos;s" landed inside a
+**CSS comment** (`/* … */`) inside the `<style>` block of
+`production_overview.html` (line 871). CSS comments are NOT stripped by
+Frappe&apos;s template scrubber.
+
+The scrubber is `frappe.build.scrub_html_template` in
+`apps/frappe/frappe/build.py`:
+
+```python
+HTML_COMMENT_PATTERN = re.compile(r"(<!--.*?-->)")
+
+def scrub_html_template(content):
+    content = WHITESPACE_PATTERN.sub(" ", content)
+    content = HTML_COMMENT_PATTERN.sub("", content)        # only HTML comments
+    return content.replace("'", "'")                       # NO-OP (broken)
+```
+
+The `return content.replace("'", "'")` line is literally identity — it
+was once intended to escape apostrophes for the wrapping JS string but
+the escape backslash was lost. As a result, the wrapper
+
+```javascript
+frappe.templates["production_overview"] = ' …<style>…/* Frappe's …*/…</style>… ';
+```
+
+closes its JS string at the embedded apostrophe and the remainder is
+parsed as syntactically invalid JS → SyntaxError → the page-script
+never runs → blank `page.body`.
+
+### Verification before fix
+- `python3 -c "from frappe.build import html_to_js_template; print(html_to_js_template(...))"`
+  produced a string with an unescaped apostrophe near offset N inside
+  the wrap body.
+- `node /tmp/_por_wrap.js` raised SyntaxError.
+
+### Fix
+Replaced the offending CSS-comment apostrophe with apostrophe-free
+wording in `production_overview.html` (line 871) and added a new
+POR-023 sub-block to the RESTRICT comment immediately below that
+documents the underlying scrubber behaviour and the `&apos;`-only-inside-`<!-- -->`-comments rule.
+
+After fix:
+- Re-running the same Python wrap simulation: `raw=0`, `unescaped=0`.
+- `node /tmp/_por_wrap.js` succeeds (`template length: 71063`).
+- `bench build --app chaizup_toc` succeeds and
+  `bench --site development.localhost clear-cache` runs clean.
+
+### How to test in the browser
+1. Hard-reload the desk in a Production-Overview-permitted user
+   session (Cmd/Ctrl + Shift + R).
+2. Click "Production Overview" from the desk launcher / search.
+3. Expect the 3-tab dashboard (Overview / AI Advisor / Charts) to
+   render the filter row, summary cards, and 18-column item table.
+4. Open DevTools → Console → no `SyntaxError: Invalid or unexpected
+   token` near a `frappe.templates["production_overview"]` line.
+5. Click any row affordance — `i` info icon, View (Shortage), Plan,
+   Cost, SOs — modals should open and render.
+
+### NEW restricted area (engineering invariant)
+> **Zero raw apostrophes anywhere in `production_overview.html` that is
+> not inside an HTML `<!-- -->` comment.**
+>
+> Includes: attributes, text nodes, `<style>` CSS rules, `<style>` CSS
+> comments, `<script>` blocks. Use `&apos;` (inside HTML comments only;
+> elsewhere it renders as literal `&apos;`). Rewrite possessives
+> ("Frappe&apos;s X" → "the X used by Frappe" / "Frappe X") and avoid
+> contractions ("doesn't" → "does not", "won't" → "will not").
+>
+> A repo-grep pre-commit lint catches it:
+> ```bash
+> python3 -c "import re,sys; s=open(sys.argv[1]).read(); \
+>   s=re.sub(r'<!--.*?-->', '', s, flags=re.S); \
+>   sys.exit(0 if \"'\" not in s else 1)" \
+>   chaizup_toc/chaizup_toc/page/production_overview/production_overview.html
+> ```
+> Exit code 0 → clean; 1 → contains a wrap-breaking apostrophe.
+
+### Sync Block (POR-023 / 2026-05-13)
+
+```
+[chaizup_toc · production_overview · POR-023 · 2026-05-13]
+- Symptom: /app/production-overview rendered blank after click.
+- Cause: raw apostrophe in "Frappe's" inside a CSS /* */ comment in
+  the page HTML. CSS comments are NOT stripped by
+  frappe.build.scrub_html_template — only HTML <!-- --> comments are.
+  scrub_html_template's final apostrophe-escape call in frappe v16 is
+  a NO-OP (content.replace("'", "'")), so any unescaped apostrophe
+  inside the body terminates the single-quoted JS template wrap and
+  yields SyntaxError → blank page.
+- Fix: rephrased CSS-comment text (apostrophe-free); added a POR-023
+  RESTRICT sub-block to the same comment documenting the rule.
+- Restricted: ZERO raw apostrophes anywhere in production_overview.html
+  outside HTML <!-- --> comments. Rewrite contractions / possessives.
+- Verified: python wrap simulation has 0 unescaped apostrophes; node
+  parses the wrapped script; bench build + clear-cache OK.
+- Browser test required: hard-reload + click Production Overview;
+  expect 3-tab dashboard, no SyntaxError in console.
+- Same bug family as POR-013 (apostrophe-in-event-handler) and POR-019
+  (CSS unicode-escape leaking as text). Future audits of this file
+  should keep an eye on raw quotes, raw apostrophes, and CSS backslash
+  escapes — all three derive from build.py wrap semantics.
+```
 

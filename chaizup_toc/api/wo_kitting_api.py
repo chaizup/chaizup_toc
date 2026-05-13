@@ -198,8 +198,239 @@ _AI_MAX_TOOL_CALLS = 3
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  PUBLIC API
+# CONTEXT (WKP-034 — 2026-05-13): User-selectable SO / WO / PO statuses
 # ═══════════════════════════════════════════════════════════════════════
+# MEMORY: wo_kitting_planner.MD § "Dynamic Status Filters (WKP-034)"
+#
+# Mirrors the Production Overview pattern (`production_overview_api.py
+# get_default_statuses` + `_so_status_clause`). Three multi-select
+# dropdowns in the page header — WO Status, SO Status, PO Status — drive
+# every report on the page. The universe of choices is dynamic
+# (`SELECT DISTINCT status FROM tab<DocType>`) so custom statuses appear
+# automatically. Sales Order workflow_state values (e.g. "Confirmed" on
+# a Draft SO) are surfaced as "Workflow: <state>" entries so a draft-
+# but-workflow-confirmed order can be counted as pending without
+# flipping its docstatus.
+#
+# Defaults are pending-only: WOs excluding terminal states; SOs in
+# "To Deliver and Bill / To Deliver / Partially Delivered / On Hold";
+# POs in "To Receive and Bill / To Receive". If a status in the
+# preferred default has zero rows in the user's data, it is dropped
+# from the default set so a tick-box never maps to zero results.
+#
+# DANGER:
+#   - PATH A (workflow_state) requires the column to exist on tabSales
+#     Order. Sites without an SO Workflow do not have this column.
+#     Always guard with `frappe.db.has_column("Sales Order",
+#     "workflow_state")` before querying. Same lesson as Production
+#     Overview / POR-013-family.
+#   - Empty status list MUST short-circuit to "1=0" (match nothing) NOT
+#     unfiltered SQL — otherwise unchecking all boxes silently returns
+#     everything, which is the opposite of what the user expects.
+#
+# RESTRICT:
+#   - Do NOT remove `get_work_order_statuses` — old JS callers / older
+#     pages may still bind to it. The new endpoint is additive.
+#   - Workflow-state entries are stringly typed (`"Workflow: <name>"`).
+#     The JS sends them back verbatim and the server splits them via
+#     `_wkp_split_status_and_workflow`. Do not rename the prefix.
+#   - When threading the status lists through SQL, ALWAYS fall back to
+#     the `_DEFAULT_*` constants (never to "no filter") so existing
+#     callers that omit the kwarg keep their pre-WKP-034 behaviour.
+# ═══════════════════════════════════════════════════════════════════════
+
+_DEFAULT_WKP_WO_STATUSES = ["Not Started", "In Process", "Material Transferred"]
+_DEFAULT_WKP_SO_STATUSES = [
+    "To Deliver and Bill", "To Deliver", "Partially Delivered", "On Hold",
+]
+_DEFAULT_WKP_PO_STATUSES = ["To Receive and Bill", "To Receive"]
+
+
+def _wkp_parse_status_list(value, default):
+    """Accept list / JSON string / None. Empty / falsy => fall back to default."""
+    if value is None or value == "":
+        return list(default)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return list(default)
+        value = parsed
+    if not isinstance(value, (list, tuple)):
+        return list(default)
+    cleaned = [s for s in value if isinstance(s, str) and s.strip()]
+    return cleaned or list(default)
+
+
+def _wkp_split_status_and_workflow(status_list):
+    """
+    Split a JS-supplied list like ["To Deliver", "Workflow: Confirmed"]
+    into (plain_statuses, workflow_states).
+    """
+    plain, wf = [], []
+    for s in (status_list or []):
+        if isinstance(s, str) and s.startswith("Workflow: "):
+            wf.append(s[len("Workflow: "):])
+        else:
+            plain.append(s)
+    return plain, wf
+
+
+def _wkp_sql_in(values):
+    """Render a Python iterable of strings as a SQL IN(...) tuple. Escapes single quotes."""
+    if not values:
+        return "(NULL)"
+    parts = []
+    for v in values:
+        parts.append("'" + str(v).replace("'", "''") + "'")
+    return "(" + ", ".join(parts) + ")"
+
+
+def _wkp_so_status_clause(so_statuses, alias="so"):
+    """
+    Build a SQL fragment that matches:
+      ({alias}.docstatus = 1 AND {alias}.status IN (plain_statuses))
+      OR ({alias}.docstatus = 0 AND {alias}.workflow_state IN (wf_states))   ← only if column exists
+    Returns SQL text — caller embeds inside an existing WHERE.
+    Empty filter => "1=0" (match nothing, safe default).
+    """
+    plain, wf = _wkp_split_status_and_workflow(so_statuses)
+    parts = []
+    if plain:
+        parts.append(f"({alias}.docstatus = 1 AND {alias}.status IN {_wkp_sql_in(plain)})")
+    if wf and frappe.db.has_column("Sales Order", "workflow_state"):
+        parts.append(f"({alias}.docstatus = 0 AND {alias}.workflow_state IN {_wkp_sql_in(wf)})")
+    if not parts:
+        return "1=0"
+    return "(" + " OR ".join(parts) + ")"
+
+
+def _wkp_po_status_clause(po_statuses, alias="po"):
+    """
+    Submitted POs in user-selected statuses.
+      ({alias}.docstatus = 1 AND {alias}.status IN (plain_statuses))
+    Workflow states on PO are extremely rare; supported only when the
+    workflow_state column actually exists, same pattern as SO.
+    Empty filter => "1=0".
+    """
+    plain, wf = _wkp_split_status_and_workflow(po_statuses)
+    parts = []
+    if plain:
+        parts.append(f"({alias}.docstatus = 1 AND {alias}.status IN {_wkp_sql_in(plain)})")
+    if wf and frappe.db.has_column("Purchase Order", "workflow_state"):
+        parts.append(f"({alias}.docstatus = 0 AND {alias}.workflow_state IN {_wkp_sql_in(wf)})")
+    if not parts:
+        return "1=0"
+    return "(" + " OR ".join(parts) + ")"
+
+
+def _wkp_wo_status_clause(wo_statuses, alias="wo"):
+    """
+    Submitted WOs in user-selected statuses.
+      ({alias}.docstatus = 1 AND {alias}.status IN (plain_statuses))
+      OR ({alias}.docstatus = 0 AND {alias}.workflow_state IN (wf_states))   ← only if column exists
+    Empty filter => "1=0".
+
+    WKP-034+ (2026-05-13 update): also supports "Workflow: <state>" entries
+    when the site has a Work Order Workflow configured. Matches the SO/PO
+    pattern. Without the workflow_state column on tabWork Order (most
+    ERPNext sites), the wf branch is silently dropped.
+    """
+    plain, wf = _wkp_split_status_and_workflow(wo_statuses)
+    parts = []
+    if plain:
+        parts.append(f"({alias}.docstatus = 1 AND {alias}.status IN {_wkp_sql_in(plain)})")
+    if wf and frappe.db.has_column("Work Order", "workflow_state"):
+        parts.append(f"({alias}.docstatus = 0 AND {alias}.workflow_state IN {_wkp_sql_in(wf)})")
+    if not parts:
+        return "1=0"
+    return "(" + " OR ".join(parts) + ")"
+
+
+@frappe.whitelist()
+def wkp_get_default_statuses():
+    """
+    Return universe + pending defaults for the WKP filter bar
+    (WO Status, SO Status, PO Status — and surface SO workflow_state).
+
+    Shape matches Production Overview's `get_default_statuses` so the
+    same JS multi-select helpers transplant verbatim.
+    """
+    def _distinct_status(doctype):
+        try:
+            rows = frappe.db.sql(
+                f"SELECT DISTINCT status FROM `tab{doctype}` WHERE status IS NOT NULL"
+            )
+            return sorted({r[0] for r in rows if r[0]})
+        except Exception:
+            return []
+
+    def _distinct_workflow(doctype):
+        if not frappe.db.has_column(doctype, "workflow_state"):
+            return []
+        try:
+            rows = frappe.db.sql(
+                f"SELECT DISTINCT workflow_state FROM `tab{doctype}` "
+                f"WHERE workflow_state IS NOT NULL AND workflow_state != ''"
+            )
+            return sorted({r[0] for r in rows if r[0]})
+        except Exception:
+            return []
+
+    all_wo = _distinct_status("Work Order")
+    all_so = _distinct_status("Sales Order")
+    all_po = _distinct_status("Purchase Order")
+    # WKP-034+ (2026-05-13 update): surface workflow_state for all three
+    # doctypes when the column exists. Most sites have it on Sales Order
+    # only; some configure custom Workflows on Work Order / Purchase Order
+    # too (e.g. "PO Awaiting Vendor Confirmation" before submission).
+    so_wf  = _distinct_workflow("Sales Order")
+    wo_wf  = _distinct_workflow("Work Order")
+    po_wf  = _distinct_workflow("Purchase Order")
+
+    def _intersect(actual, preferred):
+        actual_set = set(actual)
+        return [s for s in preferred if s in actual_set]
+
+    wo_pending_default = _intersect(all_wo, _DEFAULT_WKP_WO_STATUSES) \
+                          or [s for s in all_wo
+                              if s not in ("Cancelled", "Completed", "Stopped", "Draft", "Closed")]
+    so_pending_default = _intersect(all_so, _DEFAULT_WKP_SO_STATUSES) \
+                          or [s for s in all_so
+                              if s not in ("Cancelled", "Completed", "Closed", "Draft")]
+    po_pending_default = _intersect(all_po, _DEFAULT_WKP_PO_STATUSES) \
+                          or [s for s in all_po
+                              if s not in ("Cancelled", "Completed", "Closed", "Draft")]
+
+    # Surface workflow states as "Workflow: <state>" entries so the JS
+    # can pass them back to the backend verbatim. Applied to all three
+    # doctypes — Sales Order, Work Order, Purchase Order — when each has
+    # the column. WKP-034+ (2026-05-13 update).
+    so_universe = list(all_so) + [f"Workflow: {w}" for w in so_wf]
+    wo_universe = list(all_wo) + [f"Workflow: {w}" for w in wo_wf]
+    po_universe = list(all_po) + [f"Workflow: {w}" for w in po_wf]
+
+    return {
+        # Defaults JS pre-checks on load
+        "wo_statuses":  wo_pending_default,
+        "so_statuses":  so_pending_default,
+        "po_statuses":  po_pending_default,
+        # Universe (dynamic, never hardcoded). Each includes "Workflow: …"
+        # entries when the underlying doctype has a workflow_state column
+        # populated with at least one non-empty value.
+        "all_wo_statuses": wo_universe,
+        "all_so_statuses": so_universe,
+        "all_po_statuses": po_universe,
+        # Diagnostic — JS shows a "(includes custom workflow states)" hint
+        # per panel when its workflow_state list is non-empty.
+        "so_has_workflow_column": frappe.db.has_column("Sales Order", "workflow_state"),
+        "wo_has_workflow_column": frappe.db.has_column("Work Order", "workflow_state"),
+        "po_has_workflow_column": frappe.db.has_column("Purchase Order", "workflow_state"),
+        "so_workflow_states":     so_wf,
+        "wo_workflow_states":     wo_wf,
+        "po_workflow_states":     po_wf,
+    }
+
 
 @frappe.whitelist()
 def get_work_order_statuses():
@@ -218,27 +449,31 @@ def get_work_order_statuses():
 
 
 @frappe.whitelist()
-def get_open_work_orders(status_filter=None):
+def get_open_work_orders(status_filter=None, wo_statuses=None):
     """
-    Fetch all open Work Orders for the planner.
+    Fetch open Work Orders for the planner, scoped to the user-selected WO statuses.
 
     Args:
         status_filter (str, optional):
-            Narrow to a specific ERPNext WO status.
-            Accepted values: "Not Started", "In Process", "Material Transferred"
-            Omit or pass "" to fetch all open statuses.
-
-    Returns:
-        list of dict with keys:
-            name, production_item, item_name, bom_no, qty, produced_qty,
-            remaining_qty, planned_start_date, status, company, stock_uom
+            BACK-COMPAT single-status filter from older WKP versions.
+            When provided, narrows the resultset to that one status
+            (intersected with wo_statuses if both are supplied).
+        wo_statuses (list | JSON-string, optional):
+            New (WKP-034) multi-select list of WO statuses to treat as
+            "open". When None or empty, defaults to
+            _DEFAULT_WKP_WO_STATUSES (Not Started / In Process /
+            Material Transferred).
     """
+    # WKP-034: prefer the multi-select; fall back to default if neither is set.
+    selected = _wkp_parse_status_list(wo_statuses, _DEFAULT_WKP_WO_STATUSES)
+    if status_filter:
+        # Back-compat: a legacy single-status filter further narrows.
+        selected = [s for s in selected if s == status_filter] or [status_filter]
+
     filters = [
         ["docstatus", "=", 1],
-        ["status", "not in", ["Completed", "Stopped", "Cancelled"]],
+        ["status", "in", selected],
     ]
-    if status_filter:
-        filters.append(["status", "=", status_filter])
 
     wos = frappe.get_all(
         "Work Order",
@@ -289,7 +524,8 @@ def get_open_work_orders(status_filter=None):
 
 @frappe.whitelist()
 def simulate_kitting(work_orders_json, stock_mode="current_only",
-                     calc_mode="isolated", multi_level=0):
+                     calc_mode="isolated", multi_level=0,
+                     wo_statuses=None, po_statuses=None):
     """
     Main kitting simulation endpoint.
 
@@ -299,6 +535,14 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
         stock_mode (str): "current_only" or "current_and_expected"
         calc_mode (str): "isolated" or "sequential"
         multi_level (int|str): 0 = single-level BOM, 1 = multi-level explosion
+        wo_statuses (list | JSON-string, optional):
+            WKP-034 — used by the "current_and_expected" supply pool to scope
+            which sub-assembly Work Orders are counted as incoming supply.
+            Defaults to _DEFAULT_WKP_WO_STATUSES when None / empty.
+        po_statuses (list | JSON-string, optional):
+            WKP-034 — used by the "current_and_expected" supply pool to scope
+            which Purchase Orders contribute remaining qty. Defaults to
+            _DEFAULT_WKP_PO_STATUSES when None / empty.
 
     Returns:
         list of row dicts (see module docstring for schema)
@@ -344,7 +588,13 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
         deep_bom_items = {r.item for r in _db_rows}
 
     # ── Step 3: Stock pool ──────────────────────────────────────────────
-    stock_pool = _build_stock_pool(stock_mode, all_comp_codes)
+    # WKP-034: thread the user-selected WO/PO statuses into the supply pool
+    # so "current_and_expected" honours the page filter.
+    stock_pool = _build_stock_pool(
+        stock_mode, all_comp_codes,
+        wo_statuses=_wkp_parse_status_list(wo_statuses, _DEFAULT_WKP_WO_STATUSES),
+        po_statuses=_wkp_parse_status_list(po_statuses, _DEFAULT_WKP_PO_STATUSES),
+    )
 
     # ── Step 4: Dispatch info (Sales Orders) ────────────────────────────
     wo_item_codes = list({w["production_item"] for w in wos})
@@ -543,15 +793,22 @@ def get_items_procurement_info(item_codes_json):
 
 
 @frappe.whitelist()
-def get_item_wo_summary():
+def get_item_wo_summary(wo_statuses=None, so_statuses=None):
     """
     FG-wise summary: all items with active Work Orders or pending Sales Orders.
     Called by the Item View tab to show production + demand context per FG item.
 
+    WKP-034: WO + SO scope is now driven by the page-level multi-select. Both
+    arguments accept either a Python list or a JSON-encoded string (which is
+    what frappe.call sends from the JS client). Workflow-state entries
+    ("Workflow: Confirmed") are supported on the SO side.
+
     DATA SOURCES
     ------------
-      Active WOs  : tabWork Order (docstatus=1, status NOT IN Completed/Cancelled/Stopped)
-      Pending SOs : tabSales Order + tabSales Order Item (docstatus IN (0,1), pending qty > 0)
+      Active WOs  : tabWork Order (docstatus=1, status IN user-selected set;
+                    default = _DEFAULT_WKP_WO_STATUSES).
+      Pending SOs : tabSales Order + tabSales Order Item via _wkp_so_status_clause
+                    (user-selected statuses + workflow_state on Draft).
       Consumed    : tabStock Entry (purpose=Manufacture) + tabStock Entry Detail
                     s_warehouse IS NOT NULL, t_warehouse IS NULL or empty = consumed components
       Last cost   : Last completed WO per item → Stock Entry actual cost
@@ -560,8 +817,13 @@ def get_item_wo_summary():
     Returns:
         list of dicts, one per item_code, sorted by item_name
     """
+    wo_statuses_eff = _wkp_parse_status_list(wo_statuses, _DEFAULT_WKP_WO_STATUSES)
+    so_statuses_eff = _wkp_parse_status_list(so_statuses, _DEFAULT_WKP_SO_STATUSES)
+    wo_clause = _wkp_wo_status_clause(wo_statuses_eff)
+    so_clause = _wkp_so_status_clause(so_statuses_eff)
+
     # ── 1. Active Work Orders ──────────────────────────────────────────────
-    wos = frappe.db.sql("""
+    wos = frappe.db.sql(f"""
         SELECT
             wo.name         AS wo_name,
             wo.production_item AS item_code,
@@ -572,8 +834,7 @@ def get_item_wo_summary():
             (wo.qty - wo.produced_qty) AS remaining_qty,
             wo.status
         FROM `tabWork Order` wo
-        WHERE wo.docstatus = 1
-          AND wo.status NOT IN ('Completed', 'Cancelled', 'Stopped')
+        WHERE {wo_clause}
     """, as_dict=True)
 
     # Index WOs by item_code
@@ -595,8 +856,8 @@ def get_item_wo_summary():
         wo_by_item[ic]["produced_qty"]  += flt(wo.produced_qty)
         wo_by_item[ic]["remaining_qty"] += flt(wo.remaining_qty)
 
-    # ── 2. Pending Sales Orders (submitted + draft) ────────────────────────
-    sos = frappe.db.sql("""
+    # ── 2. Pending Sales Orders (user-selected statuses + workflow_state) ──
+    sos = frappe.db.sql(f"""
         SELECT
             soi.item_code,
             soi.item_name,
@@ -605,7 +866,7 @@ def get_item_wo_summary():
             COUNT(DISTINCT soi.parent)                     AS so_count
         FROM `tabSales Order Item` soi
         JOIN `tabSales Order` so ON so.name = soi.parent
-        WHERE so.docstatus IN (0, 1)
+        WHERE {so_clause}
           AND (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0.001
         GROUP BY soi.item_code
     """, as_dict=True)
@@ -1320,7 +1581,7 @@ def _explode_multi_level(bom_map, max_depth=6):
 #  STOCK POOL
 # ═══════════════════════════════════════════════════════════════════════
 
-def _build_stock_pool(stock_mode, item_codes):
+def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None):
     """
     Build the available qty map per item code.
 
@@ -1333,11 +1594,20 @@ def _build_stock_pool(stock_mode, item_codes):
         + open Purchase MR remaining qty (qty - ordered_qty, not yet converted to PO)
         + open WO expected output (qty - produced_qty) for sub-assembly items
 
+    WKP-034: PO and WO scans honour the user-selected statuses (multi-select
+    from the page filter bar). Falls back to _DEFAULT_WKP_PO_STATUSES /
+    _DEFAULT_WKP_WO_STATUSES so direct callers that omit the kwargs keep
+    pre-WKP-034 behaviour. MR scan stays on the legacy NOT-IN list because
+    Material Request is not part of the user-facing status filter.
+
     Returns:
         dict: {item_code: available_qty}
     """
     if not item_codes:
         return {}
+
+    wo_statuses_eff = wo_statuses or list(_DEFAULT_WKP_WO_STATUSES)
+    po_statuses_eff = po_statuses or list(_DEFAULT_WKP_PO_STATUSES)
 
     # ── Base: physical Bin stock ────────────────────────────────────────
     rows = frappe.db.sql("""
@@ -1355,15 +1625,15 @@ def _build_stock_pool(stock_mode, item_codes):
     if stock_mode != "current_and_expected":
         return pool
 
-    # ── Open PO remaining ───────────────────────────────────────────────
-    po_rows = frappe.db.sql("""
+    # ── Open PO remaining (user-selected PO statuses) ───────────────────
+    po_clause = _wkp_po_status_clause(po_statuses_eff)
+    po_rows = frappe.db.sql(f"""
         SELECT poi.item_code,
                SUM(poi.qty - COALESCE(poi.received_qty, 0)) AS expected
         FROM   `tabPurchase Order Item` poi
         JOIN   `tabPurchase Order` po ON po.name = poi.parent
         WHERE  poi.item_code IN %(items)s
-          AND  po.docstatus = 1
-          AND  po.status NOT IN ('Closed', 'Cancelled')
+          AND  {po_clause}
           AND  (poi.qty - COALESCE(poi.received_qty, 0)) > 0
         GROUP BY poi.item_code
     """, {"items": item_codes}, as_dict=True)
@@ -1388,14 +1658,14 @@ def _build_stock_pool(stock_mode, item_codes):
     for r in mr_rows:
         pool[r.item_code] = pool.get(r.item_code, 0) + flt(r.expected)
 
-    # ── Open WO expected output (sub-assembly WOs) ──────────────────────
-    wo_rows = frappe.db.sql("""
+    # ── Open WO expected output, sub-assembly WOs (user-selected WO statuses) ──
+    wo_clause = _wkp_wo_status_clause(wo_statuses_eff)
+    wo_rows = frappe.db.sql(f"""
         SELECT production_item                                 AS item_code,
                SUM(qty - COALESCE(produced_qty, 0))           AS expected
-        FROM   `tabWork Order`
+        FROM   `tabWork Order` wo
         WHERE  production_item IN %(items)s
-          AND  docstatus = 1
-          AND  status NOT IN ('Completed', 'Stopped', 'Cancelled')
+          AND  {wo_clause}
         GROUP BY production_item
     """, {"items": item_codes}, as_dict=True)
 
@@ -1932,7 +2202,8 @@ def _get_dispatch_info(item_codes):
 # ═══════════════════════════════════════════════════════════════════════
 
 @frappe.whitelist()
-def get_dispatch_bottleneck(stock_mode="current_only"):
+def get_dispatch_bottleneck(stock_mode="current_only",
+                            so_statuses=None, po_statuses=None):
     """
     Dispatch bottleneck analysis — independent of WO simulation.
 
@@ -1950,6 +2221,12 @@ def get_dispatch_bottleneck(stock_mode="current_only"):
         stock_mode (str): "current_only" (default) = physical stock only.
                           "current_and_expected" = add open PO inbound qty to fg_stock
                           so that the Dispatch tab reflects the same mode as simulation.
+        so_statuses (list | JSON-string, optional):
+            WKP-034 multi-select. Scopes the "pending SO" universe. Workflow-
+            state entries supported. Default = _DEFAULT_WKP_SO_STATUSES.
+        po_statuses (list | JSON-string, optional):
+            WKP-034 multi-select. Scopes the PO inbound qty when
+            stock_mode = "current_and_expected". Default = _DEFAULT_WKP_PO_STATUSES.
 
     Returns per item:
         fg_stock         float  Physical FG stock (all warehouses, Bin.actual_qty)
@@ -1971,7 +2248,9 @@ def get_dispatch_bottleneck(stock_mode="current_only"):
         dict: {item_code: {fg_stock, total_pending, ..., so_list, item_name, uom, ...}}
     """
     # ── Step 1: Discover all items with pending SOs (submitted + drafts) ──
-    so_rows = _get_open_so_detail()   # no filter → all pending SOs incl. drafts
+    # WKP-034: thread the user-selected SO status filter through.
+    so_statuses_eff = _wkp_parse_status_list(so_statuses, _DEFAULT_WKP_SO_STATUSES)
+    so_rows = _get_open_so_detail(so_statuses=so_statuses_eff)
 
     if not so_rows:
         return {}
@@ -1984,13 +2263,14 @@ def get_dispatch_bottleneck(stock_mode="current_only"):
     # When stock_mode = "current_and_expected", add open FG PO inbound qty
     # so the Dispatch tab reflects the same mode as the main simulation.
     if stock_mode == "current_and_expected":
-        po_inbound = frappe.db.sql("""
+        po_statuses_eff = _wkp_parse_status_list(po_statuses, _DEFAULT_WKP_PO_STATUSES)
+        po_clause = _wkp_po_status_clause(po_statuses_eff)
+        po_inbound = frappe.db.sql(f"""
             SELECT poi.item_code, SUM(poi.qty - IFNULL(poi.received_qty, 0)) AS inbound
             FROM   `tabPurchase Order Item` poi
             JOIN   `tabPurchase Order` po ON po.name = poi.parent
             WHERE  poi.item_code IN %(items)s
-              AND  po.docstatus = 1
-              AND  po.status NOT IN ('Closed', 'Cancelled', 'Completed')
+              AND  {po_clause}
               AND  poi.received_qty < poi.qty
             GROUP BY poi.item_code
         """, {"items": item_codes}, as_dict=True)
@@ -2258,7 +2538,7 @@ def _get_fg_stock(item_codes):
     return {r.item_code: flt(r.qty) for r in rows}
 
 
-def _get_open_so_detail(item_codes=None):
+def _get_open_so_detail(item_codes=None, so_statuses=None):
     """
     Fetch all open (undelivered) Sales Order lines.
 
@@ -2266,26 +2546,28 @@ def _get_open_so_detail(item_codes=None):
         Used by get_dispatch_bottleneck() to discover every item customers
         are waiting for, independent of the current WO simulation.
     When item_codes is provided: restricts to those items.
-        Used by the old dispatch flow if needed.
 
-    Returns ALL SOs regardless of delivery date — not restricted to
-    the 2-month window used by _get_dispatch_info().
-    Results are ordered by delivery_date ASC (soonest overdue first).
+    WKP-034: `so_statuses` is the user-selected SO status list from the page
+    multi-select. Workflow-state entries (`"Workflow: <state>"`) are
+    automatically routed via `_wkp_so_status_clause` so a Draft SO with a
+    "Confirmed" workflow_state still counts as pending. When None / empty,
+    falls back to `_DEFAULT_WKP_SO_STATUSES` so legacy callers behave
+    identically to the pre-WKP-034 NOT-IN list (Closed / Cancelled /
+    Completed are excluded).
 
     Returns:
         list of dicts: [{item_code, so_name, customer, customer_name,
                           customer_group, qty, delivered_qty, pending_qty,
                           delivery_date}]
-
-    customer        = ERPNext Customer document name (ID like "CUST-00001")
-    customer_name   = Human-readable customer display name (e.g. "Sharma Exports Pvt Ltd")
-    customer_group  = Customer segment from tabCustomer (e.g. "Wholesale", "Retail")
     """
     if item_codes is not None and not item_codes:
         return []
 
+    so_statuses_eff = _wkp_parse_status_list(so_statuses, _DEFAULT_WKP_SO_STATUSES)
+    so_clause = _wkp_so_status_clause(so_statuses_eff)
+
     if item_codes:
-        rows = frappe.db.sql("""
+        rows = frappe.db.sql(f"""
             SELECT soi.item_code,
                    so.name                                         AS so_name,
                    so.docstatus                                     AS so_docstatus,
@@ -2300,14 +2582,14 @@ def _get_open_so_detail(item_codes=None):
             JOIN   `tabSales Order` so ON so.name = soi.parent
             LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
             WHERE  soi.item_code IN %(items)s
-              AND  so.docstatus  IN (0, 1)
-              AND  (so.docstatus = 0 OR so.status NOT IN ('Closed', 'Cancelled', 'Completed'))
+              AND  {so_clause}
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
             ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
         """, {"items": item_codes}, as_dict=True)
     else:
-        # No filter — fetch ALL items with pending SOs (submitted + drafts)
-        rows = frappe.db.sql("""
+        # No item filter — fetch ALL items with pending SOs that pass the
+        # user-selected status / workflow_state clause.
+        rows = frappe.db.sql(f"""
             SELECT soi.item_code,
                    so.name                                         AS so_name,
                    so.docstatus                                     AS so_docstatus,
@@ -2321,8 +2603,7 @@ def _get_open_so_detail(item_codes=None):
             FROM   `tabSales Order Item` soi
             JOIN   `tabSales Order` so ON so.name = soi.parent
             LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
-            WHERE  so.docstatus  IN (0, 1)
-              AND  (so.docstatus = 0 OR so.status NOT IN ('Closed', 'Cancelled', 'Completed'))
+            WHERE  {so_clause}
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
             ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
         """, as_dict=True)
