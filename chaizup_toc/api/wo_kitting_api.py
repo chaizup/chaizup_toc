@@ -246,6 +246,109 @@ _DEFAULT_WKP_SO_STATUSES = [
 _DEFAULT_WKP_PO_STATUSES = ["To Receive and Bill", "To Receive"]
 
 
+# =============================================================================
+# TS-001 (2026-05-14): TOC Settings as the SINGLE SOURCE OF TRUTH
+# -----------------------------------------------------------------------------
+# The per-report status pickers (WKP-034 / POR-024) were removed. Every
+# report now reads the SO / WO / PO eligibility from `TOC Settings` and
+# only displays a read-only banner. The helpers below resolve "what does
+# the engine actually consider pending right now?" by reading TOC
+# Settings; callers that still pass an explicit JSON list keep that
+# override (so /api requests with explicit `wo_statuses=` keep working).
+#
+# DANGER:
+#   - The frontend banner reads from `get_toc_pending_filters` (defined
+#     below). If you rename that whitelist, also update the banner JS in
+#     wo_kitting_planner.js and production_overview.js.
+# RESTRICT:
+#   - Do NOT re-introduce per-report multi-select status pickers. The
+#     user-facing contract is now "TOC Settings is the only place to
+#     change pending status filters".
+# =============================================================================
+
+
+def _toc_settings_wo_statuses():
+    """Pending WO statuses from TOC Settings. Falls back to _DEFAULT_WKP_WO_STATUSES."""
+    try:
+        s = frappe.get_cached_doc("TOC Settings")
+        raw = s.get("pending_wo_statuses") or ""
+        plain = [x.strip() for x in raw.split("\n") if x.strip()]
+        if not plain:
+            plain = list(_DEFAULT_WKP_WO_STATUSES)
+        # Workflow states gated on Work Order having the column.
+        wf_raw = s.get("pending_wo_workflow_states") or ""
+        wf = [x.strip() for x in wf_raw.split("\n") if x.strip()]
+        if wf and frappe.db.has_column("Work Order", "workflow_state"):
+            plain = plain + [f"Workflow: {w}" for w in wf]
+        return plain
+    except Exception:
+        return list(_DEFAULT_WKP_WO_STATUSES)
+
+
+def _toc_settings_so_statuses():
+    """Pending SO statuses from TOC Settings. Adds Workflow: states when the
+    Sales Order has a workflow_state column (existing TOC Settings convention)."""
+    try:
+        s = frappe.get_cached_doc("TOC Settings")
+        raw = s.get("projection_pending_so_statuses") or ""
+        plain = [x.strip() for x in raw.split("\n") if x.strip()]
+        if not plain:
+            plain = list(_DEFAULT_WKP_SO_STATUSES)
+        wf_raw = s.get("projection_confirmed_so_workflow_states") or ""
+        wf = [x.strip() for x in wf_raw.split("\n") if x.strip()]
+        if wf and frappe.db.has_column("Sales Order", "workflow_state"):
+            plain = plain + [f"Workflow: {w}" for w in wf]
+        return plain
+    except Exception:
+        return list(_DEFAULT_WKP_SO_STATUSES)
+
+
+def _toc_settings_po_statuses():
+    """Pending PO statuses from TOC Settings."""
+    try:
+        s = frappe.get_cached_doc("TOC Settings")
+        raw = s.get("pending_po_statuses") or ""
+        plain = [x.strip() for x in raw.split("\n") if x.strip()]
+        if not plain:
+            plain = list(_DEFAULT_WKP_PO_STATUSES)
+        wf_raw = s.get("pending_po_workflow_states") or ""
+        wf = [x.strip() for x in wf_raw.split("\n") if x.strip()]
+        if wf and frappe.db.has_column("Purchase Order", "workflow_state"):
+            plain = plain + [f"Workflow: {w}" for w in wf]
+        return plain
+    except Exception:
+        return list(_DEFAULT_WKP_PO_STATUSES)
+
+
+@frappe.whitelist()
+def get_toc_pending_filters():
+    """Read-only summary of "what does the engine treat as pending right now?".
+
+    Returns a single payload consumed by the read-only banner on every
+    TOC report (WKP + Production Overview today; extensible). The
+    banner does NOT let the user override these values — TOC Settings is
+    the single source of truth post TS-001 (2026-05-14).
+
+    Shape:
+      {
+        "wo": ["Not Started", "In Process", "Material Transferred"],
+        "so": ["To Deliver", ..., "Workflow: Confirmed"],
+        "po": ["To Receive", "To Receive and Bill"],
+        "edit_route": "/app/toc-settings",
+      }
+
+    Workflow-state entries are pre-formatted with the `Workflow: ` prefix
+    so the banner can show them with a distinguishing chip without
+    knowing the column-presence logic.
+    """
+    return {
+        "wo": _toc_settings_wo_statuses(),
+        "so": _toc_settings_so_statuses(),
+        "po": _toc_settings_po_statuses(),
+        "edit_route": "/app/toc-settings",
+    }
+
+
 def _wkp_parse_status_list(value, default):
     """Accept list / JSON string / None. Empty / falsy => fall back to default."""
     if value is None or value == "":
@@ -465,7 +568,7 @@ def get_open_work_orders(status_filter=None, wo_statuses=None):
             Material Transferred).
     """
     # WKP-034: prefer the multi-select; fall back to default if neither is set.
-    selected = _wkp_parse_status_list(wo_statuses, _DEFAULT_WKP_WO_STATUSES)
+    selected = _wkp_parse_status_list(wo_statuses, _toc_settings_wo_statuses())
     if status_filter:
         # Back-compat: a legacy single-status filter further narrows.
         selected = [s for s in selected if s == status_filter] or [status_filter]
@@ -592,8 +695,8 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
     # so "current_and_expected" honours the page filter.
     stock_pool = _build_stock_pool(
         stock_mode, all_comp_codes,
-        wo_statuses=_wkp_parse_status_list(wo_statuses, _DEFAULT_WKP_WO_STATUSES),
-        po_statuses=_wkp_parse_status_list(po_statuses, _DEFAULT_WKP_PO_STATUSES),
+        wo_statuses=_wkp_parse_status_list(wo_statuses, _toc_settings_wo_statuses()),
+        po_statuses=_wkp_parse_status_list(po_statuses, _toc_settings_po_statuses()),
     )
 
     # ── Step 4: Dispatch info (Sales Orders) ────────────────────────────
@@ -817,8 +920,8 @@ def get_item_wo_summary(wo_statuses=None, so_statuses=None):
     Returns:
         list of dicts, one per item_code, sorted by item_name
     """
-    wo_statuses_eff = _wkp_parse_status_list(wo_statuses, _DEFAULT_WKP_WO_STATUSES)
-    so_statuses_eff = _wkp_parse_status_list(so_statuses, _DEFAULT_WKP_SO_STATUSES)
+    wo_statuses_eff = _wkp_parse_status_list(wo_statuses, _toc_settings_wo_statuses())
+    so_statuses_eff = _wkp_parse_status_list(so_statuses, _toc_settings_so_statuses())
     wo_clause = _wkp_wo_status_clause(wo_statuses_eff)
     so_clause = _wkp_so_status_clause(so_statuses_eff)
 
@@ -2249,7 +2352,7 @@ def get_dispatch_bottleneck(stock_mode="current_only",
     """
     # ── Step 1: Discover all items with pending SOs (submitted + drafts) ──
     # WKP-034: thread the user-selected SO status filter through.
-    so_statuses_eff = _wkp_parse_status_list(so_statuses, _DEFAULT_WKP_SO_STATUSES)
+    so_statuses_eff = _wkp_parse_status_list(so_statuses, _toc_settings_so_statuses())
     so_rows = _get_open_so_detail(so_statuses=so_statuses_eff)
 
     if not so_rows:
@@ -2263,7 +2366,7 @@ def get_dispatch_bottleneck(stock_mode="current_only",
     # When stock_mode = "current_and_expected", add open FG PO inbound qty
     # so the Dispatch tab reflects the same mode as the main simulation.
     if stock_mode == "current_and_expected":
-        po_statuses_eff = _wkp_parse_status_list(po_statuses, _DEFAULT_WKP_PO_STATUSES)
+        po_statuses_eff = _wkp_parse_status_list(po_statuses, _toc_settings_po_statuses())
         po_clause = _wkp_po_status_clause(po_statuses_eff)
         po_inbound = frappe.db.sql(f"""
             SELECT poi.item_code, SUM(poi.qty - IFNULL(poi.received_qty, 0)) AS inbound
@@ -2563,7 +2666,7 @@ def _get_open_so_detail(item_codes=None, so_statuses=None):
     if item_codes is not None and not item_codes:
         return []
 
-    so_statuses_eff = _wkp_parse_status_list(so_statuses, _DEFAULT_WKP_SO_STATUSES)
+    so_statuses_eff = _wkp_parse_status_list(so_statuses, _toc_settings_so_statuses())
     so_clause = _wkp_so_status_clause(so_statuses_eff)
 
     if item_codes:

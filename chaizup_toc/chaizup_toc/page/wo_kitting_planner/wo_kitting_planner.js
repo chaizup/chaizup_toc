@@ -569,6 +569,7 @@ function _renderBomNode(node, depth) {
 // ═══════════════════════════════════════════════════════════════════════
 
 frappe.pages["wo-kitting-planner"].on_page_load = function (wrapper) {
+  
   if (wrapper._wkp_initialized) return;
   wrapper._wkp_initialized = true;
 
@@ -981,67 +982,27 @@ class WOKittingPlanner {
       });
     }
 
-    // ── WKP-034: Multi-select filters (WO / SO / PO) ─────────────────────
-    // Click anywhere → toggle a panel if the click landed on a .wkp-ms-btn;
-    // or hit an All / None action button inside a panel; or close any open
-    // panel when the click is outside .wkp-ms-wrap.
-    document.addEventListener("click", e => {
-      const btn = e.target.closest(".wkp-ms-btn");
-      if (btn && btn.dataset.msPanel) {
-        this._toggleMsPanel(btn.dataset.msPanel, btn);
-        return;
-      }
-      const action = e.target.closest("[data-ms-select]");
-      if (action) {
-        e.preventDefault();
-        e.stopPropagation();
-        this._selectAllMs(action.dataset.msSelect, action.dataset.val === "all");
-        this._readStatusSelections();
-        this._markStatusFiltersDirty();
-        return;
-      }
-      if (!e.target.closest(".wkp-ms-wrap")) {
-        document.querySelectorAll(".wkp-ms-panel.open").forEach(p => {
-          p.classList.remove("open");
-          const b = document.querySelector("[data-ms-panel=\"" + p.id + "\"]");
-          if (b) b.classList.remove("active");
-        });
-      }
-    });
-
-    // Checkbox change inside any of the three panels → update label + mark dirty.
-    document.addEventListener("change", e => {
-      if (!e.target.classList || !e.target.classList.contains("wkp-ms-chk")) return;
-      const panel = e.target.closest(".wkp-ms-panel");
-      if (!panel) return;
-      const labelMap = {
-        "wkp-wo-panel": "wkp-wo-label",
-        "wkp-so-panel": "wkp-so-label",
-        "wkp-po-panel": "wkp-po-label",
-      };
-      this._updateMsLabel(panel.id, labelMap[panel.id]);
-      this._readStatusSelections();
-      this._markStatusFiltersDirty();
-    });
-
-    // Explicit "Load" button — applies the current selections by re-running
-    // load() (which pulls fresh WOs and chains into simulate()).
-    const loadBtn = document.getElementById("wkp-load-btn");
-    if (loadBtn) {
-      loadBtn.addEventListener("click", () => {
-        this._readStatusSelections();
-        this._clearStatusFiltersDirty();
-        this.load();
-      });
-    }
-
-    // Refresh — also re-reads selections so the user does not have to click
-    // Load separately.
+    // TS-001 (2026-05-14): the WKP-034 per-report multi-select pickers
+    // were removed. TOC Settings is now the single source of truth. The
+    // banner is populated by `_renderPendingBanner` and stays read-only.
+    // Refresh just re-runs load().
     document.getElementById("wkp-refresh").addEventListener("click", () => {
-      this._readStatusSelections();
-      this._clearStatusFiltersDirty();
       this.load();
     });
+
+    // ── WKP-038 (2026-05-14): Hide / Unhide controls bar ─────────────
+    // sessionStorage key keeps the choice while the user navigates tabs
+    // but resets on a hard refresh (so a teammate opening the page fresh
+    // sees the full UI).
+    //
+    // RESTRICT:
+    //   - DOM ids: #wkp-cmd (target), #wkp-cmd-toggle (button),
+    //     #wkp-cmd-toggle-icon (chevron), #wkp-cmd-toggle-label (text),
+    //     #wkp-cmd-strip-label (strip text). Changing any breaks this
+    //     toggle.
+    //   - State key: "wkp.cmd.hidden" — namespace prefix prevents clash
+    //     with future settings.
+    this._initCmdToggle();
 
     // Export / Email buttons
     const csvBtn   = document.getElementById("wkp-export-csv");
@@ -1091,6 +1052,57 @@ class WOKittingPlanner {
     });
     document.getElementById("wkp-wo-modal").addEventListener("click", e => {
       if (e.target.id === "wkp-wo-modal") this._closeModal("wkp-wo-modal");
+    });
+
+    // ── WKP-037 (2026-05-14): Row-detail modal ─────────────────────────
+    // Material Shortage and Purchase Priority "Details" buttons now open
+    // a modal whose body is cloned from a hidden per-row source div
+    // (.wkp-row-detail-source). The modal lives OUTSIDE the data table so
+    // page-level filters (search, item-group, tab-sum click-to-filter)
+    // can never touch its content.
+    //
+    // RESTRICT:
+    //   - Detail buttons MUST use `data-detail-source` (sanitised item_code
+    //     id), `data-detail-title`, `data-detail-sub`. The handler reads
+    //     all three; missing any → silent no-op.
+    //   - Source div id MUST equal `data-detail-source` exactly.
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest(".wkp-sr-detail-btn, .wkp-pp-detail-btn");
+      if (!btn) return;
+      const srcId = btn.dataset.detailSource;
+      if (!srcId) return;
+      const src = document.getElementById(srcId);
+      const body = document.getElementById("wkp-row-detail-body");
+      const title = document.getElementById("wkp-row-detail-title");
+      const sub = document.getElementById("wkp-row-detail-sub");
+      const card = document.getElementById("wkp-row-detail-card");
+      if (!src || !body) return;
+      if (title) title.textContent = btn.dataset.detailTitle || "Details";
+      if (sub)   sub.innerHTML = btn.dataset.detailSub || "";
+      // WKP-039 (2026-05-14): pick a tone from the parent row's data-cat
+      // so the colored header stripe matches the row's status (critical /
+      // in_procurement / covered / etc.). Falls back to "info".
+      if (card) {
+        const parentRow = btn.closest("tr[data-cat], tr");
+        const cat = parentRow ? parentRow.getAttribute("data-cat") : null;
+        const tone =
+          cat === "critical"       ? "err"  :
+          cat === "in_procurement" ? "warn" :
+          cat === "covered"        ? "ok"   :
+          btn.classList.contains("wkp-sr-detail-btn") ? "warn" :
+                                     "info";
+        card.setAttribute("data-tone", tone);
+      }
+      body.innerHTML = src.innerHTML;
+      this._openModal("wkp-row-detail-modal");
+    });
+
+    // Close handlers for the row-detail modal (button + backdrop click).
+    const rdClose = document.getElementById("wkp-row-detail-close");
+    if (rdClose) rdClose.addEventListener("click", () => this._closeModal("wkp-row-detail-modal"));
+    const rdOverlay = document.getElementById("wkp-row-detail-modal");
+    if (rdOverlay) rdOverlay.addEventListener("click", (e) => {
+      if (e.target.id === "wkp-row-detail-modal") this._closeModal("wkp-row-detail-modal");
     });
   }
 
@@ -1239,10 +1251,8 @@ class WOKittingPlanner {
 
   load() {
     this._showLoader(true);
-    // WKP-034: ensure the current selection state is read just-in-time.
-    // The Load button click handler already does this; the back-compat
-    // refresh button + the post-init bootstrap call go through here too.
-    this._readStatusSelections();
+    // TS-001 (2026-05-14): no client-side status state. The server
+    // resolves SO/WO/PO eligibility from TOC Settings on every call.
     frappe.call({
       method: "chaizup_toc.api.wo_kitting_api.get_open_work_orders",
       args: {
@@ -1761,7 +1771,12 @@ class WOKittingPlanner {
     // even if rendered hidden.
     const chromePerTab = {
       "wo-plan"          : { filterBar: true,  summary: true  },
-      "shortage-report"  : { filterBar: false, summary: true  },
+      // WKP-036 follow-up (2026-05-14): the global summary strip
+      // (#wkp-summary) is WO-plan-derived (Ready / Partial / Blocked /
+      // Procurement Value). Material Shortage renders its own shortage-
+      // focused aggregation, so the global cards are not relevant here
+      // and just consume vertical space.
+      "shortage-report"  : { filterBar: false, summary: false },
       "emergency"        : { filterBar: false, summary: false },
       "dispatch"         : { filterBar: false, summary: false },
       "ai-chat"          : { filterBar: false, summary: false },
@@ -1896,186 +1911,107 @@ class WOKittingPlanner {
   }
 
   _loadDynamicFilters() {
-    // WKP-034 (2026-05-13): Replaces the single-status legacy filter with
-    // three multi-select panels (WO / SO / PO). The universe of options for
-    // each is fetched DYNAMICALLY from the user data via the new endpoint
-    // `wkp_get_default_statuses`. Sales Order workflow_state values are
-    // surfaced as "Workflow: <state>" entries so a Draft SO with a custom
-    // workflow can count as pending. Same pattern as Production Overview.
-    //
-    // 🔒 RESTRICTED: Never hardcode ERPNext document statuses anywhere in
-    //                this file. The universe must always come from the
-    //                server endpoint.
+    // TS-001 (2026-05-14): the WKP-034 per-report status pickers were
+    // removed. TOC Settings is the single source of truth. We now fetch
+    // the read-only "Active Pending Filter" payload from
+    // `chaizup_toc.api.wo_kitting_api.get_toc_pending_filters` and
+    // render it into the banner. The selections (`this._selWo`, etc.)
+    // are kept as empty arrays so every downstream `frappe.call` falls
+    // back to TOC Settings on the server side.
+    this._selWo = [];
+    this._selSo = [];
+    this._selPo = [];
     frappe.call({
-      method: "chaizup_toc.api.wo_kitting_api.wkp_get_default_statuses",
+      method: "chaizup_toc.api.wo_kitting_api.get_toc_pending_filters",
       callback: r => {
-        const u = r.message || {};
-        this._statusUniverse = u;
-
-        // Initialise selections to the server-supplied defaults (intersection
-        // of the preferred default set with statuses that actually exist).
-        this._selWo = (u.wo_statuses || []).slice();
-        this._selSo = (u.so_statuses || []).slice();
-        this._selPo = (u.po_statuses || []).slice();
-
-        // WKP-034+ (2026-05-13 update): show a "Workflow: …" hint per panel
-        // when that doctype has at least one workflow_state value in the
-        // user data. SO is the common case; WO / PO surface when the site
-        // has bespoke Workflows on those doctypes (e.g. PO Vendor
-        // Confirmation, WO Quality Hold).
-        const wfHint = (hasCol, wfList) =>
-          (hasCol && (wfList || []).length)
-            ? "Includes \"Workflow: …\" entries for Draft docs."
-            : "";
-
-        this._populateMsPanel(
-          "wkp-wo-status-list", "wkp-wo-panel", "wkp-wo-label",
-          u.all_wo_statuses || [], this._selWo,
-          wfHint(u.wo_has_workflow_column, u.wo_workflow_states),
-        );
-        this._populateMsPanel(
-          "wkp-so-status-list", "wkp-so-panel", "wkp-so-label",
-          u.all_so_statuses || [], this._selSo,
-          wfHint(u.so_has_workflow_column, u.so_workflow_states),
-        );
-        this._populateMsPanel(
-          "wkp-po-status-list", "wkp-po-panel", "wkp-po-label",
-          u.all_po_statuses || [], this._selPo,
-          wfHint(u.po_has_workflow_column, u.po_workflow_states),
-        );
-
-        // Reflect into the hidden back-compat single select too (first option
-        // = empty / "all"). Keeps any external script that polls the legacy
-        // id working without recompute thrash.
-        const legacy = document.getElementById("wkp-status-filter");
-        if (legacy) {
-          while (legacy.options.length > 1) legacy.remove(1);
-          (u.all_wo_statuses || []).forEach(s => {
-            const opt = document.createElement("option");
-            opt.value = s;
-            opt.textContent = s;
-            legacy.appendChild(opt);
-          });
-        }
-
-        this._clearStatusFiltersDirty();
-      },
-      error: () => {
-        // Fall back to the old single-status endpoint so the page is still
-        // partly usable (WO filter only) when the new endpoint is missing.
-        frappe.call({
-          method: "chaizup_toc.api.wo_kitting_api.get_work_order_statuses",
-          callback: rr => {
-            const list = rr.message || [];
-            this._populateMsPanel(
-              "wkp-wo-status-list", "wkp-wo-panel", "wkp-wo-label",
-              list, list,
-            );
-            this._selWo = list.slice();
-          },
-        });
+        const m = r.message || {};
+        this._statusUniverse = m;
+        this._renderPendingBanner(m);
       },
     });
   }
 
-  // ── WKP-034 helpers — Multi-select panel internals ─────────────────────
+  // WKP-038 (2026-05-14): Hide / Unhide controls bar.
+  //
+  // Toggles the `.wkp-cmd-hidden` class on `#wkp-cmd`. The CSS animates
+  // max-height + opacity + padding so the transition feels native.
+  // State is persisted in sessionStorage so navigating between tabs
+  // doesn't reset the choice — a hard refresh does, intentionally, so
+  // a teammate opening the page fresh sees the full UI.
+  //
+  // RESTRICT:
+  //   - sessionStorage key is "wkp.cmd.hidden". Don't reuse it for
+  //     anything else; don't move it to localStorage (per-tab state
+  //     is the point).
+  //   - The collapse strip `.wkp-cmd-strip` stays visible at all times.
+  //     It's the only affordance back to the controls once they're
+  //     hidden. Removing it traps the user.
+  _initCmdToggle() {
+    const cmd     = document.getElementById("wkp-cmd");
+    const btn     = document.getElementById("wkp-cmd-toggle");
+    const icon    = document.getElementById("wkp-cmd-toggle-icon");
+    const label   = document.getElementById("wkp-cmd-toggle-label");
+    const strip   = document.getElementById("wkp-cmd-strip");
+    if (!cmd || !btn) return;
 
-  _populateMsPanel(listId, panelId, labelId, allOptions, defaults, hint) {
-    const container = document.getElementById(listId);
-    if (!container) return;
-    const defaultSet = new Set(defaults);
-    const esc = (s) => String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-    const itemHtml = (allOptions || []).map(opt => {
-      const isWf = typeof opt === "string" && opt.indexOf("Workflow: ") === 0;
-      const tag  = isWf
-        ? `<span class="wkp-ms-wf-tag" title="workflow_state value">WF</span>`
-        : "";
-      return `<label class="wkp-ms-item">
-        <input type="checkbox" class="wkp-ms-chk" value="${esc(opt)}"${defaultSet.has(opt) ? " checked" : ""}>
-        <span>${esc(opt)}</span>${tag}
-      </label>`;
-    }).join("");
-    const hintHtml = hint
-      ? `<div class="wkp-ms-hint">${esc(hint)}</div><div class="wkp-ms-divider"></div>`
-      : "";
-    container.innerHTML = hintHtml + itemHtml;
-    this._updateMsLabel(panelId, labelId);
-  }
-
-  _toggleMsPanel(panelId, triggerBtn) {
-    const panel = document.getElementById(panelId);
-    if (!panel) return;
-    // Close any other open panel first
-    document.querySelectorAll(".wkp-ms-panel.open").forEach(p => {
-      if (p.id !== panelId) {
-        p.classList.remove("open");
-        const b = document.querySelector("[data-ms-panel=\"" + p.id + "\"]");
-        if (b) b.classList.remove("active");
+    const KEY = "wkp.cmd.hidden";
+    const applyState = (hidden) => {
+      cmd.classList.toggle("wkp-cmd-hidden", hidden);
+      if (strip) strip.classList.toggle("wkp-cmd-collapsed", hidden);
+      if (label) label.textContent = hidden ? "Show controls" : "Hide";
+      if (icon) {
+        icon.classList.toggle("fa-chevron-up", !hidden);
+        icon.classList.toggle("fa-chevron-down", hidden);
       }
-    });
-    panel.classList.toggle("open");
-    if (triggerBtn) triggerBtn.classList.toggle("active", panel.classList.contains("open"));
-  }
-
-  _selectAllMs(panelId, checked) {
-    const panel = document.getElementById(panelId);
-    if (!panel) return;
-    panel.querySelectorAll(".wkp-ms-chk").forEach(c => { c.checked = !!checked; });
-    const labelMap = {
-      "wkp-wo-panel": "wkp-wo-label",
-      "wkp-so-panel": "wkp-so-label",
-      "wkp-po-panel": "wkp-po-label",
+      btn.setAttribute("aria-pressed", hidden ? "true" : "false");
+      btn.setAttribute("title", hidden
+        ? "Show the controls bar above"
+        : "Hide the controls bar to recover vertical space");
     };
-    this._updateMsLabel(panelId, labelMap[panelId]);
-  }
 
-  _updateMsLabel(panelId, labelId) {
-    const panel = document.getElementById(panelId);
-    const label = document.getElementById(labelId);
-    if (!panel || !label) return;
-    const all     = panel.querySelectorAll(".wkp-ms-chk");
-    const checked = panel.querySelectorAll(".wkp-ms-chk:checked");
-    const btn = document.querySelector("[data-ms-panel=\"" + panelId + "\"]");
-    if (checked.length === 0)            label.textContent = "None";
-    else if (checked.length === all.length) label.textContent = "Default";
-    else                                  label.textContent = checked.length + " selected";
-    if (btn) {
-      if (checked.length !== 0 && checked.length !== all.length) btn.classList.add("active");
-      else btn.classList.remove("active");
+    // Restore prior state
+    let initial = false;
+    try {
+      initial = sessionStorage.getItem(KEY) === "1";
+    } catch (e) { /* private mode etc. */ }
+    applyState(initial);
+
+    btn.addEventListener("click", () => {
+      const next = !cmd.classList.contains("wkp-cmd-hidden");
+      applyState(next);
+      try { sessionStorage.setItem(KEY, next ? "1" : "0"); } catch (e) { /* ignore */ }
+    });
+
+    // Also let the user click the strip's info area to toggle — easier
+    // target on touch screens.
+    if (strip) {
+      strip.addEventListener("click", (e) => {
+        if (e.target.closest(".wkp-cmd-toggle-btn")) return;       // button handles itself
+        if (e.target.closest(".wkp-cmd-strip-info")) btn.click();
+      });
     }
   }
 
-  _readMsSelections(listId) {
-    const list = document.getElementById(listId);
-    if (!list) return [];
-    return Array.from(list.querySelectorAll(".wkp-ms-chk:checked")).map(c => c.value);
-  }
-
-  _readStatusSelections() {
-    this._selWo = this._readMsSelections("wkp-wo-status-list");
-    this._selSo = this._readMsSelections("wkp-so-status-list");
-    this._selPo = this._readMsSelections("wkp-po-status-list");
-  }
-
-  _markStatusFiltersDirty() {
-    if (this._statusFiltersDirty) return;
-    this._statusFiltersDirty = true;
-    const btn = document.getElementById("wkp-load-btn");
-    if (btn) btn.classList.add("dirty");
-    if (typeof frappe !== "undefined" && frappe.show_alert) {
-      frappe.show_alert({
-        message: "Status filter changed. Click <b>Load</b> to recalculate.",
-        indicator: "blue",
-      }, 4);
-    }
-  }
-
-  _clearStatusFiltersDirty() {
-    this._statusFiltersDirty = false;
-    const btn = document.getElementById("wkp-load-btn");
-    if (btn) btn.classList.remove("dirty");
+  _renderPendingBanner(payload) {
+    const fillList = (elId, items) => {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      const arr = Array.isArray(items) ? items : [];
+      const esc = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+      if (!arr.length) {
+        el.innerHTML = `<span class="wkp-pending-chip wkp-pending-chip-empty">none configured</span>`;
+        return;
+      }
+      el.innerHTML = arr.map(s => {
+        const isWf = typeof s === "string" && s.indexOf("Workflow: ") === 0;
+        return `<span class="wkp-pending-chip${isWf ? " wf" : ""}" title="${isWf ? "Draft-SO workflow_state" : "Submitted status"}">${esc(s)}</span>`;
+      }).join("");
+    };
+    fillList("wkp-pending-so-list", (payload && payload.so) || []);
+    fillList("wkp-pending-wo-list", (payload && payload.wo) || []);
+    fillList("wkp-pending-po-list", (payload && payload.po) || []);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -2256,7 +2192,13 @@ class WOKittingPlanner {
         ? `<strong>${a.lead_time_days}</strong><div style="font-size:10px;color:var(--stone-500)">days</div>`
         : `<span style="color:var(--stone-400);font-size:11px">Not set</span>`;
 
-      // Expandable WO detail row — toggled by Details button
+      // WKP-037 (2026-05-14): Details now opens a modal (not an inline
+      // expand row). The detail content is rendered into a HIDDEN
+      // sibling `.wkp-row-detail-source` div keyed by item code; the
+      // Details button click handler in `_bindControls` clones that
+      // div's HTML into the modal body. Page-level filters (search,
+      // tab-sum, item-group) can no longer touch the detail content
+      // because the modal lives outside the table.
       const detailId = "wkp-sr-d-" + a.item_code.replace(/[^a-zA-Z0-9]/g, "_");
       const woDetailRows = a.wo_detail.map(d =>
         `<tr>
@@ -2296,27 +2238,69 @@ class WOKittingPlanner {
   <td class="ta-r" data-tip="Supplier Lead Time from Item master.&#10;Typical days from placing a Purchase Order to receiving materials.&#10;0 = not configured on Item.">${ltTxt}</td>
   <td class="ta-c" data-tip="Click Details to see which Work Orders need this material and how much each one requires.">
     ${a.wo_list.length > 0
-      ? `<button class="wkp-btn wkp-btn-sm"
-           onclick="var r=document.getElementById('${detailId}');if(r){var open=(r.style.display!=='none')&&(r.offsetHeight>0);r.style.display=open?'none':'table-row';this.textContent=open?'\u25BC Details':'\u25B2 Hide'}"
-           title="Show which Work Orders need this material">
+      ? `<button class="wkp-btn wkp-btn-sm wkp-sr-detail-btn"
+           data-detail-source="${detailId}"
+           data-detail-title="Material Shortage Detail"
+           data-detail-sub="${_esc(a.item_name)} (${_esc(a.item_code)})"
+           title="Open the modal with the Work Orders that need this material">
            \u25BC Details
          </button>`
       : "\u2014"}
   </td>
-</tr>
-<tr class="wkp-sr-detail-row" id="${detailId}" style="display:none">
-  <td colspan="${COL_SPAN}" style="padding:0 0 0 48px;background:var(--stone-50,#fafaf9);border-bottom:2px solid var(--stone-200)">
-    <table style="width:auto;border-collapse:collapse;font-size:12px;margin:6px 0">
-      <thead>
-        <tr style="background:var(--stone-100)">
-          <th style="padding:4px 12px;text-align:left;font-weight:600">Work Order (Production Order)</th>
-          <th style="padding:4px 12px;text-align:right;font-weight:600">Shortage Qty</th>
-        </tr>
-      </thead>
-      <tbody>${woDetailRows}</tbody>
-    </table>
-  </td>
 </tr>`;
+    }).join("");
+
+    // WKP-037 (2026-05-14): emit one hidden detail-source div per row.
+    // Lives OUTSIDE the table so no page-level filter can touch it.
+    // The Details click handler in `_bindControls` clones the matching
+    // `#${detailId}` innerHTML into `#wkp-row-detail-body`.
+    const detailSources = aggList.map(a => {
+      const detailId = "wkp-sr-d-" + a.item_code.replace(/[^a-zA-Z0-9]/g, "_");
+      const woDetailRows = (a.wo_detail || []).map(d =>
+        `<tr>
+          <td style="padding:3px 10px">
+            <a href="/app/work-order/${_esc(d.wo)}" target="_blank" class="wkp-wo-link">${_esc(d.wo)}</a>
+            ${d.wo_item ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(d.wo_item)}</div>` : ""}
+          </td>
+          <td style="padding:3px 10px;text-align:right">
+            ${_dualQtySR(d.shortage, a.uom, a.secondary_factor, a.secondary_uom)}
+          </td>
+        </tr>`
+      ).join("");
+      // WKP-039 (2026-05-14): v2 chrome — KPI strip + sectioned table.
+      return `<div class="wkp-row-detail-source" id="${detailId}" style="display:none">
+        <div class="wkp-m2-kpis">
+          <div class="wkp-m2-kpi" data-tone="err">
+            <div class="wkp-m2-kpi-label">Total Shortage</div>
+            <div class="wkp-m2-kpi-val">${_fmt_num(a.total_shortage, 2)} ${_esc(a.uom || "")}</div>
+            <div class="wkp-m2-kpi-sub">across ${a.wo_list.length} Work Order${a.wo_list.length === 1 ? "" : "s"}</div>
+          </div>
+          <div class="wkp-m2-kpi" data-tone="info">
+            <div class="wkp-m2-kpi-label">In Stock</div>
+            <div class="wkp-m2-kpi-val">${_fmt_num(a.total_available, 2)} ${_esc(a.uom || "")}</div>
+            <div class="wkp-m2-kpi-sub">current Bin.actual_qty</div>
+          </div>
+          <div class="wkp-m2-kpi" data-tone="brand">
+            <div class="wkp-m2-kpi-label">Total Required</div>
+            <div class="wkp-m2-kpi-val">${_fmt_num(a.total_required, 2)} ${_esc(a.uom || "")}</div>
+            <div class="wkp-m2-kpi-sub">need across all WOs</div>
+          </div>
+        </div>
+        <div class="wkp-m2-section" data-tone="err">
+          <div class="wkp-m2-section-head"><i class="fa-solid fa-hammer"></i>Work Orders that need this material</div>
+          <div class="wkp-m2-section-body" style="overflow:auto;max-height:50vh">
+            <table class="wkp-m2-table">
+              <thead>
+                <tr>
+                  <th>Work Order (Production Order)</th>
+                  <th class="ta-r">Shortage Qty</th>
+                </tr>
+              </thead>
+              <tbody>${woDetailRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
     }).join("");
 
     // Build item group filter options from aggList
@@ -2361,7 +2345,11 @@ class WOKittingPlanner {
     </tr>
   </thead>
   <tbody>${rowsHtml}</tbody>
-</table>`;
+</table>
+<!-- WKP-037 (2026-05-14): Hidden detail sources for the Details modal.
+     One <div> per main row, keyed by sanitised item_code, kept OUTSIDE
+     the table so page-level filters cannot affect the modal content. -->
+<div class="wkp-row-detail-source-container" style="display:none">${detailSources}</div>`;
 
     // Item group filter binding
     body.querySelectorAll(".wkp-sr-ig-btn").forEach(btn => {
@@ -2371,23 +2359,13 @@ class WOKittingPlanner {
         const ig = btn.dataset.ig || "";
         const table = body.querySelector("#wkp-sr-table");
         if (!table) return;
-        // WKP-030: when hiding a main row, also hide its expand detail row (if open).
-        // If the detail row is left visible after filtering, it floats disconnected from its parent.
-        table.querySelectorAll("tbody tr:not(.wkp-sr-detail-row)").forEach(tr => {
+        // WKP-037: Details are now in a modal, so the detail-row sync is
+        // no longer needed. Just hide / show main rows by data-item.
+        table.querySelectorAll("tbody tr").forEach(tr => {
           const ic = tr.querySelector("[data-item]") ? tr.querySelector("[data-item]").dataset.item : "";
           const entry = aggList.find(a => a.item_code === ic);
           const match = !ig || (entry && entry.item_group === ig);
           tr.style.display = match ? "" : "none";
-
-          // Sync the paired detail row
-          const detailId = "wkp-sr-d-" + ic.replace(/[^a-zA-Z0-9]/g, "_");
-          const detailTr = document.getElementById(detailId);
-          if (detailTr && !match) {
-            detailTr.style.display = "none";
-            // Reset the Details button text so it reads "Details" again when row becomes visible
-            const detailBtn = tr.querySelector("button[onclick]");
-            if (detailBtn) detailBtn.textContent = "\u25BC Details";
-          }
         });
       });
     });
@@ -3081,9 +3059,14 @@ class WOKittingPlanner {
       }).join("");
 
       bodyHtml = `
-<div style="font-size:11px;color:var(--stone-400);padding:8px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">
-  Material-by-material breakdown &mdash; hover any cell for data source
-</div>
+<div class="wkp-m2-section" data-tone="err">
+  <div class="wkp-m2-section-head">
+    <i class="fa-solid fa-list-ul"></i>Material-by-material breakdown
+    <span style="margin-left:auto;font-weight:500;text-transform:none;letter-spacing:0;color:var(--slate-400);font-size:10px">
+      Hover any cell to see the data source.
+    </span>
+  </div>
+  <div class="wkp-m2-section-body" style="overflow:auto;max-height:50vh">
 <table class="wkp-modal-table wkp-modal-table-wide">
   <thead>
     <tr>
@@ -3102,16 +3085,64 @@ class WOKittingPlanner {
   </thead>
   <tbody>${rowsHtml}</tbody>
 </table>
-<div style="font-size:11px;color:var(--stone-400);padding:8px 0 0;line-height:1.5">
-  <strong>Stage legend:</strong>
-  In Stock = available now &nbsp;|&nbsp; In Production = sub-assembly WO open &nbsp;|&nbsp;
-  PO Raised = ordered from supplier &nbsp;|&nbsp; Received = arrived, pending put-away &nbsp;|&nbsp;
-  MR Raised = requested, not yet ordered &nbsp;|&nbsp;
-  Short = no action taken
+  </div>
+  <div style="padding:10px 14px;background:var(--slate-50);border-top:1px solid var(--slate-100);font-size:11px;color:var(--slate-600);line-height:1.6;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <strong style="font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:var(--slate-500)">Stage legend:</strong>
+    <span class="wkp-m2-pill" data-tone="ok">In Stock</span>
+    <span class="wkp-m2-pill" data-tone="info">In Production</span>
+    <span class="wkp-m2-pill" data-tone="brand">PO Raised</span>
+    <span class="wkp-m2-pill" data-tone="ok">Received</span>
+    <span class="wkp-m2-pill" data-tone="warn">MR Raised</span>
+    <span class="wkp-m2-pill" data-tone="err">Short</span>
+  </div>
 </div>`;
     }
 
-    document.getElementById("wkp-modal-body").innerHTML = bodyHtml;
+    // WKP-039 (2026-05-14): set the modal tone + a status banner + KPI strip.
+    const modalCard = document.getElementById("wkp-modal-card");
+    const hasAnyShort = items.some(i => (i.shortage || 0) > 0);
+    const _shortageTone = hasAnyShort ? (row.kit_status === "block" ? "err" : "warn") : "ok";
+    if (modalCard) modalCard.setAttribute("data-tone", _shortageTone);
+    const _shortageBanner =
+      _shortageTone === "ok"
+        ? { icon: "fa-solid fa-circle-check", title: "All materials in stock",
+            text: "Every BOM component for the remaining production qty is available. No action needed." }
+        : _shortageTone === "err"
+        ? { icon: "fa-solid fa-ban", title: "Production blocked",
+            text: "Critical materials missing. Use the Create Purchase MR button below to start procurement." }
+        : { icon: "fa-solid fa-triangle-exclamation", title: "Partial shortage",
+            text: "Some materials are short. You can either start partial production or order the missing items first." };
+
+    // KPI numbers
+    const _kShortCount = items.filter(i => (i.shortage || 0) > 0).length;
+    const _kShortValue = items.reduce((a, i) => a + (i.shortage_value || 0), 0);
+    const _kCoveredCount = items.filter(i => (i.po_qty || 0) + (i.mr_qty || 0) >= (i.shortage || 0) && (i.shortage || 0) > 0).length;
+    const _kpis = [
+      { tone: hasAnyShort ? "err" : "ok",
+        label: "Items Short", val: _kShortCount + " / " + items.length, sub: "with shortage > 0" },
+      { tone: _kShortValue > 0 ? "err" : "ok",
+        label: "Shortage Value", val: "₹" + _fmt_num(_kShortValue, 0), sub: "estimated procurement cost" },
+      { tone: "info", label: "PO + MR Coverage", val: _kCoveredCount, sub: "items already on order" },
+      { tone: "brand", label: "Materials in BOM", val: items.length, sub: "total components" },
+    ];
+    const _kpiHtml = _kpis.map(k => `
+      <div class="wkp-m2-kpi" data-tone="${k.tone}">
+        <div class="wkp-m2-kpi-label">${k.label}</div>
+        <div class="wkp-m2-kpi-val">${k.val}</div>
+        <div class="wkp-m2-kpi-sub">${k.sub}</div>
+      </div>`).join("");
+    const _bannerHtml = `
+      <div class="wkp-m2-banner" data-tone="${_shortageTone}">
+        <span class="wkp-m2-banner-icon"><i class="${_shortageBanner.icon}"></i></span>
+        <div style="flex:1">
+          <div class="wkp-m2-banner-title">${_shortageBanner.title}</div>
+          <div class="wkp-m2-banner-text">${_shortageBanner.text}</div>
+        </div>
+      </div>
+      ${items.length ? `<div class="wkp-m2-kpis">${_kpiHtml}</div>` : ""}
+    `;
+
+    document.getElementById("wkp-modal-body").innerHTML = _bannerHtml + bodyHtml;
 
     // ── Create MR button ────────────────────────────────────────────
     const hasShortage = items.some(i => (i.shortage || 0) > 0);
@@ -3186,152 +3217,179 @@ class WOKittingPlanner {
   // ─────────────────────────────────────────────────────────────────────
 
   _showWOModal(row) {
+    // WKP-039 (2026-05-14): Modal v2 — colored status header + KPI strip
+    // + sectioned tables. Replaces the legacy "info-row div" layout
+    // that the user complained was hard to scan. Logic is unchanged;
+    // only presentation.
     document.getElementById("wkp-wo-title").textContent = row.wo;
     document.getElementById("wkp-wo-sub").textContent   =
-      (row.item_name || row.item_code) + " \u2014 " + (row.status || "");
+      (row.item_name || row.item_code) + " — " + (row.status || "");
 
-    const totalSO     = (row.total_pending_so || 0);
-    const isOverdue   = (row.prev_month_so || 0) > 0;
-    const estCost     = row.est_cost ? "\u20B9" + _fmt_num(row.est_cost, 0) : "\u2014";
+    // Status-aware tone: ok/warn/err/info -> drives the colored top stripe.
+    const woCard = document.getElementById("wkp-wo-card");
+    const kit = row.kit_status || "ok";
+    const tone =
+      kit === "ok" || kit === "kitted" ? "ok" :
+      kit === "partial"                ? "warn" :
+      kit === "block"                  ? "err"  : "info";
+    if (woCard) woCard.setAttribute("data-tone", tone);
 
-    // ── Inline dual-UOM helper for WO modal info rows ───────────────────────
-    // Shows "380 kg (380,000 g)" when secondary UOM is set; plain "380 kg" otherwise.
+    const totalSO   = (row.total_pending_so || 0);
+    const isOverdue = (row.prev_month_so || 0) > 0;
+    const estCost   = row.est_cost ? "₹" + _fmt_num(row.est_cost, 0) : "—";
+
     const sf   = row.secondary_factor || 1;
     const sUom = row.secondary_uom || "";
     const _woDual = (qty, decimals) => {
-      const base = _fmt_num(qty, decimals) + "\u00a0" + _esc(row.uom || "");
+      const base = `<strong>${_fmt_num(qty, decimals)}</strong> ${_esc(row.uom || "")}`;
       if (sUom && sf > 1 && qty > 0) {
-        return base + ` <span style="color:var(--stone-500);font-size:10px">(${_fmt_num(qty / sf, 2)}\u00a0${_esc(sUom)})</span>`;
+        return base + `<span class="wkp-m2-sub">${_fmt_num(qty / sf, 2)} ${_esc(sUom)}</span>`;
       }
       return base;
     };
+    const _woDualInline = (qty, decimals) => {
+      if (!(qty > 0)) return "—";
+      const base = `${_fmt_num(qty, decimals)} ${_esc(row.uom || "")}`;
+      if (sUom && sf > 1) return base + ` <span style="color:var(--slate-500);font-size:10px">(${_fmt_num(qty / sf, 2)} ${_esc(sUom)})</span>`;
+      return base;
+    };
 
-    // ── Decision card (top of modal) ────────────────────────────────
-    const decisionHtml = this._buildDecisionCard(row);
+    // Status banner (kit -> tone)
+    const banner =
+      tone === "ok"   ? { icon:"fa-solid fa-circle-check",          title:"Ready to Start",
+                          text:"All materials for this Work Order are available right now. You can release production immediately." } :
+      tone === "warn" ? { icon:"fa-solid fa-triangle-exclamation",  title:"Partial Shortage",
+                          text:`${row.shortage_count || 0} material${(row.shortage_count || 0) === 1 ? "" : "s"} short — production can start partially or wait until the materials arrive.` } :
+      tone === "err"  ? { icon:"fa-solid fa-ban",                   title:"Cannot Start",
+                          text:`${row.shortage_count || 0} critical material${(row.shortage_count || 0) === 1 ? "" : "s"} missing. Create a Purchase Material Request before production can begin.` } :
+                        { icon:"fa-solid fa-circle-info",           title:"Work Order Status",
+                          text:`Kit status: ${_kit_status_label(row.kit_status)}.` };
 
-    // ── WO info grid ────────────────────────────────────────────────
-    const pressureHtml = totalSO > 0
-      ? `<span class="wkp-pressure ${isOverdue ? "wkp-pressure-high" : "wkp-pressure-med"}">
-           ${isOverdue ? "\u26A0 Overdue: " : "Due: "}${_woDual(totalSO, 0)}
-         </span>`
-      : `<span class="wkp-pressure wkp-pressure-none">No pending customer orders</span>`;
+    // KPI strip
+    const kpis = [
+      { tone:"info",  label:"Planned Qty",       val:_woDual(row.planned_qty, 0),                 sub:"from Work Order" },
+      { tone:"ok",    label:"Already Produced",  val:_woDual(row.produced_qty || 0, 0),           sub:"completed runs" },
+      { tone:"brand", label:"Still to Produce",  val:_woDual(row.remaining_qty, 0),               sub:"remaining target" },
+      { tone:row.shortage_value > 0 ? "err" : "ok",
+        label:row.shortage_value > 0 ? "Materials to Buy" : "Est. Cost",
+        val:row.shortage_value > 0 ? `₹${_fmt_num(row.shortage_value, 0)}` : estCost,
+        sub:row.shortage_value > 0 ? "shortage value" : "production cost" },
+    ];
+    const kpiHtml = kpis.map(k => `
+      <div class="wkp-m2-kpi" data-tone="${k.tone}">
+        <div class="wkp-m2-kpi-label">${k.label}</div>
+        <div class="wkp-m2-kpi-val">${k.val}</div>
+        <div class="wkp-m2-kpi-sub">${k.sub}</div>
+      </div>`).join("");
+
+    // WO Info table
+    const woInfoHtml = `
+      <table class="wkp-m2-table">
+        <tbody>
+          <tr><td class="wkp-m2-k">Work Order</td>
+              <td class="wkp-m2-v"><a href="/app/work-order/${_esc(row.wo)}" target="_blank" class="wkp-wo-link">${_esc(row.wo)}</a></td></tr>
+          <tr><td class="wkp-m2-k">Product</td>
+              <td class="wkp-m2-v">${_esc(row.item_name || row.item_code)}<span class="wkp-m2-sub mono">${_esc(row.item_code || "")}</span></td></tr>
+          <tr><td class="wkp-m2-k">Bill of Materials</td>
+              <td class="wkp-m2-v"><span class="mono">${_esc(row.bom_no || "—")}</span></td></tr>
+          <tr><td class="wkp-m2-k">ERP Stage</td>
+              <td class="wkp-m2-v"><span class="wkp-m2-pill" data-tone="${tone === "err" ? "err" : (tone === "warn" ? "warn" : (tone === "ok" ? "ok" : "info"))}">${_esc(row.status || "—")}</span></td></tr>
+          <tr><td class="wkp-m2-k">Planned Start</td>
+              <td class="wkp-m2-v">${_esc(row.planned_start_date || "—")}</td></tr>
+          <tr><td class="wkp-m2-k">Stock Unit</td>
+              <td class="wkp-m2-v">${_esc(row.uom || "")}${sUom ? `<span class="wkp-m2-sub">Also shown in ${_esc(sUom)}</span>` : ""}</td></tr>
+        </tbody>
+      </table>`;
+
+    // Customer pressure table
+    const pressureTone = isOverdue ? "err" : (totalSO > 0 ? "warn" : "ok");
+    const pressureHtml = `
+      <table class="wkp-m2-table">
+        <tbody>
+          <tr><td class="wkp-m2-k">Pending Demand</td>
+              <td class="wkp-m2-v"><span class="wkp-m2-pill" data-tone="${pressureTone}">${totalSO > 0 ? (isOverdue ? "⚠ Overdue" : "Due") + " · " + _woDualInline(totalSO, 0) : "✔ No pending customer orders"}</span></td></tr>
+          <tr><td class="wkp-m2-k">Previous Month (overdue)</td>
+              <td class="wkp-m2-v ${(row.prev_month_so || 0) > 0 ? "wkp-m2-emph" : ""}">${(row.prev_month_so || 0) > 0 ? _woDualInline(row.prev_month_so, 0) : "— None"}</td></tr>
+          <tr><td class="wkp-m2-k">Current Month</td>
+              <td class="wkp-m2-v">${(row.curr_month_so || 0) > 0 ? _woDualInline(row.curr_month_so, 0) : "—"}</td></tr>
+          <tr><td class="wkp-m2-k">Total Unshipped</td>
+              <td class="wkp-m2-v">${totalSO > 0 ? _woDualInline(totalSO, 0) : "—"}</td></tr>
+          ${totalSO > row.remaining_qty ? `
+          <tr><td colspan="2" style="background:rgba(239,68,68,0.06);color:var(--err-text);font-size:12px;font-weight:600;padding:10px 14px">
+                ⚠ Customer demand (${_woDualInline(totalSO, 0)}) exceeds remaining production (${_woDualInline(row.remaining_qty, 0)}). Additional Work Orders may be needed.
+              </td></tr>` : ""}
+        </tbody>
+      </table>`;
+
+    // Kitting / Material Status table
+    const kitTone = tone;
+    const kitHtml = `
+      <table class="wkp-m2-table">
+        <tbody>
+          <tr><td class="wkp-m2-k">Kit Status</td>
+              <td class="wkp-m2-v"><span class="wkp-m2-pill" data-tone="${kitTone}">${_kit_status_label(row.kit_status)}</span></td></tr>
+          ${row.shortage_count > 0 ? `
+          <tr><td class="wkp-m2-k">Materials Missing</td>
+              <td class="wkp-m2-v wkp-m2-emph">${row.shortage_count}</td></tr>
+          <tr><td class="wkp-m2-k">Materials to Buy</td>
+              <td class="wkp-m2-v wkp-m2-emph">₹${_fmt_num(row.shortage_value || 0, 0)}</td></tr>` : `
+          <tr><td class="wkp-m2-k">Shortage</td>
+              <td class="wkp-m2-v wkp-m2-good">✔ No materials missing</td></tr>`}
+        </tbody>
+      </table>
+      ${row.shortage_count > 0 ? `
+      <div class="wkp-m2-action-row">
+        <button class="wkp-btn wkp-btn-sm" data-wkp-show-shortage="${_esc(row.wo)}">
+          <i class="fa-solid fa-list-ul" style="margin-right:4px"></i>See Material Breakdown
+        </button>
+      </div>` : ""}`;
 
     const html = `
-${decisionHtml}
+      <div class="wkp-m2-banner" data-tone="${tone}">
+        <span class="wkp-m2-banner-icon"><i class="${banner.icon}"></i></span>
+        <div style="flex:1">
+          <div class="wkp-m2-banner-title">${banner.title}</div>
+          <div class="wkp-m2-banner-text">${banner.text}</div>
+        </div>
+      </div>
 
-<div class="wkp-wo-grid">
+      <div class="wkp-m2-kpis">${kpiHtml}</div>
 
-  <div class="wkp-wo-section">
-    <div class="wkp-wo-section-title">Work Order Info</div>
-    <div class="wkp-wo-info-row">
-      <span>Work Order No.</span>
-      <span><a href="/app/work-order/${_esc(row.wo)}" target="_blank">${_esc(row.wo)}</a></span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Product (Item)</span>
-      <span>${_esc(row.item_name || row.item_code)}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Item Code</span>
-      <span class="mono">${_esc(row.item_code || "")}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Bill of Materials (BOM)</span>
-      <span class="mono">${_esc(row.bom_no || "\u2014")}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>ERP Stage</span>
-      <span>${_esc(row.status || "\u2014")}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Planned Start Date</span>
-      <span>${_esc(row.planned_start_date || "\u2014")}</span>
-    </div>
-  </div>
+      <div class="wkp-m2-grid-2">
+        <div class="wkp-m2-section">
+          <div class="wkp-m2-section-head"><i class="fa-solid fa-list-check"></i>Work Order Info</div>
+          <div class="wkp-m2-section-body">${woInfoHtml}</div>
+        </div>
+        <div class="wkp-m2-section" data-tone="${kitTone}">
+          <div class="wkp-m2-section-head"><i class="fa-solid fa-cubes"></i>Kitting / Material Status</div>
+          <div class="wkp-m2-section-body">${kitHtml}</div>
+        </div>
+      </div>
 
-  <div class="wkp-wo-section">
-    <div class="wkp-wo-section-title">Production Quantities</div>
-    <div class="wkp-wo-info-row">
-      <span>Planned Qty</span>
-      <span>${_woDual(row.planned_qty, 0)}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Already Produced</span>
-      <span>${_woDual(row.produced_qty || 0, 0)}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span><strong>Still to Produce</strong></span>
-      <span><strong>${_woDual(row.remaining_qty, 0)}</strong></span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Stock Unit (UOM)</span>
-      <span>${_esc(row.uom || "")}${sUom ? " \u2192 also shown in " + _esc(sUom) : ""}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Est. Production Cost</span>
-      <span>${estCost}</span>
-    </div>
-    ${row.shortage_value > 0 ? `
-    <div class="wkp-wo-info-row">
-      <span>Missing Materials Cost</span>
-      <span style="color:var(--err-text);font-weight:700">\u20B9${_fmt_num(row.shortage_value, 0)}</span>
-    </div>` : ""}
-  </div>
+      <div class="wkp-m2-section" data-tone="${pressureTone}">
+        <div class="wkp-m2-section-head"><i class="fa-solid fa-truck-fast"></i>Customer Order Pressure (Sales Orders)</div>
+        <div class="wkp-m2-section-body">${pressureHtml}</div>
+      </div>
 
-  <div class="wkp-wo-section">
-    <div class="wkp-wo-section-title">Customer Order Pressure (Sales Orders)</div>
-    <div style="margin-bottom:10px">${pressureHtml}</div>
-    <div class="wkp-wo-info-row">
-      <span>Last Month Unshipped (Overdue)</span>
-      <span ${(row.prev_month_so || 0) > 0 ? 'style="color:var(--err-text);font-weight:700"' : ""}>
-        ${(row.prev_month_so || 0) > 0 ? _woDual(row.prev_month_so, 0) : "\u2014 No overdue orders"}
-      </span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>This Month Orders</span>
-      <span>${(row.curr_month_so || 0) > 0 ? _woDual(row.curr_month_so, 0) : "\u2014"}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span><strong>Total Unshipped Orders</strong></span>
-      <span><strong>${totalSO > 0 ? _woDual(totalSO, 0) : "\u2014"}</strong></span>
-    </div>
-    ${totalSO > row.remaining_qty ? `
-    <div style="margin-top:8px;font-size:11px;color:var(--err-text);font-weight:600">
-      \u26A0 Customer demand (${_woDual(totalSO, 0)}) exceeds remaining production (${_woDual(row.remaining_qty, 0)}). Additional Work Orders may be needed.
-    </div>` : ""}
-  </div>
+      <div class="wkp-m2-footer-bar">
+        <a href="/app/work-order/${_esc(row.wo)}" target="_blank" class="wkp-btn wkp-btn-brand">
+          <i class="fa-solid fa-arrow-up-right-from-square" style="margin-right:5px"></i>Open in ERPNext
+        </a>
+      </div>`;
 
-  <div class="wkp-wo-section">
-    <div class="wkp-wo-section-title">Kitting / Material Status</div>
-    <div class="wkp-wo-kit-status ${_kit_status_class(row.kit_status)}">
-      ${_kit_status_label(row.kit_status)}
-    </div>
-    ${row.shortage_count > 0 ? `
-    <div class="wkp-wo-info-row" style="margin-top:10px">
-      <span>Materials missing</span>
-      <span style="color:var(--err-text);font-weight:700">${row.shortage_count}</span>
-    </div>
-    <div class="wkp-wo-info-row">
-      <span>Materials to buy</span>
-      <span style="color:var(--err-text);font-weight:700">\u20B9${_fmt_num(row.shortage_value || 0, 0)}</span>
-    </div>
-    <div style="margin-top:8px">
-      <button class="wkp-btn wkp-btn-sm" onclick="document.getElementById('wkp-wo-modal').style.display='none';
-        document.querySelector('[data-action=wo-detail][data-wo=&quot;${_esc(row.wo)}&quot;]') && document.querySelector('.wkp-short-chip[data-wo=&quot;${_esc(row.wo)}&quot;]').click()">
-        See Material Breakdown
-      </button>
-    </div>` : ""}
-  </div>
+    const body = document.getElementById("wkp-wo-body");
+    body.innerHTML = html;
 
-</div>
+    // Wire the "See Material Breakdown" button (replaces the old inline onclick).
+    const shortBtn = body.querySelector("[data-wkp-show-shortage]");
+    if (shortBtn) {
+      shortBtn.addEventListener("click", () => {
+        this._closeModal("wkp-wo-modal");
+        const chip = document.querySelector(`.wkp-short-chip[data-wo="${_esc(row.wo)}"]`);
+        if (chip) chip.click();
+      });
+    }
 
-<div class="wkp-wo-footer">
-  <a href="/app/work-order/${_esc(row.wo)}" target="_blank" class="wkp-btn wkp-btn-brand">
-    Open in ERPNext \u2192
-  </a>
-</div>`;
-
-    document.getElementById("wkp-wo-body").innerHTML = html;
     document.getElementById("wkp-wo-modal").style.display = "flex";
   }
 
@@ -4637,40 +4695,85 @@ ${decisionHtml}
   <td class="ta-r" style="font-size:11px">${item.lead_time_days > 0 ? item.lead_time_days + " d" : "&mdash;"}</td>
   <td class="ta-c">
     ${item.wo_count > 0
-      ? `<button class="wkp-btn wkp-btn-sm"
-           onclick="var r=document.getElementById('${detailId}');if(r){var open=(r.style.display!=='none')&&(r.offsetHeight>0);r.style.display=open?'none':'table-row';this.textContent=open?'\u25BC Details':'\u25B2 Hide'}"
-           title="Show linked Work Orders and Sales Orders">\u25BC Details</button>`
+      ? `<button class="wkp-btn wkp-btn-sm wkp-pp-detail-btn"
+           data-detail-source="${detailId}"
+           data-detail-title="Purchase Priority Detail"
+           data-detail-sub="${_esc(item.item_code)} &mdash; ${_esc(item.item_name)}"
+           title="Open the modal with linked Work Orders and Sales Orders">\u25BC Details</button>`
       : "\u2014"}
   </td>
-</tr>
-<tr class="wkp-sr-detail-row" id="${detailId}" style="display:none">
-  <td colspan="${COL_SPAN}" style="padding:4px 0 4px 48px;background:var(--slate-50);border-bottom:2px solid var(--slate-200)">
-    <div style="display:flex;gap:24px;flex-wrap:wrap">
-      ${woRows ? `<div>
-        <div style="font-size:11px;font-weight:700;color:var(--slate-600);margin-bottom:4px">Work Orders</div>
-        <table style="border-collapse:collapse;font-size:12px">
-          <thead><tr style="background:var(--slate-100)">
-            <th style="padding:3px 10px;text-align:left;font-weight:600">WO</th>
-            <th style="padding:3px 10px;text-align:left;font-weight:600">FG Item</th>
-            <th style="padding:3px 10px;text-align:right;font-weight:600">Required</th>
-          </tr></thead>
-          <tbody>${woRows}</tbody>
-        </table>
-      </div>` : ""}
-      ${soRows ? `<div>
-        <div style="font-size:11px;font-weight:700;color:var(--slate-600);margin-bottom:4px">Linked Sales Orders</div>
-        <table style="border-collapse:collapse;font-size:12px">
-          <thead><tr style="background:var(--slate-100)">
-            <th style="padding:3px 10px;text-align:left;font-weight:600">SO</th>
-            <th style="padding:3px 10px;text-align:left;font-weight:600">Customer</th>
-            <th style="padding:3px 10px;text-align:left;font-weight:600">Delivery Date</th>
-          </tr></thead>
-          <tbody>${soRows}</tbody>
-        </table>
-      </div>` : ""}
-    </div>
-  </td>
 </tr>`;
+    }).join("");
+
+    // WKP-037 (2026-05-14): hidden detail-source divs, one per row.
+    // Lives OUTSIDE the table so page-level filters (item-group select,
+    // global search, tab-sum click-to-filter) cannot touch the modal
+    // body.
+    const detailSourcesPP = data.map(item => {
+      const detailId = "wkp-pp-d-" + item.item_code.replace(/[^a-zA-Z0-9]/g, "_");
+      const woRows = (item.wo_list || []).map(w =>
+        `<tr>
+          <td style="padding:3px 10px;font-family:monospace;font-size:11px">${_esc(w.wo_name)}</td>
+          <td style="padding:3px 10px;font-size:11px">${_esc(w.fg_item_name || w.fg_item)}</td>
+          <td style="padding:3px 10px;text-align:right;font-size:11px">${_fmt_num(w.required_qty, 2)}\u00A0${_esc(item.uom)}</td>
+        </tr>`
+      ).join("");
+      const soRows = (item.so_list || []).map(s => {
+        const overdue = s.delivery_date && s.delivery_date < new Date().toISOString().slice(0, 10);
+        return `<tr>
+          <td style="padding:3px 10px;font-family:monospace;font-size:11px">${_esc(s.so_name)}</td>
+          <td style="padding:3px 10px;font-size:11px">${_esc(s.customer_name)}</td>
+          <td style="padding:3px 10px;font-size:11px;${overdue ? "color:var(--err);font-weight:700" : ""}">${_esc(s.delivery_date) || "&mdash;"}</td>
+        </tr>`;
+      }).join("");
+      // WKP-039 (2026-05-14): v2 chrome — KPI strip + two sections.
+      const _netTone = (item.net_gap || 0) > 0 ? "err" : "ok";
+      return `<div class="wkp-row-detail-source" id="${detailId}" style="display:none">
+        <div class="wkp-m2-kpis">
+          <div class="wkp-m2-kpi" data-tone="${_netTone}">
+            <div class="wkp-m2-kpi-label">Net Gap</div>
+            <div class="wkp-m2-kpi-val">${(item.net_gap || 0) > 0 ? _fmt_num(item.net_gap, 2) + " " + _esc(item.uom || "") : "✔ Covered"}</div>
+            <div class="wkp-m2-kpi-sub">Required − Stock − PO − MR</div>
+          </div>
+          <div class="wkp-m2-kpi" data-tone="info">
+            <div class="wkp-m2-kpi-label">In Stock</div>
+            <div class="wkp-m2-kpi-val">${_fmt_num(item.in_stock, 2)} ${_esc(item.uom || "")}</div>
+            <div class="wkp-m2-kpi-sub">Bin.actual_qty</div>
+          </div>
+          <div class="wkp-m2-kpi" data-tone="brand">
+            <div class="wkp-m2-kpi-label">Total Required</div>
+            <div class="wkp-m2-kpi-val">${_fmt_num(item.required_qty, 2)} ${_esc(item.uom || "")}</div>
+            <div class="wkp-m2-kpi-sub">across linked WOs</div>
+          </div>
+          <div class="wkp-m2-kpi" data-tone="warn">
+            <div class="wkp-m2-kpi-label">PO + MR in Pipeline</div>
+            <div class="wkp-m2-kpi-val">${_fmt_num((item.open_po_qty || 0) + (item.open_mr_qty || 0), 2)} ${_esc(item.uom || "")}</div>
+            <div class="wkp-m2-kpi-sub">already on order</div>
+          </div>
+        </div>
+        <div class="wkp-m2-grid-2">
+          ${woRows ? `
+          <div class="wkp-m2-section">
+            <div class="wkp-m2-section-head"><i class="fa-solid fa-hammer"></i>Work Orders that need this material</div>
+            <div class="wkp-m2-section-body" style="overflow:auto;max-height:40vh">
+              <table class="wkp-m2-table">
+                <thead><tr><th>Work Order</th><th>Finished Good</th><th class="ta-r">Required</th></tr></thead>
+                <tbody>${woRows}</tbody>
+              </table>
+            </div>
+          </div>` : ""}
+          ${soRows ? `
+          <div class="wkp-m2-section" data-tone="warn">
+            <div class="wkp-m2-section-head"><i class="fa-solid fa-file-invoice"></i>Linked Sales Orders</div>
+            <div class="wkp-m2-section-body" style="overflow:auto;max-height:40vh">
+              <table class="wkp-m2-table">
+                <thead><tr><th>Sales Order</th><th>Customer</th><th>Delivery</th></tr></thead>
+                <tbody>${soRows}</tbody>
+              </table>
+            </div>
+          </div>` : ""}
+        </div>
+      </div>`;
     }).join("");
 
     // WKP-036: compute bucket counts for the tab-scoped summary strip.
@@ -4747,7 +4850,11 @@ ${decisionHtml}
   </thead>
   <tbody>${rowsHtml}</tbody>
 </table>
-</div>`;
+</div>
+<!-- WKP-037 (2026-05-14): hidden detail-source divs for the modal.
+     Lives OUTSIDE #wkp-pp-table so page-level filters / search /
+     tab-sum click filters cannot touch the modal body. -->
+<div class="wkp-row-detail-source-container" style="display:none">${detailSourcesPP}</div>`;
 
     // ── Select-all checkbox ───────────────────────────────────────────────
     const selAll = document.getElementById("wkp-pp-select-all");
@@ -5782,6 +5889,15 @@ ${decisionHtml}
   _closeModal(id) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
+  }
+
+  // WKP-037 (2026-05-14): generic show-modal helper. Pairs with the
+  // existing `_closeModal`. The DOM uses `style.display=none` for hidden
+  // (matches the original modal overlays); setting to "" reveals the
+  // overlay using the page CSS (.wkp-overlay).
+  _openModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "";
   }
 }
 

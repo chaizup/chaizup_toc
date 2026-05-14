@@ -399,7 +399,13 @@ def _log_snapshot(data, mr_name):
         log.item_code = data["item_code"]
         log.warehouse = data["warehouse"]
         log.log_date = today()
-        log.buffer_type = data["buffer_type"]
+        # BTP-001 (2026-05-14): the TOC Buffer Log column `buffer_type`
+        # was renamed in spirit to "Replenishment Mode" but the column
+        # name is kept for migration safety. The engine writes the
+        # canonical `mr_type` here so the audit trail keeps matching the
+        # values used by the rest of the app (Manufacture / Purchase /
+        # Monitor).
+        log.buffer_type = data.get("mr_type") or data.get("buffer_type") or ""
         log.company = data.get("company")
         log.on_hand_qty = data.get("on_hand", 0)
         log.wip_qty = data.get("wip_or_on_order", 0)

@@ -162,6 +162,334 @@ Supply pool builder `_build_stock_pool(stock_mode, item_codes, wo_statuses, po_s
 
 ---
 
+## 🔄 DEVELOPER STATE SYNC (Session WKP-039 — 2026-05-14)
+**Sync Block for Context-Aware AI Development**
+
+### WKP-039 — Modal v2 design system (color psychology + table-first content)
+
+```
+[chaizup_toc · wo_kitting_planner · WKP-039 · 2026-05-14]
+- Three modals redesigned with a shared `wkp-m2-*` design system:
+    • Work Order Detail (Production Plan tab) — was a 4-section info-row
+      grid; now: tone-coded header stripe, status banner card, 4-card
+      KPI strip (Planned / Produced / Still to Produce / Cost or
+      Materials to Buy), sectioned tables with sticky headers, tone-
+      coded pills for status / kit-status / pending demand.
+    • Material Shortage Detail — was a header strip + flat table; now:
+      tone-coded header, status banner, 4-card KPI strip
+      (Items Short / Shortage Value / PO+MR Coverage / Materials in
+      BOM), breakdown table wrapped in a colored section with
+      pill-styled stage legend.
+    • Row-Detail Modal (WKP-037 — Material Shortage + Purchase Priority
+      Details) — was inline tables; now: KPI strip (Net Gap / In Stock /
+      Required / Pipeline) + two parallel sections (Work Orders + Linked
+      Sales Orders).
+- New CSS namespace `wkp-m2-*`. Reused chrome: `wkp-overlay /
+  wkp-modal / wkp-modal-head / wkp-modal-body / wkp-modal-close`.
+- New HTML attribute `data-tone` on `<div class="wkp-modal" ...>`. JS
+  sets it dynamically per modal context (ok / warn / err / info /
+  brand). CSS resolves to a 4px colored top stripe + matching title
+  icon background.
+- Components: `.wkp-m2-title-row`, `.wkp-m2-title-icon`,
+  `.wkp-m2-banner[data-tone]`, `.wkp-m2-kpis` (grid),
+  `.wkp-m2-kpi[data-tone]` (4px colored left rail),
+  `.wkp-m2-section[data-tone]`, `.wkp-m2-section-head`,
+  `.wkp-m2-section-body`, `.wkp-m2-table` (sticky thead + zebra +
+  hover), `.wkp-m2-pill[data-tone]`, `.wkp-m2-grid-2` (two-up layout).
+- Restricted:
+    * `data-tone` values: ok / warn / err / info / brand. Don't invent
+      new ones without updating the CSS.
+    * Tone derivation rules live in JS (`_showWOModal`,
+      `_showShortageModal`, row-detail click handler). Single source
+      of truth for which color goes where.
+    * v2 classes are additive — the legacy `wkp-wo-grid /
+      wkp-wo-section / wkp-wo-info-row` classes still exist in CSS for
+      any out-of-tree caller; do not delete them.
+- Verified: node --check rc=0, page wrap closes at byte 31104, HTML
+  apostrophe lint clean. Engine-side: no Python changes.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session WKP-037 + WKP-038 — 2026-05-14)
+**Sync Block for Context-Aware AI Development**
+
+### WKP-038 — Hide/Show controls bar + visual differentiation polish
+
+```
+[chaizup_toc · wo_kitting_planner · WKP-038 · 2026-05-14]
+- Added a slim 26px collapse strip `.wkp-cmd-strip` pinned above
+  `#wkp-cmd`. Single Hide / Show button toggles `.wkp-cmd-hidden` on
+  `#wkp-cmd`; CSS animates max-height + opacity + padding so the
+  cmd bar "rolls up" smoothly. State persisted in sessionStorage key
+  `wkp.cmd.hidden`. Hard refresh resets it (intentional — a teammate
+  opening the page fresh should see the full UI).
+- New JS method `_initCmdToggle` wired from `_bindControls`.
+- DOM ids that JS reads: #wkp-cmd, #wkp-cmd-toggle, #wkp-cmd-toggle-icon,
+  #wkp-cmd-toggle-label, #wkp-cmd-strip-label, #wkp-cmd-strip.
+- Visual hierarchy: cmd (white surface, sh-sm) → cmd-strip (slate-50,
+  26px) → hint-bar (soft brand gradient) → summary (slate-100 + lifted
+  white cards) → tab-bar (white + brand 3px underline on active) →
+  content (white). Restraint over palette overhaul.
+- When hidden, the strip turns brand-50 and the toggle button outlines
+  in brand orange — a soft visual cue that "controls are tucked away".
+- Restricted: strip stays visible always (only way back); state key
+  scope is per-tab (sessionStorage), not per-user (localStorage);
+  CSS max-height transition value (600px) caps cmd height so the
+  animation duration is predictable.
+- Live verified: JS rc=0, HTML apostrophe lint clean, page wrap closes
+  at byte 30580.
+```
+
+### WKP-037 — Material Shortage + Purchase Priority Details now open in a modal
+
+```
+[chaizup_toc · wo_kitting_planner · WKP-037 · 2026-05-14]
+- Material Shortage and Purchase Priority "Details" no longer expand
+  inline rows inside the table. Click → opens new modal
+  #wkp-row-detail-modal. Body is cloned from a hidden per-row
+  `.wkp-row-detail-source` div that lives OUTSIDE the table (in a
+  separate `.wkp-row-detail-source-container`), so page-level filters
+  (search, item-group, tab-sum click filter) physically cannot touch
+  the modal content.
+- Details buttons now carry data-detail-source / -title / -sub
+  attributes. Delegated click in `_bindControls` matches
+  `.wkp-sr-detail-btn, .wkp-pp-detail-btn`, copies the source div's
+  innerHTML into #wkp-row-detail-body, opens the modal.
+- New _openModal(id) helper paired with existing _closeModal.
+- Item-group filter loop in shortage tab simplified — no more paired
+  detail-row sync (details aren't inline anymore).
+- Restricted: Detail button data-* attribute names are part of the
+  click handler contract; the source div id MUST equal
+  data-detail-source.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session TS-001 — 2026-05-14)
+**Sync Block for Context-Aware AI Development**
+
+### TS-001 — TOC Settings = single source of truth; report status pickers removed
+
+```
+[chaizup_toc · WKP + POR · TS-001 · 2026-05-14]
+- Removed per-report SO/WO/PO multi-select pickers from WO Kitting Planner
+  and Production Overview. Replaced with a read-only "Active Pending Filter"
+  banner sourced from a NEW shared whitelist
+  chaizup_toc.api.wo_kitting_api.get_toc_pending_filters which returns
+  {wo, so, po, edit_route} read from TOC Settings.
+- New backend helpers _toc_settings_wo/so/po_statuses resolve defaults
+  from TOC Settings. Every WKP/POR fallback path switched from
+  _DEFAULT_WKP_* constants to these helpers, so blank kwargs now resolve
+  to TOC Settings. Explicit API kwarg overrides still win.
+- WKP JS: deleted multi-select internals (populate/toggle/selectAll/
+  updateLabel/readMs/readSelections/markDirty/clearDirty). Kept
+  this._selWo/_selSo/_selPo as empty arrays for back-compat with the
+  JSON.stringify(this._selWo || []) round-trips in every existing
+  frappe.call.
+- POR JS: same treatment. Warehouse multi-select retained (per-report
+  filter, not status). _renderPendingBanner added on both controllers.
+- CSS: .wkp-pending-banner / .por-pending-banner with three chip groups
+  (Workflow: chips styled with indigo .wf modifier).
+- Two new top-level docs: apps/chaizup_toc/chaizup_toc.md (app root —
+  navigation, feature index, scenario matrix) + apps/chaizup_toc/FORMULAS.md
+  (every engine formula with file:function references).
+- Verified live: banner payload correct; Calc SO + Calc Action + get_open_work_orders
+  + simulate_kitting + get_production_overview all return identical numbers to
+  pre-TS-001 because TOC Settings has the same defaults.
+- Restricted: never re-introduce per-report status pickers; banner endpoint
+  name is shared between WKP and POR (rename requires both JS files
+  updated in lockstep); keep this._selWo/_selSo/_selPo as empty arrays
+  on both controllers; keep production_overview_api.get_default_statuses
+  whitelist for back-compat with other endpoints.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session BTP-001 — 2026-05-14)
+**Sync Block for Context-Aware AI Development**
+
+### BTP-001 — Buffer-type purge + configurable WO/PO pending statuses
+
+```
+[chaizup_toc · production_plan_engine · BTP-001 · 2026-05-14]
+- FG/SFG/RM/PM classification fully retired. Two new patches drop the
+  Item Custom Field and the legacy TOC Item Group Rule doctype. Engine
+  result dict no longer carries "buffer_type" — "mr_type" is canonical.
+  Reports + pipeline_api + daily_tasks + mr_generator log all coalesce
+  on `data.get("mr_type") or data.get("buffer_type") or ""`.
+- Saved Report Views keep the filter fieldname `buffer_type` (renaming
+  breaks user bookmarks). Internal dispatch uses `mr_type`.
+- TOC Buffer Log.buffer_type column kept for migration safety + DBM
+  weekly evaluator. Engine writes the `mr_type` value into it.
+- 4 new TOC Settings fields under a new section "Pending Work Order &
+  Purchase Order Statuses": pending_wo_statuses, pending_wo_workflow_states,
+  pending_po_statuses, pending_po_workflow_states. Defaults match the
+  previously hardcoded clauses so existing sites see no behaviour
+  change when the fields are blank.
+- New engine helpers: _parse_wo_statuses, _parse_po_statuses,
+  _wo_has_workflow_column / _po_has_workflow_column (cached), _toc_*
+  readers, _wo_eligibility_sql / _po_eligibility_sql.
+- Threaded into _pending_wo_qty, _open_po_qty,
+  _wo_required_component_qty. No more hardcoded WO/PO status IN clauses
+  in those three.
+- WKP + POR pages already have their own user-controllable WO/SO/PO
+  multi-selects (WKP-034); BTP-001 only refactored the engine helpers.
+- Restricted: keep the Script-Report filter fieldname `buffer_type` for
+  saved-view compat; keep TOC Buffer Log.buffer_type column; do NOT add
+  hardcoded `status IN (...)` in new engine code (use _wo/_po
+  _eligibility_sql); workflow branches must stay has_column-gated;
+  _parse_* fallbacks MUST return the canonical defaults, not [].
+- Live verified: Custom Field + doctype gone; _pending_wo_qty + 
+  _open_po_qty return real numbers via the new helpers; Calc SO re-run
+  unchanged.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session SPA-001 — 2026-05-14)
+**Sync Block for Context-Aware AI Development**
+
+### SPA-001 — Action-aware Shortage Cover + Shortage Action
+
+```
+[chaizup_toc · Item Minimum Manufacture · SPA-001 · 2026-05-14]
+- Schema: action_type (Select Manufacture/Purchase, default Manufacture),
+  auto_on_shortage (Check), auto_on_max_level (Check),
+  max_level_threshold_pct (Percent, default 50). Wider columns.
+- Calc SO is now action-aware: row.action_type=Manufacture -> existing PP
+  path (status "Created (PP)"); row.action_type=Purchase ->
+  _create_purchase_mr_for_shortage writes an MR (status "Created (MR)").
+  Dedup split between _so_shortage_pp_exists and
+  _shortage_cover_artifact_exists("Purchase").
+- New engine run_shortage_action_automation: iterates min-mfg rows with
+  auto_on_shortage=1 OR auto_on_max_level=1. Shortage mode
+  (demand-supply>0) and Max-Level mode (cover_pct<threshold), Shortage
+  mode evaluated first. Same artifact creator via action_type. Reason
+  text marker [Calc Action]. Dedup via _shortage_action_artifact_exists.
+- New helpers: _build_min_mfg_index, _open_po_qty,
+  _wo_required_component_qty (scoped by source_warehouse),
+  _pending_so_eligibility_sql.
+- Run Log/Item Selects bumped: triggered_by += shortage_action_*;
+  calc_used += "Calc Action"; status += "Created (PP)", "Created (MR)",
+  "Skipped - MR Exists".
+- TOC Settings: new Button "Run Shortage Action Now" wired in
+  toc_settings.js (_wire_shortage_action_run_button).
+- Live: seeded FG (stock=0, max_level=10000, threshold=90%) -> Calc
+  Action created MFG-PP-2026-00068 qty=10000; dedup re-run -> Skipped
+  (PP Exists).
+- Restricted: WO required-component query must filter source_warehouse;
+  MR helper must divide by Item.purchase_uom conversion_factor;
+  Shortage mode evaluated before Max-Level mode (single artifact per
+  row per run); dedup markers [Calc SO] vs [Calc Action] must stay
+  distinct; do not bulk-dispatch min_manufacturing_qty; do not remove
+  the new Run Item Select options.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session SPE-001 — 2026-05-13)
+**Sync Block for Context-Aware AI Development**
+
+### SPE-001 — Manual run-log fix + standalone Sales-Order Shortage Engine
+
+```
+[chaizup_toc · production_plan_engine · SPE-001 · 2026-05-13]
+- run_production_plan_automation (v1 SP-form whitelist) now delegates to
+  _run_for_projection so the manual SP-form button writes a TOC Production
+  Plan Run Log. Return shape changed: list[dict] -> { ok, run_log, summary,
+  message }; sales_projection.js handles both shapes.
+- NEW: run_so_shortage_automation(triggered_by) — standalone Sales-Order
+  Shortage engine. Scans every pending SO (PATH A workflow_state + PATH B
+  status, same as Calc B), aggregates pending qty in stock UOM
+  (soi.stock_qty - delivered_qty * conversion_factor), groups by
+  (item, COALESCE(soi.warehouse, so.set_warehouse, default_so_warehouse)).
+  Creates a PP per pair where pending - stock - pending_wo > 0.
+  qty = max(shortage, minmfg_per_warehouse_stock_uom).
+- New helpers: _discover_pending_so_pairs, _so_shortage_pp_exists.
+- Schema additions: triggered_by Select += {so_shortage_manual,
+  so_shortage_cron}; calc_used Select += "Calc SO"; status Select +=
+  "Error - See Log"; TOC Settings += Button run_so_shortage_automation_now.
+- JS: toc_settings.js adds _wire_so_shortage_run_button (mirrors the
+  existing Run Now button). sales_projection.js renders v2 summary +
+  Run Log link.
+- Live: 45 pairs discovered; first run 18 created / 27 skipped; second
+  run 0 created / 45 skipped (dedup correctly blocks re-creation).
+- Restricted: pending-qty SQL must use stock_qty - delivered_qty *
+  conversion_factor; dedup must exclude Completed/Closed PPs; do NOT
+  call from daily_production_plan_automation; do NOT collapse Calc SO
+  with Calc A/B; do NOT remove _process_item v1 (mr_generator still
+  uses it); do NOT reintroduce per-iteration counter save.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session IMM-003 — 2026-05-13)
+**Sync Block for Context-Aware AI Development**
+
+### IMM-003 — Auto-ADU toggle + history gate + bulk UI (layered on IMM-002)
+
+```
+[chaizup_toc · Item Minimum Manufacture · IMM-003 · 2026-05-13]
+- New column auto_adu (Check, default 1). Default = engine-managed; toggle OFF
+  to enter ADU manually. adu is no longer read_only=1 in doctype JSON; the
+  form-side _toggle_adu_readonly toggles editability per row via
+  grid_row.toggle_editable("adu", !auto).
+- Daily task update_min_mfg_adu_levels gained two guards:
+    1. Skip auto_adu=0 rows entirely (no writes, including last_updated_on).
+    2. Warm-up gate — skip if MIN(SLE.posting_date) > today - lookback_days.
+       Prevents systematic ADU understatement on items with short history.
+  Log message now reports 4 counters: updated / manual / warming-up / errors.
+- toc_item_settings Bulk Configuration modal: 3 new APPLY rows
+  (minmfg_auto_adu, minmfg_lead_time_days, minmfg_safety_factor) → server
+  dispatches to _bulk_set_minmfg_field = single UPDATE per item.
+- Explicitly NOT bulk-settable: adu (engine or row-specific),
+  min_manufacturing_qty (warehouse-specific batch sizing).
+- Live verified: schema column present; manual row untouched; bulk endpoint
+  wrote auto_adu=0, lead=14, safety=1.75 across all rows of seeded item.
+- Restricted: warm-up gate; manual-row skip; bulk excluded fields; use
+  toggle_editable not set_df_property for per-row read-only.
+```
+
+---
+
+## 🔄 DEVELOPER STATE SYNC (Session IMM-001 — 2026-05-13)
+**Sync Block for Context-Aware AI Development**
+
+### IMM-001 — Item Minimum Manufacture: UOM gate + 3 new columns + max_level auto-calc
+
+This is technically an Item Master change, but it directly feeds the WKP Production Plan engine&apos;s MINMFG floor and the buffer-cap inputs that the Purchase Priority tab will consume.
+
+**Sync Block (cross-AI continuity)**
+
+```
+[chaizup_toc · Item Minimum Manufacture · IMM-001 · 2026-05-13]
+- Child doctype Item Minimum Manufacture (parent Item.custom_minimum_manufacture)
+  gained 3 columns: lead_time_days (Int), safety_factor (Float, default 1.0),
+  max_level (Float, read-only, auto = qty × lead × safety, rounded 3dp).
+- UOM Link in each row is now gated to Item.uoms[].uom ∪ Item.stock_uom.
+  Adding rows is blocked until parent UOMs are configured AND the Item is
+  saved (visible hint explains why).
+- Client formula + dropdown gate in public/js/item_toc.js:
+    _setup_min_mfg_grid(frm) called from refresh / after_save / uoms_on_form_rendered.
+    _recompute_max_level(cdt, cdn) wired to min_manufacturing_qty /
+    lead_time_days / safety_factor handlers.
+- Server formula + UOM validation in overrides/item.py _validate_min_mfg_rows
+  (called at TOP of on_item_validate, BEFORE the TOC-enabled early-return).
+- Child doctype controller (ItemMinimumManufacture.validate) re-recomputes
+  max_level so writers that bypass the Item form (REST, bench console) still
+  persist a correct value.
+- Verified live: schema columns present; max_level computes correctly for
+  qty=100/lead=7/safety=1.5 -> 1050; safety=0 defaults to 1.0; disallowed
+  UOM rejected; no-UOM-but-has-rows rejected.
+- Restricted: _validate_min_mfg_rows position above early-return; max_level
+  stays read_only; no handler on max_level field (infinite loop); UOM
+  set_query must guard against empty list; field names are hardcoded in
+  _build_min_mfg_map SQL — coordinate any rename.
+```
+
+---
+
 ## 🔄 DEVELOPER STATE SYNC (Session WKP-035 / WKP-036 — 2026-05-13)
 **Sync Block for Context-Aware AI Development**
 

@@ -280,9 +280,74 @@
   box-shadow: var(--sh-sm);
   flex-shrink: 0;
   z-index: 10;
+  /* WKP-038 (2026-05-14): height + opacity transitions so the toggle
+     animates smoothly. max-height is the practical cap — the command
+     bar never exceeds ~360px even when every control is shown. */
+  max-height: 600px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.28s cubic-bezier(0.4, 0.0, 0.2, 1),
+              opacity   0.18s ease,
+              padding   0.28s cubic-bezier(0.4, 0.0, 0.2, 1),
+              border-bottom-color 0.18s ease;
+}
+.wkp-cmd.wkp-cmd-hidden {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  pointer-events: none;
+  border-bottom-color: transparent;
 }
 .wkp-cmd-left  { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .wkp-cmd-right { display: flex; align-items: center; gap: 12px; }
+
+/* WKP-038 (2026-05-14): slim collapse strip pinned above the command bar.
+   Lets users on small screens recover the controls' vertical space on
+   demand without losing access (one click brings it back).
+   ─────────────────────────────────────────────────────────────────────
+   RESTRICT:
+     - The strip itself stays visible always — it's the only way back
+       once the cmd is hidden. Do NOT add a "hide the strip too" option.
+     - Height kept under 28px so it doesn't itself eat space.
+*/
+.wkp-cmd-strip {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 26px;
+  padding: 0 24px;
+  background: var(--slate-50, #f8fafc);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  font-size: 11px;
+  color: var(--slate-500, #64748b);
+  flex-shrink: 0;
+}
+.wkp-cmd-strip-info {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--slate-500, #64748b);
+}
+.wkp-cmd-toggle-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  background: #fff;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--slate-700, #334155);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.wkp-cmd-toggle-btn:hover {
+  border-color: var(--brand-500, #f59e0b);
+  color: var(--brand-700, #b45309);
+}
+.wkp-cmd-toggle-btn i { font-size: 9px; transition: transform 0.2s ease; }
+.wkp-cmd.wkp-cmd-hidden + .wkp-cmd-strip i,
+.wkp-cmd-strip.wkp-cmd-collapsed i { transform: rotate(180deg); }
 
 .wkp-toggle-group {
   display: flex; align-items: center; gap: 12px;
@@ -924,6 +989,74 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 @keyframes wkp-load-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
   50%      { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+}
+
+/* ═══════════════════════════════════════════════════════
+   TS-001 (2026-05-14) — Read-only pending-filter banner
+   ─────────────────────────────────────────────────────
+   Replaces the WKP-034 per-report multi-select pickers.
+   TOC Settings is the single source of truth; the banner is
+   pure display. Compact, slate-bg, no dropdown affordance.
+   ═══════════════════════════════════════════════════════ */
+.wkp-pending-banner {
+  background: var(--slate-50, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  padding: 6px 12px 7px;
+  font-size: 11px;
+  color: var(--slate-700, #334155);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+  flex: 1 1 0;
+  min-width: 280px;
+}
+.wkp-pending-banner-head {
+  display: flex; align-items: center; gap: 8px;
+}
+.wkp-pending-banner-edit {
+  margin-left: auto;
+  color: var(--brand-700, #b45309);
+  font-weight: 600;
+  font-size: 11px;
+  text-decoration: none;
+}
+.wkp-pending-banner-edit:hover { text-decoration: underline; }
+.wkp-pending-banner-row {
+  display: flex; flex-wrap: wrap; gap: 14px;
+}
+.wkp-pending-chip-group {
+  display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
+}
+.wkp-pending-chip-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--slate-500, #64748b);
+}
+.wkp-pending-chip-list {
+  font-family: var(--font-stack-mono, "Geist Mono", monospace);
+  font-size: 11px;
+  color: var(--slate-800, #1e293b);
+}
+.wkp-pending-chip-list .wkp-pending-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 1px 3px 1px 0;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--border, #e2e8f0);
+  font-size: 10px;
+}
+.wkp-pending-chip-list .wkp-pending-chip.wf {
+  background: rgba(99, 102, 241, 0.10);
+  border-color: rgba(99, 102, 241, 0.30);
+  color: #4338ca;
+}
+.wkp-pending-chip-list .wkp-pending-chip-empty {
+  color: var(--slate-400, #94a3b8);
+  font-style: italic;
 }
 
 
@@ -3050,3 +3183,305 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
   display: flex; flex-direction: column; align-items: center;
   color: var(--slate-500);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   WKP-038 (2026-05-14) — Visual differentiation polish
+   ───────────────────────────────────────────────────────────────────────
+   On dense layouts the strips above the table all looked similar
+   (white-ish, thin border). After WKP-038 they have distinct visual
+   weights so the user can scan the page hierarchy quickly:
+
+     0. cmd-strip   slate-50 micro-strip  (toggle handle)
+     1. cmd         white surface         (controls)
+     2. cmd hidden  collapses to 0 height (animated)
+     3. hint-bar    pale blue gradient    (mode + state)
+     4. summary     slate-100 tint        (KPI cards on white)
+     5. tab-bar     white + brand accent  (active tab underline)
+     6. content     surface white         (tables / panes)
+
+   RESTRICT:
+     - Keep the cmd-strip slimmer than the cmd itself (≤28px).
+     - Don't drop the box-shadows on cmd / tab-bar — they give the
+       hierarchy depth.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Hint bar gets a soft brand gradient so it visually sits below cmd
+   without being just-another-strip. Existing class kept; this block
+   layers on top. */
+.wkp-hint-bar {
+  background: linear-gradient(
+    to right,
+    rgba(245, 158, 11, 0.06) 0%,
+    rgba(245, 158, 11, 0.02) 50%,
+    rgba(245, 158, 11, 0.06) 100%
+  );
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+
+/* Summary strip lift — keep slate-100 background, but lift the cards
+   slightly so the contrast against the strip is obvious. */
+.wkp-summary {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.wkp-sum-card {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.wkp-sum-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.10);
+}
+
+/* Tab bar: stronger brand underline on the active tab so it reads as a
+   "you are here" indicator at a glance. */
+.wkp-tab-btn.active {
+  box-shadow: inset 0 -3px 0 var(--brand-500, #f59e0b);
+}
+
+/* When the cmd is hidden, raise the strip's own visual weight a notch
+   so the user notices the toggle (subtle but explicit). */
+.wkp-cmd-strip.wkp-cmd-collapsed {
+  background: var(--brand-50, rgba(245, 158, 11, 0.06));
+  border-bottom-color: rgba(245, 158, 11, 0.20);
+}
+.wkp-cmd-strip.wkp-cmd-collapsed .wkp-cmd-strip-info {
+  color: var(--brand-700, #b45309);
+}
+.wkp-cmd-strip.wkp-cmd-collapsed .wkp-cmd-toggle-btn {
+  border-color: var(--brand-500, #f59e0b);
+  color: var(--brand-700, #b45309);
+  background: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   WKP-039 (2026-05-14) — MODAL v2 design system
+   ───────────────────────────────────────────────────────────────────────
+   Color psychology, table-first layout, and clear visual hierarchy for
+   every WKP modal. Class prefix: `wkp-m2-*` (kept separate from the
+   legacy `wkp-modal-*` so old templates keep working).
+
+   Layout per modal:
+     1. Branded gradient header (status-aware band)
+     2. Optional banner card (success / warning / error / info)
+     3. KPI strip (3–4 large pills with one number each)
+     4. Section blocks — each is a small colored title bar + table
+     5. Footer with primary CTA (where applicable)
+
+   Color tokens (re-used from the existing palette):
+     --ok    green (in-stock / ready / covered)
+     --warn  amber (partial / risk)
+     --err   red   (shortage / blocked)
+     --buy   sky   (procurement / expected)
+     --brand amber (page accent)
+
+   RESTRICT:
+     - All classes are additive — the existing `wkp-modal-*` chrome
+       (head / body / foot / close) is REUSED, not replaced.
+     - The new content classes start with `wkp-m2-` so any future
+       modal can opt-in by emitting them without touching the
+       overlay / chrome.
+     - Banner accent comes from the data-tone attribute (ok / warn /
+       err / info / brand). Don't hardcode colors in the JS — toggle
+       data-tone and let the CSS resolve.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Header gets a thin colored top stripe per status tone. Defaults to brand. */
+.wkp-modal[data-tone="ok"]    .wkp-modal-head { box-shadow: inset 0 4px 0 var(--ok,   #10b981); }
+.wkp-modal[data-tone="warn"]  .wkp-modal-head { box-shadow: inset 0 4px 0 var(--warn, #f59e0b); }
+.wkp-modal[data-tone="err"]   .wkp-modal-head { box-shadow: inset 0 4px 0 var(--err,  #ef4444); }
+.wkp-modal[data-tone="info"]  .wkp-modal-head { box-shadow: inset 0 4px 0 #3b82f6; }
+.wkp-modal[data-tone="brand"] .wkp-modal-head,
+.wkp-modal:not([data-tone])    .wkp-modal-head { box-shadow: inset 0 4px 0 var(--brand-500, #f59e0b); }
+
+/* Title gets an icon slot on the left so the modal reads instantly. */
+.wkp-m2-title-row { display: flex; align-items: center; gap: 12px; }
+.wkp-m2-title-icon {
+  width: 36px; height: 36px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  font-size: 16px;
+  background: var(--brand-100, rgba(245,158,11,0.15));
+  color: var(--brand-700, #b45309);
+}
+.wkp-modal[data-tone="ok"]   .wkp-m2-title-icon { background: rgba(16,185,129,0.12); color: var(--ok-text, #047857); }
+.wkp-modal[data-tone="warn"] .wkp-m2-title-icon { background: rgba(245,158,11,0.12); color: var(--brand-700, #b45309); }
+.wkp-modal[data-tone="err"]  .wkp-m2-title-icon { background: rgba(239,68,68,0.12);  color: var(--err-text, #b91c1c); }
+.wkp-modal[data-tone="info"] .wkp-m2-title-icon { background: rgba(59,130,246,0.12); color: #1d4ed8; }
+
+/* Body padding override for v2 — slightly tighter so cards fit nicely. */
+.wkp-modal-body.wkp-m2-body {
+  padding: 20px 24px 24px;
+  background: var(--slate-50, #f8fafc);
+}
+
+/* Banner card right under the header */
+.wkp-m2-banner {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  border: 1px solid;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.wkp-m2-banner[data-tone="ok"]   { background: rgba(16,185,129,0.08);  border-color: rgba(16,185,129,0.25);  color: var(--ok-text, #047857); }
+.wkp-m2-banner[data-tone="warn"] { background: rgba(245,158,11,0.10);  border-color: rgba(245,158,11,0.30);  color: var(--brand-700, #b45309); }
+.wkp-m2-banner[data-tone="err"]  { background: rgba(239,68,68,0.08);   border-color: rgba(239,68,68,0.25);   color: var(--err-text, #b91c1c); }
+.wkp-m2-banner[data-tone="info"] { background: rgba(59,130,246,0.08);  border-color: rgba(59,130,246,0.25);  color: #1d4ed8; }
+.wkp-m2-banner-icon  { font-size: 18px; line-height: 1.4; flex-shrink: 0; }
+.wkp-m2-banner-title { font-weight: 700; font-size: 13px; }
+.wkp-m2-banner-text  { margin-top: 4px; color: var(--slate-700, #334155); font-size: 12px; line-height: 1.55; }
+
+/* KPI strip */
+.wkp-m2-kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.wkp-m2-kpi {
+  background: #fff;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  padding: 10px 14px;
+  position: relative;
+  overflow: hidden;
+}
+.wkp-m2-kpi::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; background: var(--slate-300, #cbd5e1);
+}
+.wkp-m2-kpi[data-tone="ok"]::before    { background: var(--ok,   #10b981); }
+.wkp-m2-kpi[data-tone="warn"]::before  { background: var(--warn, #f59e0b); }
+.wkp-m2-kpi[data-tone="err"]::before   { background: var(--err,  #ef4444); }
+.wkp-m2-kpi[data-tone="info"]::before  { background: #3b82f6; }
+.wkp-m2-kpi[data-tone="brand"]::before { background: var(--brand-500, #f59e0b); }
+.wkp-m2-kpi-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--slate-500, #64748b);
+  display: flex; align-items: center; gap: 5px;
+}
+.wkp-m2-kpi-val {
+  font-family: var(--font-display, inherit);
+  font-size: 20px; font-weight: 700;
+  color: var(--slate-900, #0f172a);
+  line-height: 1.2; margin-top: 4px;
+  word-break: break-word;
+}
+.wkp-m2-kpi-sub {
+  font-size: 11px; color: var(--slate-500, #64748b); margin-top: 2px;
+}
+
+/* Section block */
+.wkp-m2-section {
+  background: #fff;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.wkp-m2-section-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  background: var(--slate-50, #f8fafc);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--slate-700, #334155);
+}
+.wkp-m2-section-head i { font-size: 11px; color: var(--brand-600, #d97706); }
+.wkp-m2-section[data-tone="ok"]   .wkp-m2-section-head { border-bottom-color: rgba(16,185,129,0.25); }
+.wkp-m2-section[data-tone="warn"] .wkp-m2-section-head { border-bottom-color: rgba(245,158,11,0.30); }
+.wkp-m2-section[data-tone="err"]  .wkp-m2-section-head { border-bottom-color: rgba(239,68,68,0.25); }
+.wkp-m2-section[data-tone="info"] .wkp-m2-section-head { border-bottom-color: rgba(59,130,246,0.25); }
+.wkp-m2-section[data-tone="ok"]   .wkp-m2-section-head i { color: var(--ok-text, #047857); }
+.wkp-m2-section[data-tone="warn"] .wkp-m2-section-head i { color: var(--brand-700, #b45309); }
+.wkp-m2-section[data-tone="err"]  .wkp-m2-section-head i { color: var(--err-text, #b91c1c); }
+.wkp-m2-section[data-tone="info"] .wkp-m2-section-head i { color: #1d4ed8; }
+
+/* Section body — pure table or info-grid */
+.wkp-m2-section-body { padding: 0; }
+.wkp-m2-section-body.wkp-m2-padded { padding: 12px 14px; }
+
+/* Two-column info table — used for WO Info / Production Quantities etc. */
+.wkp-m2-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.wkp-m2-table tbody tr { border-bottom: 1px solid var(--slate-100, #f1f5f9); }
+.wkp-m2-table tbody tr:last-child { border-bottom: none; }
+.wkp-m2-table tbody tr:nth-child(even) td { background: var(--slate-50, #f8fafc); }
+.wkp-m2-table th, .wkp-m2-table td {
+  padding: 8px 14px;
+  vertical-align: top;
+}
+.wkp-m2-table th {
+  text-align: left;
+  background: var(--slate-100, #f1f5f9);
+  color: var(--slate-700, #334155);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  position: sticky; top: 0; z-index: 1;
+}
+.wkp-m2-table th.ta-r, .wkp-m2-table td.ta-r { text-align: right; }
+.wkp-m2-table th.ta-c, .wkp-m2-table td.ta-c { text-align: center; }
+.wkp-m2-table td.wkp-m2-k {
+  color: var(--slate-500, #64748b);
+  font-weight: 500;
+  width: 45%;
+}
+.wkp-m2-table td.wkp-m2-v {
+  color: var(--slate-900, #0f172a);
+  font-weight: 600;
+}
+.wkp-m2-table td.wkp-m2-v .wkp-m2-sub {
+  display: block; font-weight: 500; color: var(--slate-500, #64748b);
+  font-size: 11px; margin-top: 2px;
+}
+.wkp-m2-table td.wkp-m2-v .mono { font-family: var(--mono, monospace); font-size: 12px; }
+.wkp-m2-table td.wkp-m2-emph { color: var(--err-text, #b91c1c); font-weight: 700; }
+.wkp-m2-table td.wkp-m2-good { color: var(--ok-text, #047857); font-weight: 700; }
+
+/* Cell-level tone pills (for status, stage, etc.) */
+.wkp-m2-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  background: var(--slate-100, #f1f5f9); color: var(--slate-700, #334155);
+  border: 1px solid var(--border, #e2e8f0);
+  white-space: nowrap;
+}
+.wkp-m2-pill[data-tone="ok"]   { background: rgba(16,185,129,0.10); color: var(--ok-text, #047857); border-color: rgba(16,185,129,0.30); }
+.wkp-m2-pill[data-tone="warn"] { background: rgba(245,158,11,0.12); color: var(--brand-700, #b45309); border-color: rgba(245,158,11,0.30); }
+.wkp-m2-pill[data-tone="err"]  { background: rgba(239,68,68,0.10);  color: var(--err-text, #b91c1c);  border-color: rgba(239,68,68,0.30); }
+.wkp-m2-pill[data-tone="info"] { background: rgba(59,130,246,0.10); color: #1d4ed8;                   border-color: rgba(59,130,246,0.30); }
+.wkp-m2-pill[data-tone="brand"]{ background: rgba(245,158,11,0.12); color: var(--brand-700, #b45309); border-color: rgba(245,158,11,0.30); }
+
+/* Dual-column grid for laying two info-tables side by side on wide modals */
+.wkp-m2-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+/* Footer link button */
+.wkp-m2-footer-bar {
+  display: flex; justify-content: flex-end; gap: 10px;
+  margin-top: 4px;
+}
+
+/* Cell helpers shared with data tables */
+.wkp-m2-section .wkp-m2-table thead th {
+  position: sticky; top: 0; z-index: 1;
+}
+.wkp-m2-section .wkp-m2-table tbody tr:hover td {
+  background: var(--brand-50, rgba(245,158,11,0.06)) !important;
+}
+
+/* Action buttons inside modals */
+.wkp-m2-action-row {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
+}
+.wkp-m2-section .wkp-m2-action-row { padding: 12px 14px; }

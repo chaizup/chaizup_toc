@@ -771,6 +771,25 @@ class TOCItemSettings {
       data.check_bom_availability = rad ? parseInt(rad.value) : 1;
     }
 
+    // IMM-003 (2026-05-13): Min Manufacture / Purchase per-warehouse bulk fields.
+    // Each applies to EVERY existing row of custom_minimum_manufacture for
+    // selected items. Items without rows are silently skipped server-side.
+    if (document.querySelector("#tis-bfr-mm-auto-adu .tis-bulk-apply-chk").checked) {
+      fields.push("minmfg_auto_adu");
+      const rad = document.querySelector("input[name=bulk-minmfg-auto-adu]:checked");
+      data.minmfg_auto_adu = rad ? parseInt(rad.value) : 1;
+    }
+    if (document.querySelector("#tis-bfr-mm-lead .tis-bulk-apply-chk").checked) {
+      fields.push("minmfg_lead_time_days");
+      const v = document.getElementById("tis-bulk-minmfg-lead").value;
+      data.minmfg_lead_time_days = v === "" ? 0 : parseInt(v, 10) || 0;
+    }
+    if (document.querySelector("#tis-bfr-mm-safety .tis-bulk-apply-chk").checked) {
+      fields.push("minmfg_safety_factor");
+      const v = document.getElementById("tis-bulk-minmfg-safety").value;
+      data.minmfg_safety_factor = v === "" ? 1.0 : parseFloat(v) || 1.0;
+    }
+
     if (!fields.length) { frappe.msgprint("Please select at least one field to apply"); return; }
 
     const btn = document.getElementById("tis-bulk-save-btn");

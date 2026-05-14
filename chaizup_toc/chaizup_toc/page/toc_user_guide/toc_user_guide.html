@@ -990,7 +990,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
       <tr><td><code class="tug-code">CURRALSO</code></td><td>Current-month ALL SO qty (completed + pending; excludes only Cancelled)</td></tr>
       <tr><td><code class="tug-code">ITMWO</code></td><td>Pending Work Order qty (qty − produced_qty) for item × fg_warehouse</td></tr>
       <tr><td><code class="tug-code">ITMWSTK</code></td><td>Bin actual_qty for item × warehouse</td></tr>
-      <tr><td><code class="tug-code">MINMFG</code></td><td>Minimum manufacturing / purchase batch floor from Item.custom_minimum_manufacture (per warehouse, converted to stock UOM)</td></tr>
+      <tr><td><code class="tug-code">MINMFG</code></td><td>Minimum manufacturing / purchase batch floor from <code class="tug-code">Item.custom_minimum_manufacture</code> (per warehouse, converted to stock UOM). The table also stores <strong>Lead Time (days)</strong> + <strong>Safety Factor</strong> + an auto-calculated <strong>Max Level</strong> (= qty &times; lead &times; safety) per row — see IMM-001 below.</td></tr>
     </table>
   </div>
 
@@ -1063,6 +1063,107 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
   <p>Every TOC-created Production Plan has the UI checkbox <strong>"Consider Projected Qty in Calculation"</strong> set to <em>unchecked</em>. This forces the ERPNext sub-assembly fetch to use <code class="tug-code">Bin.actual_qty</code> alone — the TOC dual-calc engine already accounts for pending Work Orders, pending Sales Orders, and projection demand, so letting ERPNext deduct again <code class="tug-code">projected_qty</code> would double-count and silently shrink sub-assembly demand. The PP also stamps <code class="tug-code">Created By = System</code> (visible in the Production Plan list view) and <code class="tug-code">Source Projection</code> for traceability.</p>
 
   <p>The PP Items row also captures the item&apos;s <strong>Stock UOM</strong> (e.g. <em>Pcs</em>, <em>Kg</em>) from the Item Master. This was a silent gap until 2026-05-12 — the UOM column on the PP Items grid would render empty for engine-created plans, and the ERPNext <code class="tug-code">validate_uom_is_integer</code> check became a no-op. The qty itself has always been in stock UOM (the formula resolves shortage + MINMFG in stock UOM); only the display column was missing the unit label.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">IMM-002 — Min Manufacture / Purchase Qty per Warehouse (2026-05-13)</h3>
+  <p>The Item Master section <strong>6. Minimum Purchase / Production Qty per Warehouse</strong> now includes six extra columns alongside Warehouse / Min Qty / UOM:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Lead Time (days)</strong> — supplier or internal production lead time per warehouse.</li>
+    <li><strong>Safety Factor</strong> — buffer multiplier (default <em>1.0</em>; common values <em>1.5</em> for cushion, <em>2.0</em> for volatile demand or unreliable suppliers).</li>
+    <li><strong>ADU</strong> — Average Daily Usage, read-only. The TOC engine refreshes this every day at <em>06:35 AM</em> by summing stock outflows from <code class="tug-code">Stock Ledger Entry</code> over the lookback window, scoped to this item AND this warehouse. Two warehouses for the same item get independent ADUs.</li>
+    <li><strong>Lookback (d)</strong> — read-only snapshot of the lookback window the engine used the last time it wrote this row. Sourced from <em>TOC Settings &rarr; ADU Lookback Days</em> (default 90). Snapshotted so historical readers can still interpret an older ADU even if the global setting changes later.</li>
+    <li><strong>Max Level (auto)</strong> — read-only replenishment cap. Formula: <code class="tug-code">ADU &times; lead_time_days &times; safety_factor</code>, rounded to 3 decimals. Recomputed in three places &mdash; (a) the daily 06:35 task, (b) the Item server-side <code class="tug-code">validate()</code>, and (c) on every input change in the form &mdash; so a lead / safety edit takes effect immediately without waiting for the next scheduled run.</li>
+    <li><strong>Last Updated</strong> — timestamp (dd-mmm-yyyy hh:mm) of the last engine refresh. Empty until the scheduler first touches the row.</li>
+  </ul>
+  <p><strong>Formula history note.</strong> An earlier (IMM-001) version of this section used <code class="tug-code">min_manufacturing_qty &times; lead &times; safety</code> &mdash; that was wrong, because replenishment cover depends on the consumption rate, not the batch size. The current IMM-002 formula uses ADU as the driver.</p>
+  <p><strong>UOM is scoped to the Item.</strong> Rows in this table only accept UOMs that exist in the Item&apos;s <em>Units of Measure</em> section (plus the Stock UOM). Adding rows is also blocked until at least one Unit of Measure is configured AND the Item has been saved at least once &mdash; a small hint appears above the grid explaining this when the gate is closed. The same rule is enforced server-side: if a row tries to persist with an unknown UOM, the Item save fails with a clear error.</p>
+
+  <h4 style="font-weight:700;margin:14px 0 8px;color:var(--tug-navy)">IMM-003 &mdash; Auto-ADU toggle, history gate, bulk UI</h4>
+  <p>Each row now has an <strong>Auto ADU</strong> checkbox (default ON):</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Auto ON</strong> &mdash; the TOC engine refreshes <em>ADU</em> daily at 06:35 AM from Stock Ledger Entry outflows for this item &times; warehouse. The <em>ADU</em> cell is read-only. The engine ONLY writes once enough days of history exist (i.e. the earliest outflow is on or before <code class="tug-code">today &minus; ADU Lookback Days</code>). Until then the row stays in a "warming-up" state and the previous values are preserved.</li>
+    <li><strong>Auto OFF</strong> &mdash; the user enters <em>ADU</em> manually and the engine NEVER touches the row. Use this when a new item has no consumption history yet but you already know its expected daily usage.</li>
+  </ul>
+  <p>The lookback window is read from <em>TOC Settings &rarr; ADU Lookback Days</em> (default 90). Each engine write also snapshots the lookback value into the row&apos;s read-only <em>Lookback (d)</em> column &mdash; so historical ADU values can be interpreted even after the global setting is later changed.</p>
+  <p>For estate-wide adjustments, the page <em>TOC Item Settings</em> &rarr; <strong>Bulk Configuration</strong> modal now exposes three new <em>APPLY</em> rows under the Min Manufacture / Purchase heading:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Min Manufacture &mdash; Auto ADU</strong> (ON / OFF) &mdash; flip the toggle on every existing warehouse row of every selected item.</li>
+    <li><strong>Min Manufacture &mdash; Lead Time (days)</strong> &mdash; set <code class="tug-code">lead_time_days</code> uniformly.</li>
+    <li><strong>Min Manufacture &mdash; Safety Factor</strong> &mdash; set <code class="tug-code">safety_factor</code> uniformly (defaults to 1.0 when blank).</li>
+  </ul>
+  <p>The bulk operation deliberately omits <em>ADU</em> and <em>Min Qty</em>: ADU is either engine-owned or specific to a single row, and Min Qty is warehouse-specific batch sizing &mdash; neither is meaningfully bulk-settable across items.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">TS-001 &mdash; TOC Settings as the single source of truth (2026-05-14)</h3>
+  <p>From 2026-05-14, the WO Kitting Planner and Production Overview pages no longer expose per-report status pickers. The 6 pending-status fields in <em>TOC Settings</em> drive every report on the site:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li>Pending Sales Order Statuses + Confirmed Draft SO Workflow States</li>
+    <li>Pending Work Order Statuses + Draft WO Workflow States</li>
+    <li>Pending Purchase Order Statuses + Draft PO Workflow States</li>
+  </ul>
+  <p>Each report shows a compact <strong>Active Pending Filter (read-only)</strong> banner at the top of its header. The banner shows three chip groups (SO / WO / PO) with the current lists and an <em>Edit in TOC Settings</em> link that jumps to the global form. Two reports never diverge from each other; the schedulers, the manual buttons, and the engines all read the same configuration.</p>
+  <p><strong>Why this matters.</strong> Pre-TS-001, every report had its own pickers. A user who changed the "Show WOs" multi-select on the WO Kitting Planner saw different numbers than what the scheduled job wrote that morning. After TS-001, "what does the engine think is pending right now?" is a single answer everywhere.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">BTP-001 &mdash; Buffer Type removed + configurable WO / PO pending statuses (2026-05-14)</h3>
+  <p>Two related housekeeping fixes shipped together.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">FG / SFG / RM / PM classification removed</h4>
+  <p>The old "Buffer Type" Item field (FG / SFG / RM / PM) had been hidden for some time but the schema remained. BTP-001 removes the Custom Field <em>and</em> the legacy <em>TOC Item Group Rule</em> doctype entirely. Replenishment routing now lives in two places only:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Item &rarr; Auto Purchase / Auto Manufacture</strong> checkboxes &mdash; single-item routing.</li>
+    <li><strong>Item Minimum Manufacture &rarr; Action Type</strong> &mdash; per-warehouse routing for the shortage engines.</li>
+  </ul>
+  <p>Existing reports labelled "Mode" still work; they now read <code class="tug-code">mr_type</code> (Manufacture / Purchase / Monitor) from the engine without the legacy classification layer.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">Pending WO and PO statuses are now user-configurable</h4>
+  <p>The Sales Order pending-status filter has been in TOC Settings for a while. BTP-001 adds the same configurability for Work Orders and Purchase Orders. Open <em>TOC Settings &rarr; Sales Projection Automation</em>: a new section titled <strong>Pending Work Order &amp; Purchase Order Statuses</strong> appears between the SO config and the manual-run buttons.</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Pending Work Order Statuses</strong> &mdash; one Submitted WO status per line. Default: <em>Not Started / In Process / Material Transferred</em>. Everything that says "open WO" in the engine (Calc A, Calc B, Calc SO, Calc Action, WO Kitting Planner "Current + Expected" stock) honours this list.</li>
+    <li><strong>Draft WO Workflow States</strong> (optional) &mdash; one workflow state per line. Silently ignored on sites that have no Workflow on Work Order. Used to count Draft WOs in a custom Workflow ("Pre-Approved", "Validated", &hellip;) as open.</li>
+    <li><strong>Pending Purchase Order Statuses</strong> &mdash; one Submitted PO status per line. Default: <em>To Receive / To Receive and Bill</em>. Drives every "open PO" calculation in the engine, the Calc Action max-level mode, and the Production Overview / Purchase Priority tabs.</li>
+    <li><strong>Draft PO Workflow States</strong> (optional) &mdash; same as Draft WO Workflow States but for Purchase Order.</li>
+  </ul>
+  <p>Defaults preserve the previous hardcoded behaviour. If you leave the new fields blank, every calculation keeps its prior result. Change them only if your site uses non-standard statuses or workflows.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">SPA-001 &mdash; Shortage Cover (action-aware) + Shortage Action (2026-05-14)</h3>
+  <p>Builds on SPE-001 (Sales Order Shortage). Now every row of <em>6. Minimum Purchase / Production Qty per Warehouse</em> carries an <strong>Action Type</strong> (Manufacture / Purchase) plus two optional auto-trigger checkboxes that drive a second engine.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">Shortage Cover &mdash; now Action Type aware</h4>
+  <p>The existing <em>Run Sales Order Shortage Now</em> button (Calc SO) reads <em>Action Type</em> per row and:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Manufacture</strong> &rarr; creates a Production Plan and Work Orders (unchanged).</li>
+    <li><strong>Purchase</strong> &rarr; creates a Material Request of type Purchase. The qty is converted from stock UOM to <em>Item Purchase UOM</em> automatically using the per-item conversion factor &mdash; so supplier orders are written in the right unit (e.g. 5 KG instead of 5000 Gram).</li>
+  </ul>
+  <p>MOQ logic: if the computed shortage is less than the row Min Qty, the engine uses the Min Qty floor (after converting to stock UOM); otherwise the shortage qty is used directly.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">Shortage Action &mdash; new auto-monitoring engine</h4>
+  <p>A second engine runs only on rows where you tick at least one of the two new checkboxes:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Auto on Shortage</strong> &mdash; fires when: <code class="tug-code">(pending SO + WO component requirement) &minus; (stock + open WO output) &gt; 0</code>. Order qty = <code class="tug-code">max(shortage, MOQ)</code>.</li>
+    <li><strong>Auto on Max Level</strong> &mdash; fires when current cover falls below the row threshold:<br>
+        <code class="tug-code">cover = (stock + open WO output + open PO) &minus; (pending SO + WO component requirement)</code><br>
+        <code class="tug-code">cover % = cover / max_level &times; 100</code><br>
+        Trigger: <code class="tug-code">cover % &lt; row Threshold %</code>. Order qty = <code class="tug-code">max(max_level &minus; cover, MOQ)</code>.</li>
+  </ul>
+  <p>Both modes feed the same artifact creator. <em>Action Type</em> decides Production Plan vs Material Request, and the same per-item UOM conversion is applied. Each row is evaluated <em>once</em> per run &mdash; Shortage mode is checked first, Max Level mode runs only if Shortage did not fire, so the engine never creates two artifacts on a single run for one row.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">How to run manually</h4>
+  <p>Open <em>TOC Settings</em> &rarr; <em>Sales Projection Automation</em> section &rarr; click <strong>Run Shortage Action Now</strong>. The confirm dialog explains the trigger formulas. On completion you get a message with a link to the new <em>TOC Production Plan Run Log</em> (rows carry <em>Calc = Calc Action</em>; reason text identifies which mode fired). A separate <strong>Run Sales Order Shortage Now</strong> button is also available for the action-aware Calc SO flow.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">SPE-001 &mdash; Sales Order Shortage Automation + Manual Run Log fix (2026-05-13)</h3>
+  <p>Two related improvements to the Production Plan automation:</p>
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">Manual Sales-Projection runs now write a Run Log</h4>
+  <p>The <em>Run Production Plan Automation</em> button on the Sales Projection form previously calculated and created Production Plans but did not produce a <b>TOC Production Plan Run Log</b>. The summary dialog reported success, but the audit trail was empty. SPE-001 routes the manual button through the same engine the TOC Settings <em>Run Now</em> button uses (<code class="tug-code">_run_for_projection</code>), so every manual run now appears in the Run Log list and is searchable by date, projection, or company.</p>
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">New standalone Sales Order Shortage automation (Calc SO)</h4>
+  <p>A second automation path, independent of any Sales Projection. The engine scans <strong>every pending Sales Order</strong>, aggregates pending qty per item &times; warehouse <em>in stock UOM</em>, and creates a Production Plan when:</p>
+  <div class="tug-code-block"><code class="tug-code">pending_so_qty &minus; bin_actual_qty &minus; open_wo_qty &gt; 0</code></div>
+  <p>Production qty = <code class="tug-code">max(shortage, MINMFG per-warehouse)</code>. The MINMFG floor reads from <em>Item &rarr; 6. Minimum Purchase / Production Qty per Warehouse</em>.</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>UOM safety:</strong> pending qty is summed as <code class="tug-code">soi.stock_qty &minus; soi.delivered_qty &times; soi.conversion_factor</code>. So two Sales Orders that punch the same item in different transaction UOMs (e.g. Kg vs 25-Kg Bag, Dozen vs Pcs) are combined correctly. No second conversion happens anywhere.</li>
+    <li><strong>Per-line warehouse:</strong> <code class="tug-code">soi.warehouse &rarr; so.set_warehouse &rarr; TOC Settings.default_so_warehouse</code>. Lines that resolve to none are skipped (cannot be planned).</li>
+    <li><strong>SO eligibility:</strong> same status + workflow_state filter as Calc B (TOC Settings &rarr; <em>Sales Order Automation</em>). Draft + workflow_state = Confirmed is supported and skipped automatically on sites with no Workflow.</li>
+    <li><strong>Dedup:</strong> a second SO-shortage PP for the same (item &times; warehouse) is blocked while the previous one is still active (not Completed, not Closed, not Cancelled).</li>
+    <li><strong>Audit:</strong> one <em>TOC Production Plan Run Log</em> per run, <em>sales_projection</em> blank, <em>triggered_by</em> = <em>so_shortage_manual</em>, <em>calc_used</em> on each row = <em>Calc SO</em>. Reason text on each created PP begins with <code class="tug-code">[Calc SO] Sales Order Shortage at &lt;warehouse&gt;</code> so the cause is obvious in the PP form.</li>
+  </ul>
+  <p><strong>How to run.</strong> Go to <em>TOC Settings</em> and click the <strong>Run Sales Order Shortage Now</strong> button (added under the same <em>Manual Run Trigger</em> section as the existing Calc A/Calc B runner). The dialog confirms, fires the engine, and links to the Run Log on completion.</p>
 
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">Sales Projection Admin Role</h3>
   <p>A dedicated role, <strong>Sales Projection Admin</strong>, was introduced on 2026-05-12 for power users who need to correct submitted projections without holding the full System Manager role. Holders can <em>cancel</em> a submitted Sales Projection, <em>amend</em> it (Frappe creates a fresh draft with <code class="tug-code">amended_from</code> set to the cancelled name), <em>edit</em> any field, and <em>resubmit</em>. The <em>System Manager</em> role also now carries cancel + amend on Sales Projection.</p>

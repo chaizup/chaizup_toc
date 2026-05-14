@@ -210,7 +210,35 @@ function _add_run_automation_btn(frm) {
 					freeze: true,
 					freeze_message: __("Calculating demand shortage and creating Production Plans…"),
 					callback: function(r) {
+						// SPE-001 (2026-05-13): v2 engine returns { ok, run_log,
+						// summary, message }. Show a summary + Run Log link.
 						if (!r.message) return;
+						if (!Array.isArray(r.message) && r.message.summary) {
+							var s = r.message.summary || {};
+							var crA = s.calc_a_created || 0, skA = s.calc_a_skipped || 0;
+							var crB = s.calc_b_created || 0, skB = s.calc_b_skipped || 0;
+							var errs = s.errors || 0;
+							var log = r.message.run_log || "";
+							var log_link = log
+								? "<a href='/app/toc-production-plan-run-log/" + frappe.utils.escape_html(log) + "' target='_blank'>" + frappe.utils.escape_html(log) + "</a>"
+								: "&mdash;";
+							frappe.msgprint({
+								title: __("PP Automation Complete — " + (crA + crB) + " PP(s) Created, " + (skA + skB) + " Skipped"),
+								message: (
+									"<div style='font-size:13px;line-height:1.7'>" +
+									"<div><b>Run Log:</b> " + log_link + "</div>" +
+									"<div><b>Calc A:</b> " + crA + " created, " + skA + " skipped</div>" +
+									"<div><b>Calc B:</b> " + crB + " created, " + skB + " skipped</div>" +
+									"<div><b>Errors:</b> " + errs + "</div>" +
+									"<p style='margin-top:10px;color:#888;font-size:12px'>" +
+									"Per-item breakdown is on the Run Log. An email summary was queued to all Notification Users.</p>" +
+									"</div>"
+								),
+								indicator: (crA + crB) > 0 ? "green" : (errs > 0 ? "red" : "orange"),
+							});
+							frm.reload_doc();
+							return;
+						}
 						var results = r.message;
 						var created = results.filter(function(x) { return x.status === "Created"; });
 						var skipped = results.filter(function(x) { return x.status !== "Created"; });

@@ -690,6 +690,68 @@ body {
                 </div>
               </div>
             </div>
+
+            <!-- ════════════════════════════════════════════════════════════════
+                 IMM-003 (2026-05-13) — Min Manufacture / Purchase Qty bulk fields
+                 ──────────────────────────────────────────────────────────────
+                 Each of these APPLIES to EVERY existing row of
+                 `Item.custom_minimum_manufacture` for the selected items.
+                 Items with no rows are skipped silently. We deliberately do
+                 NOT bulk-set `adu` or `min_manufacturing_qty` — adu is engine
+                 or row-specific, min_qty is warehouse-specific batch sizing.
+                 ════════════════════════════════════════════════════════════════ -->
+
+            <!-- Field MM-1: Auto ADU on all min-mfg rows -->
+            <div class="tis-bulk-field-row" id="tis-bfr-mm-auto-adu">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;mm-auto-adu&quot;, this.checked)">
+                <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">Min Manufacture &mdash; Auto ADU</div>
+                <div style="display:flex; gap:20px;">
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-minmfg-auto-adu" value="1" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Auto (engine writes ADU)
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; font-weight:500; font-size:14px; cursor:pointer;">
+                    <input type="radio" name="bulk-minmfg-auto-adu" value="0" style="width:16px;height:16px;accent-color:var(--tis-primary)"> Manual
+                  </label>
+                </div>
+                <div style="font-size:11px; color:var(--tis-muted); margin-top:6px">
+                  Applies to every Warehouse row of <i>Minimum Manufacture / Purchase Qty per Warehouse</i> on the selected items. Items without any rows are skipped.
+                </div>
+              </div>
+            </div>
+
+            <!-- Field MM-2: Default Lead Time on all min-mfg rows -->
+            <div class="tis-bulk-field-row" id="tis-bfr-mm-lead">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;mm-lead&quot;, this.checked)">
+                <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">Min Manufacture &mdash; Lead Time (days)</div>
+                <input type="number" class="tis-input" id="tis-bulk-minmfg-lead" min="0" step="1" placeholder="e.g. 7">
+                <div style="font-size:11px; color:var(--tis-muted); margin-top:6px">
+                  Sets <code>lead_time_days</code> on every existing min-mfg row of the selected items. The engine uses this in <code>max_level = ADU &times; lead &times; safety</code>.
+                </div>
+              </div>
+            </div>
+
+            <!-- Field MM-3: Default Safety Factor on all min-mfg rows -->
+            <div class="tis-bulk-field-row" id="tis-bfr-mm-safety">
+              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
+                <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;mm-safety&quot;, this.checked)">
+                <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
+              </div>
+              <div class="tis-bulk-field-body">
+                <div class="tis-bulk-field-label">Min Manufacture &mdash; Safety Factor</div>
+                <input type="number" class="tis-input" id="tis-bulk-minmfg-safety" min="0" step="0.05" placeholder="1.0 = no safety, 1.5 = 50% cushion">
+                <div style="font-size:11px; color:var(--tis-muted); margin-top:6px">
+                  Sets <code>safety_factor</code> on every existing min-mfg row of the selected items. Defaults to 1.0 when blank.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
     </div>

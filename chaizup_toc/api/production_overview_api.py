@@ -59,6 +59,41 @@ _DEFAULT_SO_STATUSES   = ["To Deliver and Bill", "To Deliver", "To Bill", "Parti
 _DEFAULT_PP_STATUSES   = ["Submitted", "In Process"]
 _DEFAULT_PO_STATUSES   = ["To Receive and Bill", "To Receive"]
 
+# =============================================================================
+# TS-001 (2026-05-14): TOC Settings as the single source of truth
+# -----------------------------------------------------------------------------
+# Production Overview no longer ships per-report status pickers. The
+# read-only banner at the top of the page calls
+# `wo_kitting_api.get_toc_pending_filters` (shared) and displays whatever
+# the user has configured in TOC Settings. Any kwargs `wo_statuses=` /
+# `so_statuses=` / `po_statuses=` / `pp_statuses=` passed by external
+# callers still win (API-level override); the form-level default is now
+# "use TOC Settings". The helpers below resolve the default per request.
+#
+# RESTRICT:
+#   - Do NOT re-add a multi-select picker in the page header. The whole
+#     point of TS-001 is one place to change pending status semantics.
+# =============================================================================
+
+def _por_default_wo_statuses():
+    from chaizup_toc.api.wo_kitting_api import _toc_settings_wo_statuses
+    out = _toc_settings_wo_statuses()
+    # Strip `Workflow: <state>` entries — POR's wo SQL helpers do not
+    # currently handle a workflow_state branch on Work Order; keeping
+    # them in would silently match nothing. Drop the prefix entries.
+    return [s for s in out if not (isinstance(s, str) and s.startswith("Workflow: "))] or list(_DEFAULT_WO_STATUSES)
+
+def _por_default_so_statuses():
+    # SO supports workflow_state via _so_status_clause, so keep them.
+    from chaizup_toc.api.wo_kitting_api import _toc_settings_so_statuses
+    out = _toc_settings_so_statuses()
+    return out or list(_DEFAULT_SO_STATUSES)
+
+def _por_default_po_statuses():
+    from chaizup_toc.api.wo_kitting_api import _toc_settings_po_statuses
+    out = _toc_settings_po_statuses()
+    return [s for s in out if not (isinstance(s, str) and s.startswith("Workflow: "))] or list(_DEFAULT_PO_STATUSES)
+
 # ── Shared DeepSeek helpers (imported from existing integration) ──
 from chaizup_toc.api.wo_kitting_api import (   # noqa: E402
     _get_api_key,
@@ -101,19 +136,22 @@ def get_production_overview(
     # ── Parse inputs ──
     if isinstance(warehouses, str):
         warehouses = frappe.parse_json(warehouses) or []
+    # TS-001: fall back to TOC Settings (single source of truth) when the
+    # caller doesn't supply an explicit JSON list. External API callers
+    # that DO supply a list keep their override behaviour.
     if isinstance(wo_statuses, str):
-        wo_statuses = frappe.parse_json(wo_statuses) or _DEFAULT_WO_STATUSES
+        wo_statuses = frappe.parse_json(wo_statuses) or _por_default_wo_statuses()
     if isinstance(so_statuses, str):
-        so_statuses = frappe.parse_json(so_statuses) or _DEFAULT_SO_STATUSES
+        so_statuses = frappe.parse_json(so_statuses) or _por_default_so_statuses()
     if isinstance(pp_statuses, str):
         pp_statuses = frappe.parse_json(pp_statuses) or _DEFAULT_PP_STATUSES
     if isinstance(po_statuses, str):
-        po_statuses = frappe.parse_json(po_statuses) or _DEFAULT_PO_STATUSES
+        po_statuses = frappe.parse_json(po_statuses) or _por_default_po_statuses()
 
-    wo_statuses  = wo_statuses  or _DEFAULT_WO_STATUSES
-    so_statuses  = so_statuses  or _DEFAULT_SO_STATUSES
+    wo_statuses  = wo_statuses  or _por_default_wo_statuses()
+    so_statuses  = so_statuses  or _por_default_so_statuses()
     pp_statuses  = pp_statuses  or _DEFAULT_PP_STATUSES
-    po_statuses  = po_statuses  or _DEFAULT_PO_STATUSES
+    po_statuses  = po_statuses  or _por_default_po_statuses()
     warehouses   = warehouses   or []
 
     today_date   = getdate(today())
@@ -360,7 +398,7 @@ def get_item_detail(item_code, company=None, month=None, year=None,
     if isinstance(warehouses, str):
         warehouses = frappe.parse_json(warehouses) or []
     if isinstance(wo_statuses, str):
-        wo_statuses = frappe.parse_json(wo_statuses) or _DEFAULT_WO_STATUSES
+        wo_statuses = frappe.parse_json(wo_statuses) or _por_default_wo_statuses()
 
     today_date = getdate(today())
     curr_month = cint(month) if month else today_date.month
@@ -435,7 +473,7 @@ def get_shortage_detail(item_code, warehouses=None, stock_mode="physical", wo_st
     if isinstance(warehouses, str):
         warehouses = frappe.parse_json(warehouses) or []
     if isinstance(wo_statuses, str):
-        wo_statuses = frappe.parse_json(wo_statuses) or _DEFAULT_WO_STATUSES
+        wo_statuses = frappe.parse_json(wo_statuses) or _por_default_wo_statuses()
 
     # NOTE: Work Order column is `qty`; aliased to `qty_to_manufacture` for clarity.
     wo_rows = frappe.db.sql("""

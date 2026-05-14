@@ -131,7 +131,29 @@ MONTH_NAMES = [
 # =============================================================================
 @frappe.whitelist()
 def run_production_plan_automation(projection_name, triggered_by="manual"):
-    """Create Production Plans for all items in the given submitted Sales Projection."""
+    """Create Production Plans for all items in the given submitted Sales Projection.
+
+    SPE-001 (2026-05-13) — RUN-LOG FIX
+    ----------------------------------
+    The legacy v1 path (this function) used to call `_process_item` directly
+    and never created a `TOC Production Plan Run Log`. The TOC Settings
+    "Run Now" button has used v2 (`_run_for_projection`) since 2026-05-08
+    and DID create a log; the per-Sales-Projection form button (handled by
+    this function) silently did not.
+
+    To eliminate that divergence we now delegate to the SAME v2 entry
+    point (`_run_for_projection`) for both paths. Side effects:
+
+      - A Run Log + Run Items are always created on a manual run.
+      - The v1 `_process_item` is no longer called from this entry — but
+        it is still exported and used by `mr_generator.py` for buffer-
+        triggered FG/SFG items (per the legacy contract). Do NOT delete it.
+      - The legacy email helper `_send_pp_notification` is replaced by the
+        v2 `_send_run_log_email` invoked inside `_run_for_projection`.
+        Result format returned to JS is a small dict (was: list of results)
+        — the form-side handler tolerates both shapes (it shows a generic
+        success toast).
+    """
     frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
 
     settings = frappe.get_cached_doc("TOC Settings")
@@ -145,29 +167,7 @@ def run_production_plan_automation(projection_name, triggered_by="manual"):
     if sp_doc.docstatus != 1:
         frappe.throw(_("Production Plan Automation can only run on a Submitted Sales Projection."))
 
-    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
-    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
-    month_start, next_month_start = _month_boundaries(sp_doc)
-    company = _get_company()
-    min_mfg_map = _build_min_mfg_map([row.item for row in sp_doc.table_mibv])
-
-    results = []
-    for row in sp_doc.table_mibv:
-        result = _process_item(
-            row, sp_doc, pending_statuses, confirmed_states,
-            month_start, next_month_start,
-            company, min_mfg_map,
-        )
-        results.append(result)
-
-        # Write per-row PP status back to child table without re-triggering parent validate()
-        update_fields = {"wo_status": result["status"]}
-        if result.get("pp_name"):
-            update_fields["wo_name"] = result["pp_name"]
-        frappe.db.set_value(
-            "Sales Projected Items", row.name,
-            update_fields, update_modified=False,
-        )
+    summary, log_name = _run_for_projection(sp_doc, triggered_by, settings)
 
     frappe.db.set_value(
         "Sales Projection", projection_name,
@@ -176,11 +176,16 @@ def run_production_plan_automation(projection_name, triggered_by="manual"):
     )
     frappe.db.commit()
 
-    try:
-        _send_pp_notification(sp_doc, results, triggered_by, settings)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "PP Automation — email notification failed")
-    return results
+    return {
+        "ok": True,
+        "run_log": log_name,
+        "summary": summary,
+        "message": (
+            f"Run Log {log_name} created. "
+            f"{summary.get('calc_a_created',0) + summary.get('calc_b_created',0)} PPs created, "
+            f"{summary.get('errors', 0)} errors."
+        ),
+    }
 
 
 # =============================================================================
@@ -806,6 +811,95 @@ def _pp_exists_for_item(projection_name, item_code):
 # RESTRICT:
 #   - Do NOT read from sp_doc.minimum_manufacture (moved to Item Master in v3).
 # =============================================================================
+def _build_min_mfg_index(item_codes):
+    """SPA-001 (2026-05-14): richer per-row index for Shortage Cover + Shortage Action.
+
+    Returns a dict keyed by `(item_code, warehouse)` whose value is a
+    `frappe._dict` carrying:
+      - min_qty_stock_uom    : Min Qty converted from row.uom → stock UOM
+      - action_type          : "Manufacture" | "Purchase"
+      - auto_on_shortage     : 0 / 1
+      - auto_on_max_level    : 0 / 1
+      - max_level_threshold_pct : Float (0..100)
+      - max_level            : Float (already in stock UOM — engine-owned)
+      - lead_time_days       : Int
+      - safety_factor        : Float
+      - row_name             : DB name of the Item Minimum Manufacture child
+                                (needed when the engine wants to stamp
+                                `last_updated_on` after evaluating).
+
+    The legacy `_build_min_mfg_map` returns just the float MOQ map and is
+    kept for back-compat (Calc A / Calc B / v1 _process_item still call
+    it). All new flows (Calc SO action-aware, Calc Action) MUST use this
+    index instead so they pick up the new columns.
+
+    DANGER:
+      - Hardcoded fieldnames map directly to columns in
+        `tabItem Minimum Manufacture`. Renaming any field here OR in the
+        doctype JSON without coordinating both sides silently drops the
+        action_type to None and the engine defaults to Manufacture.
+    """
+    index = {}
+    if not item_codes:
+        return index
+    rows = frappe.db.get_all(
+        "Item Minimum Manufacture",
+        filters={
+            "parent": ["in", list(item_codes)],
+            "parentfield": "custom_minimum_manufacture",
+        },
+        fields=[
+            "name", "parent", "warehouse",
+            "min_manufacturing_qty", "uom",
+            "action_type", "auto_on_shortage", "auto_on_max_level",
+            "max_level_threshold_pct", "max_level",
+            "lead_time_days", "safety_factor",
+        ],
+    )
+    # Cache stock_uom per item to avoid N+1 queries.
+    stock_uoms = {
+        r["name"]: r["stock_uom"]
+        for r in frappe.db.get_all(
+            "Item",
+            filters={"name": ["in", list({r["parent"] for r in rows})]} if rows else {"name": ["in", []]},
+            fields=["name", "stock_uom"],
+        )
+    } if rows else {}
+
+    for row in rows:
+        if not row.warehouse:
+            continue
+        item_code = row.parent
+        stock_uom = stock_uoms.get(item_code) or ""
+        min_qty   = flt(row.min_manufacturing_qty or 0)
+        if min_qty <= 0:
+            qty_in_stock = 0.0
+        elif not row.uom or row.uom == stock_uom:
+            qty_in_stock = min_qty
+        else:
+            cf = flt(
+                frappe.db.get_value(
+                    "UOM Conversion Detail",
+                    {"parent": item_code, "uom": row.uom},
+                    "conversion_factor",
+                ) or 1.0
+            )
+            qty_in_stock = min_qty * cf
+
+        index[(item_code, row.warehouse)] = frappe._dict({
+            "row_name":               row.name,
+            "min_qty_stock_uom":      qty_in_stock,
+            "action_type":            (row.action_type or "Manufacture"),
+            "auto_on_shortage":       int(row.auto_on_shortage or 0),
+            "auto_on_max_level":      int(row.auto_on_max_level or 0),
+            "max_level_threshold_pct": flt(row.max_level_threshold_pct or 0),
+            "max_level":              flt(row.max_level or 0),
+            "lead_time_days":         int(row.lead_time_days or 0),
+            "safety_factor":          flt(row.safety_factor or 0) or 1.0,
+        })
+    return index
+
+
 def _build_min_mfg_map(item_codes):
     """Build {(item_code, warehouse): min_qty_in_stock_uom} from Item Master child table."""
     mfg_map = {}
@@ -1075,6 +1169,116 @@ def _parse_confirmed_states(raw_text):
     if not raw_text:
         return ["Confirmed"]
     return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+
+
+# BTP-001 (2026-05-14): WO + PO status parsers — read from TOC Settings.
+# Defaults match the legacy hardcoded engine clauses so behaviour is
+# unchanged when the new fields are left blank on existing sites.
+
+def _parse_wo_statuses(raw_text):
+    """Pending Work Order statuses (submitted, status IN this set)."""
+    if not raw_text:
+        return ["Not Started", "In Process", "Material Transferred"]
+    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+
+
+def _parse_wo_workflow_states(raw_text):
+    """Workflow states on Draft WOs to count as open (optional)."""
+    if not raw_text:
+        return []
+    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+
+
+def _parse_po_statuses(raw_text):
+    """Pending Purchase Order statuses (submitted, status IN this set)."""
+    if not raw_text:
+        return ["To Receive", "To Receive and Bill"]
+    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+
+
+def _parse_po_workflow_states(raw_text):
+    """Workflow states on Draft POs to count as open (optional)."""
+    if not raw_text:
+        return []
+    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+
+
+def _wo_has_workflow_column():
+    """Cached check — has tabWork Order got a workflow_state column?"""
+    global _wo_workflow_column_cache
+    try:
+        return _wo_workflow_column_cache
+    except NameError:
+        pass
+    _wo_workflow_column_cache = bool(frappe.db.has_column("Work Order", "workflow_state"))
+    return _wo_workflow_column_cache
+
+
+def _po_has_workflow_column():
+    """Cached check — has tabPurchase Order got a workflow_state column?"""
+    global _po_workflow_column_cache
+    try:
+        return _po_workflow_column_cache
+    except NameError:
+        pass
+    _po_workflow_column_cache = bool(frappe.db.has_column("Purchase Order", "workflow_state"))
+    return _po_workflow_column_cache
+
+
+def _toc_wo_statuses_and_wf():
+    """Return (statuses, workflow_states) for Work Orders from TOC Settings.
+
+    Reads from the cached TOC Settings doc. Both lists are guaranteed
+    non-None (default lists used when blank).
+    """
+    s = frappe.get_cached_doc("TOC Settings")
+    return (
+        _parse_wo_statuses(s.get("pending_wo_statuses")),
+        _parse_wo_workflow_states(s.get("pending_wo_workflow_states")),
+    )
+
+
+def _toc_po_statuses_and_wf():
+    """Return (statuses, workflow_states) for Purchase Orders from TOC Settings."""
+    s = frappe.get_cached_doc("TOC Settings")
+    return (
+        _parse_po_statuses(s.get("pending_po_statuses")),
+        _parse_po_workflow_states(s.get("pending_po_workflow_states")),
+    )
+
+
+def _wo_eligibility_sql(wo_statuses, wo_workflow_states, alias="wo"):
+    """Build the SQL fragment for an `open WO` filter.
+
+    Submitted + status IN (...) OR Draft + workflow_state IN (...) when
+    the workflow column exists. Returns SQL text only; the caller binds
+    the params in this order: wo_statuses..., wo_workflow_states... (only
+    when the workflow column exists).
+    """
+    parts = []
+    if wo_statuses:
+        ph = ", ".join(["%s"] * len(wo_statuses))
+        parts.append(f"({alias}.docstatus = 1 AND {alias}.status IN ({ph}))")
+    if wo_workflow_states and _wo_has_workflow_column():
+        ph = ", ".join(["%s"] * len(wo_workflow_states))
+        parts.append(f"({alias}.docstatus = 0 AND {alias}.workflow_state IN ({ph}))")
+    if not parts:
+        return "1=0"
+    return " OR ".join(parts)
+
+
+def _po_eligibility_sql(po_statuses, po_workflow_states, alias="po"):
+    """Same shape as `_wo_eligibility_sql` but for Purchase Orders."""
+    parts = []
+    if po_statuses:
+        ph = ", ".join(["%s"] * len(po_statuses))
+        parts.append(f"({alias}.docstatus = 1 AND {alias}.status IN ({ph}))")
+    if po_workflow_states and _po_has_workflow_column():
+        ph = ", ".join(["%s"] * len(po_workflow_states))
+        parts.append(f"({alias}.docstatus = 0 AND {alias}.workflow_state IN ({ph}))")
+    if not parts:
+        return "1=0"
+    return " OR ".join(parts)
 
 
 def _month_boundaries(sp_doc):
@@ -1376,18 +1580,27 @@ def _curr_month_all_so_qty(item_code, month_start, next_month_start, warehouse, 
 def _pending_wo_qty(item_code, warehouse):
     """
     ITMWO — Pending Work Order qty (qty - produced_qty) for item × fg_warehouse.
-    Only submitted WOs in active statuses; excludes Completed / Stopped / Cancelled.
+
+    BTP-001 (2026-05-14): Pending WO statuses are now read from
+    `TOC Settings.pending_wo_statuses` (+ optional draft workflow states
+    from `pending_wo_workflow_states`). Defaults match the legacy
+    hardcoded clause so existing sites with the field blank see no
+    change. See `_wo_eligibility_sql` for the predicate shape.
     """
+    wo_statuses, wo_wf = _toc_wo_statuses_and_wf()
+    eligibility = _wo_eligibility_sql(wo_statuses, wo_wf, alias="wo")
+    params = list(wo_statuses)
+    if wo_wf and _wo_has_workflow_column():
+        params += list(wo_wf)
     result = frappe.db.sql(
-        """
-        SELECT COALESCE(SUM(GREATEST(qty - IFNULL(produced_qty, 0), 0)), 0) AS qty
-        FROM `tabWork Order`
-        WHERE production_item = %s
-          AND fg_warehouse = %s
-          AND docstatus = 1
-          AND status IN ('Not Started', 'In Process', 'Material Transferred')
+        f"""
+        SELECT COALESCE(SUM(GREATEST(wo.qty - IFNULL(wo.produced_qty, 0), 0)), 0) AS qty
+        FROM `tabWork Order` wo
+        WHERE wo.production_item = %s
+          AND wo.fg_warehouse = %s
+          AND ({eligibility})
         """,
-        [item_code, warehouse],
+        [item_code, warehouse] + params,
         as_dict=True,
     )
     return flt(result[0].qty if result else 0)
@@ -1825,6 +2038,1019 @@ def run_projection_automation_for_all_warehouses(triggered_by="manual_button"):
 
     frappe.db.commit()
     return aggregated
+
+
+# =============================================================================
+# SPE-001 · 2026-05-13 — Sales-Order Shortage Engine
+# =============================================================================
+#
+# CONTEXT:
+#   A second automation path, independent of any Sales Projection.
+#   The engine scans EVERY pending Sales Order (PATH A workflow_state +
+#   PATH B status, same eligibility as Calc B), aggregates pending qty per
+#   (item_code, warehouse) in STOCK UOM, and creates a Production Plan
+#   when (pending_so − bin_actual − open_wo) > 0.
+#
+#   `pending_qty_stock_uom` is the canonical pre-converted figure:
+#     soi.stock_qty - soi.delivered_qty * soi.conversion_factor
+#   so multiple SOs on the same item with different transaction UOMs are
+#   summed correctly. No second conversion happens anywhere.
+#
+#   The PP qty for each shortage is:
+#     production_qty = max(shortage, MINMFG_in_stock_uom)
+#   where MINMFG is the per-warehouse floor from
+#   `Item.custom_minimum_manufacture` resolved via `_build_min_mfg_map`.
+#
+# DEDUP:
+#   `_so_shortage_pp_exists(item, warehouse)` blocks a second SO-shortage
+#   PP for the same (item × warehouse) while the prior one is still active
+#   (docstatus != 2 AND status NOT IN Completed/Closed). Cancelled and
+#   completed PPs are NOT considered active, so the engine can re-create
+#   if needed on the next run.
+#
+# RUN LOG:
+#   One `TOC Production Plan Run Log` per call. `sales_projection` is left
+#   blank (this path is not projection-driven). `triggered_by` carries one
+#   of `so_shortage_manual` / `so_shortage_cron`. Each (item, warehouse)
+#   pair produces ONE TOC Production Plan Run Item row.
+#
+# DANGER:
+#   - The SQL MUST sum `soi.stock_qty - delivered_qty * conversion_factor`.
+#     Substituting `soi.qty - delivered_qty` mixes transaction UOMs across
+#     SOs and silently distorts the shortage by the conversion factor.
+#   - `SO Item.warehouse` is per-line. When blank, fall back to
+#     `so.set_warehouse` and then to TOC Settings `default_so_warehouse`.
+#     SOs that have none of the three are excluded.
+#   - The dedup MUST exclude completed and cancelled PPs, otherwise the
+#     engine can never refill an item even after the previous PP is done.
+#
+# RESTRICT:
+#   - Do NOT call this from `daily_production_plan_automation` unless a
+#     separate cron entry has been added — the projection-driven daily
+#     runner is currently 02:00 AM. The SO-shortage runner is opt-in via
+#     the TOC Settings button (manual) or a hooks.py scheduler entry.
+#   - Do NOT collapse this entry with `run_projection_automation_for_all_warehouses`.
+#     The two paths share helpers but they are distinct features with
+#     distinct dedup keys and run-log markers.
+# =============================================================================
+
+def _discover_pending_so_pairs(pending_statuses, confirmed_states, default_so_warehouse):
+    """
+    Return a list of dicts:
+       {item_code, item_name, warehouse, pending_qty}   (qty in stock UOM)
+    aggregating every pending Sales Order line in the user-configured
+    `pending_statuses` / `confirmed_states` eligibility set.
+
+    Pending qty per SO line:
+       soi.stock_qty - soi.delivered_qty * soi.conversion_factor
+    summed across all eligible lines, grouped by (item, warehouse).
+
+    Warehouse resolution per line:
+       COALESCE(NULLIF(soi.warehouse, ''), NULLIF(so.set_warehouse, ''),
+                <default_so_warehouse if set>)
+    Lines that resolve to NULL warehouse are dropped (cannot be planned).
+    """
+    so_conditions = []
+    params = []
+    if confirmed_states and _so_has_workflow_column():
+        states_ph = ", ".join(["%s"] * len(confirmed_states))
+        so_conditions.append(f"(so.docstatus = 0 AND so.workflow_state IN ({states_ph}))")
+        params.extend(confirmed_states)
+    if pending_statuses:
+        ph = ", ".join(["%s"] * len(pending_statuses))
+        so_conditions.append(f"(so.docstatus = 1 AND so.status IN ({ph}))")
+        params.extend(pending_statuses)
+    if not so_conditions:
+        return []
+
+    # Per-line warehouse with the same precedence as the projection engine.
+    if default_so_warehouse:
+        wh_expr = (
+            "COALESCE("
+            "  NULLIF(soi.warehouse, ''),"
+            "  NULLIF(so.set_warehouse, ''),"
+            "  %s"
+            ")"
+        )
+        params.append(default_so_warehouse)
+    else:
+        wh_expr = "COALESCE(NULLIF(soi.warehouse, ''), NULLIF(so.set_warehouse, ''))"
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT
+            soi.item_code,
+            soi.item_name,
+            {wh_expr} AS warehouse,
+            COALESCE(SUM(
+                soi.stock_qty
+                - IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+            ), 0) AS pending_qty
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE ({" OR ".join(so_conditions)})
+          AND soi.stock_qty
+              > IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
+        GROUP BY soi.item_code, {wh_expr}
+        HAVING pending_qty > 0
+        ORDER BY pending_qty DESC
+        """,
+        params,
+        as_dict=True,
+    )
+    return [
+        {
+            "item_code": r["item_code"],
+            "item_name": r.get("item_name") or r["item_code"],
+            "warehouse": r["warehouse"],
+            "pending_qty": flt(r["pending_qty"]),
+        }
+        for r in rows
+        if r.get("warehouse")
+    ]
+
+
+def _so_shortage_pp_exists(item_code, warehouse):
+    """
+    Returns the active SO-shortage PP name for (item, warehouse) if one
+    exists, else None. "Active" = docstatus != 2 AND not yet Completed.
+    Matched by the marker `[Calc SO]` in `custom_creation_reason`.
+    """
+    rows = frappe.db.sql(
+        """
+        SELECT pp.name
+        FROM `tabProduction Plan` pp
+        JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
+        WHERE pp.docstatus != 2
+          AND COALESCE(pp.status, '') NOT IN ('Completed', 'Closed')
+          AND ppi.item_code = %s
+          AND COALESCE(pp.for_warehouse, '') = %s
+          AND pp.custom_creation_reason LIKE %s
+        LIMIT 1
+        """,
+        [item_code, warehouse, "%[Calc SO]%"],
+    )
+    return rows[0][0] if rows else None
+
+
+@frappe.whitelist()
+def run_so_shortage_automation(triggered_by="so_shortage_manual"):
+    """PUBLIC API — Sales-Order shortage automation.
+
+    Scans every pending Sales Order (eligibility = TOC Settings pending
+    statuses + workflow states), computes shortage per (item, warehouse)
+    in STOCK UOM, and creates a Production Plan for each positive
+    shortage. PP qty = max(shortage, MINMFG per-warehouse). One TOC
+    Production Plan Run Log per call captures every decision.
+
+    Triggered by:
+      - `so_shortage_manual` — button on TOC Settings.
+      - `so_shortage_cron`   — optional scheduled entry (not registered by
+                                default; opt-in).
+    """
+    frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
+
+    settings = frappe.get_cached_doc("TOC Settings")
+    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
+    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
+    default_so_warehouse = settings.get("default_so_warehouse") or None
+    company = _get_company()
+
+    pairs = _discover_pending_so_pairs(pending_statuses, confirmed_states, default_so_warehouse)
+    if not pairs:
+        return {
+            "ok": True, "run_log": None,
+            "created": 0, "skipped": 0, "errors": 0, "pairs": 0,
+            "message": "No pending Sales Orders match the configured eligibility.",
+        }
+
+    item_codes = sorted({p["item_code"] for p in pairs})
+    # SPA-001 (2026-05-14): use the richer index so we can branch on
+    # action_type per (item × warehouse). Legacy map kept available via
+    # `idx[k].min_qty_stock_uom`.
+    idx = _build_min_mfg_index(item_codes)
+
+    run_log = frappe.new_doc("TOC Production Plan Run Log")
+    run_log.run_started = now_datetime()
+    run_log.triggered_by = triggered_by
+    run_log.company = company
+    run_log.sales_projection = ""
+    run_log.warehouse = default_so_warehouse or ""
+    run_log.pending_so_statuses_used = "\n".join(pending_statuses) if pending_statuses else ""
+    run_log.default_so_warehouse_used = default_so_warehouse or ""
+    run_log.calc_a_created = 0
+    run_log.calc_a_skipped = 0
+    run_log.calc_b_created = 0
+    run_log.calc_b_skipped = 0
+    run_log.errors = 0
+    run_log.flags.ignore_mandatory = True
+    run_log.insert(ignore_permissions=True)
+
+    created = 0
+    skipped = 0
+    errors  = 0
+
+    for p in pairs:
+        item_code  = p["item_code"]
+        warehouse  = p["warehouse"]
+        item_name  = p["item_name"]
+        pending_so = flt(p["pending_qty"])      # already in stock UOM
+
+        try:
+            stock = flt(_warehouse_stock(item_code, warehouse))
+            wo    = flt(_pending_wo_qty(item_code, warehouse))
+            shortage = round(pending_so - stock - wo, 4)
+            row_idx = idx.get((item_code, warehouse))
+            minmfg = flt(row_idx.min_qty_stock_uom) if row_idx else 0.0
+            # SPA-001: Default action_type is Manufacture when the item has
+            # no min-mfg row configured for this warehouse (matches v1
+            # behaviour). Configured rows drive Manufacture vs Purchase.
+            action_type = (row_idx.action_type if row_idx else "Manufacture")
+
+            base_payload = {
+                "item_code": item_code,
+                "item_name": item_name,
+                "warehouse": warehouse,
+                "calc_used": "Calc SO",
+                "currALso": pending_so,
+                "itmwo":    wo,
+                "itmwstk":  stock,
+                "minmfg":   minmfg,
+                "qty_of_shortage": shortage,
+            }
+
+            if shortage <= 0:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Skipped - No Shortage",
+                    "production_qty": 0,
+                    "reason": (
+                        f"[Calc SO][{action_type}] No shortage at {warehouse}: "
+                        f"pending SO {pending_so:.3f} − stock {stock:.3f} − open WO {wo:.3f} "
+                        f"= {shortage:.3f} (stock UOM)."
+                    ),
+                })
+                continue
+
+            # SPA-001: action_type decides the artifact we create.
+            qty = max(shortage, minmfg)
+
+            if action_type == "Purchase":
+                existing = _shortage_cover_artifact_exists(item_code, warehouse, "Purchase")
+                if existing:
+                    skipped += 1
+                    _append_run_item(run_log, {
+                        **base_payload,
+                        "status": "Skipped - MR Exists",
+                        "production_qty": 0,
+                        "production_plan": existing,  # field reused for cross-link
+                        "reason": (
+                            f"[Calc SO][Purchase] Active Material Request {existing} "
+                            f"already covers {item_code} at {warehouse}."
+                        ),
+                    })
+                    continue
+                reason = (
+                    f"[Calc SO][Purchase] Sales Order Shortage at {warehouse}\n"
+                    f"Cause: pending sales orders exceed stock + open work orders.\n"
+                    f"  Pending SO (stock UOM): {pending_so:.3f}\n"
+                    f"  Current Stock         : {stock:.3f}\n"
+                    f"  Open WO Qty           : {wo:.3f}\n"
+                    f"  Shortage              : {shortage:.3f}\n"
+                    f"  MINMFG floor          : {minmfg:.3f}\n"
+                    f"  Order Qty (stock UOM) : {qty:.3f}"
+                )
+                mr_name = _create_purchase_mr_for_shortage(
+                    item_code, item_name, qty, warehouse, reason, company,
+                    lead_time_days=(row_idx.lead_time_days if row_idx else 0),
+                )
+                frappe.db.commit()
+                created += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Created (MR)",
+                    "production_qty": qty,
+                    "production_plan": mr_name,
+                    "reason": reason,
+                })
+                continue
+
+            # action_type == "Manufacture"
+            bom_no = frappe.db.get_value(
+                "BOM",
+                {"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
+                "name",
+            )
+            if not bom_no:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Skipped - No BOM",
+                    "production_qty": 0,
+                    "reason": (
+                        f"[Calc SO][Manufacture] {item_code} has no active default submitted BOM; "
+                        f"cannot create a Production Plan. Switch Action Type to Purchase if this "
+                        f"item is bought, not made."
+                    ),
+                })
+                continue
+
+            existing = _so_shortage_pp_exists(item_code, warehouse)
+            if existing:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Skipped - PP Exists",
+                    "production_qty": 0,
+                    "production_plan": existing,
+                    "reason": (
+                        f"[Calc SO][Manufacture] Active Production Plan {existing} "
+                        f"already covers {item_code} at {warehouse}."
+                    ),
+                })
+                continue
+
+            reason = (
+                f"[Calc SO][Manufacture] Sales Order Shortage at {warehouse}\n"
+                f"Cause: pending sales orders exceed stock + open work orders.\n"
+                f"  Pending SO (stock UOM): {pending_so:.3f}\n"
+                f"  Current Stock         : {stock:.3f}\n"
+                f"  Open WO Qty           : {wo:.3f}\n"
+                f"  Shortage              : {shortage:.3f}\n"
+                f"  MINMFG floor          : {minmfg:.3f}\n"
+                f"  Production Qty        : {qty:.3f}"
+            )
+
+            pp_name = _create_production_plan(
+                item_code, bom_no, qty, warehouse,
+                reason, company, projection_ref="",
+            )
+            _submit_pp_and_create_work_orders(pp_name)
+            frappe.db.commit()
+            created += 1
+
+            _append_run_item(run_log, {
+                **base_payload,
+                "status": "Created (PP)",
+                "production_qty": qty,
+                "production_plan": pp_name,
+                "work_orders": _wo_names_for_pp(pp_name),
+                "reason": reason,
+            })
+
+        except Exception:
+            errors += 1
+            frappe.log_error(
+                frappe.get_traceback(),
+                f"TOC SO Shortage automation: {item_code} @ {warehouse}",
+            )
+            _append_run_item(run_log, {
+                "item_code": item_code,
+                "item_name": item_name,
+                "warehouse": warehouse,
+                "calc_used": "Calc SO",
+                "status": "Error - See Log",
+                "currALso": pending_so,
+                "qty_of_shortage": 0,
+                "production_qty": 0,
+                "reason": (
+                    "[Calc SO] Engine exception while processing this pair. "
+                    "Open the Error Log for the full traceback."
+                ),
+            })
+
+    # SPE-001 (2026-05-13): one closing save with final counters.
+    # An earlier draft kept a per-iteration save inside the loop, but that
+    # block sat AFTER the `try/except` and so was bypassed by every `continue`
+    # in the skip branches. Result: when the last iteration was a skip, the
+    # persisted skipped counter trailed the returned counter by 1. Removing
+    # the per-iteration save fixes the desync. The "partial log on worker
+    # timeout" property is preserved by `_append_run_item` itself + the
+    # closing save below — every successful Create branch already
+    # `frappe.db.commit()`s its PP insert, so individual PPs are durable
+    # even if the run log later fails to save.
+    run_log.calc_b_created = created
+    run_log.calc_b_skipped = skipped
+    run_log.errors = errors
+    run_log.run_completed = now_datetime()
+    run_log.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "ok":       True,
+        "run_log":  run_log.name,
+        "created":  created,
+        "skipped":  skipped,
+        "errors":   errors,
+        "pairs":    len(pairs),
+        "message":  (
+            f"Sales Order Shortage Run complete: {created} artifact(s) created, "
+            f"{skipped} skipped, {errors} errors across {len(pairs)} pair(s)."
+        ),
+    }
+
+
+# =============================================================================
+# SPA-001 · 2026-05-14 — Action-aware Shortage Cover helpers + Shortage Action engine
+# =============================================================================
+#
+# CONTEXT (Shortage Cover):
+#   `run_so_shortage_automation` was extended to branch on `action_type`:
+#     - "Manufacture" → existing Production Plan path
+#     - "Purchase"    → new `_create_purchase_mr_for_shortage` (MR of type
+#                        Purchase, with stock_uom → purchase_uom conversion).
+#
+# CONTEXT (Shortage Action):
+#   A separate auto-monitoring engine that iterates Item Minimum Manufacture
+#   rows where `auto_on_shortage = 1` OR `auto_on_max_level = 1`. Two modes:
+#
+#     auto_on_shortage:
+#       supply = stock + open_wo_output
+#       demand = pending_so + wo_required_component_qty
+#       shortage = demand − supply
+#       trigger if shortage > 0 → create PP / MR for max(shortage, MOQ)
+#
+#     auto_on_max_level:
+#       cover     = stock + open_wo_output + open_po − pending_so − wo_required_component_qty
+#       cover_pct = cover / max_level * 100
+#       trigger if cover_pct < max_level_threshold_pct
+#       qty       = max(max_level − cover, MOQ)
+#
+# Both modes converge on the same artifact creator
+# (`_perform_shortage_action`) so we never have two code paths writing
+# Production Plans / Material Requests.
+#
+# Why a separate engine instead of folding into run_so_shortage_automation?
+#   - Shortage Cover (Calc SO) runs on EVERY pending SO; Shortage Action
+#     only runs on min-mfg rows where the user opted in via a checkbox.
+#   - Shortage Action also considers WO component requirements and open
+#     POs, which Calc SO ignores by design.
+#   - Distinct run-log marker ([Calc Action]) keeps the audit trail clear.
+#
+# DANGER:
+#   - WO component query MUST filter `source_warehouse = row.warehouse`.
+#     Aggregating across all warehouses double-counts the same component
+#     against unrelated warehouse rules.
+#   - MR purchase-UOM conversion MUST round to the Item Purchase UOM
+#     using `UOM Conversion Detail.conversion_factor` per item. Hardcoding
+#     stock_uom on the MR line silently breaks supplier ordering — same
+#     bug `mr_generator._create_mr` originally had (see its comment).
+#
+# RESTRICT:
+#   - Do NOT call `_create_purchase_mr_for_shortage` outside of the
+#     SPA-001 / SPE-001 entry points. The TOC zone-based buffer engine
+#     uses `mr_generator._create_mr` which encodes zone metadata; mixing
+#     the two writes confuses the buffer-status reports.
+#   - Do NOT remove the "Skipped - MR Exists" branch. Without dedup the
+#     engine creates a new MR every run.
+# =============================================================================
+
+def _create_purchase_mr_for_shortage(item_code, item_name, qty_in_stock_uom,
+                                     warehouse, reason, company,
+                                     lead_time_days=0):
+    """Create a Material Request (type=Purchase) for the given shortage.
+
+    The qty arriving here is ALREADY in the item's stock UOM. We resolve
+    `Item.purchase_uom` and its conversion factor and write the MR line
+    in the purchase UOM (so suppliers see e.g. "5 KG" not "5000 Gram").
+
+    Args:
+        item_code:  Item being short.
+        item_name:  Display name (used in MR line).
+        qty_in_stock_uom: Order qty in stock UOM (the engine has already
+                          applied `max(shortage, MINMFG)`).
+        warehouse:  Target warehouse for receipt.
+        reason:     Multi-line text written to the MR description so the
+                    PP/MR forms reveal the source calculation.
+        company:    Company name.
+        lead_time_days: Drives schedule_date (today + lead).
+
+    Returns:
+        str — name of the inserted MR (docstatus = 0).
+
+    Safety:
+        Items with no purchase_uom configured fall back to stock_uom +
+        conversion_factor=1.0 (same fallback as `mr_generator._create_mr`).
+    """
+    stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or ""
+    purchase_uom = frappe.db.get_value("Item", item_code, "purchase_uom") or stock_uom
+    conversion_factor = 1.0
+    if purchase_uom and purchase_uom != stock_uom:
+        cf = frappe.db.get_value(
+            "UOM Conversion Detail",
+            {"parent": item_code, "uom": purchase_uom},
+            "conversion_factor",
+        )
+        conversion_factor = flt(cf) if cf else 1.0
+    if conversion_factor > 0 and conversion_factor != 1.0:
+        mr_qty = flt(qty_in_stock_uom) / conversion_factor
+    else:
+        mr_qty = flt(qty_in_stock_uom)
+        purchase_uom = stock_uom
+
+    mr = frappe.new_doc("Material Request")
+    mr.material_request_type = "Purchase"
+    mr.transaction_date = today()
+    mr.company = company or frappe.db.get_value("Warehouse", warehouse, "company")
+    mr.schedule_date = add_days(today(), max(1, int(lead_time_days or 3)))
+    # Match `mr_generator._create_mr` metadata so the existing list view
+    # / TOC reports continue to recognise this MR as system-generated.
+    try:
+        mr.custom_toc_recorded_by = "By System"
+    except Exception:
+        pass
+
+    mr.append("items", {
+        "item_code":        item_code,
+        "item_name":        item_name,
+        "qty":              mr_qty,
+        "uom":              purchase_uom,
+        "stock_uom":        stock_uom,
+        "conversion_factor": conversion_factor,
+        "warehouse":        warehouse,
+        "schedule_date":    mr.schedule_date,
+        "description":      reason,
+    })
+    mr.flags.ignore_mandatory = True
+    mr.flags.ignore_permissions = True
+    mr.insert()
+    return mr.name
+
+
+def _shortage_cover_artifact_exists(item_code, warehouse, action_type):
+    """Return the name of an active SO-shortage artifact for this pair, or None.
+
+    Mirrors `_so_shortage_pp_exists` for Production but for Material
+    Requests. Active = docstatus != 2 AND status NOT IN
+    Completed/Cancelled/Stopped/Issued. Matched by the `[Calc SO]`
+    marker present in the MR line description.
+
+    NOTE: for action_type == "Manufacture" the caller should still use
+    `_so_shortage_pp_exists` directly. This helper covers the Purchase
+    branch only.
+    """
+    if action_type != "Purchase":
+        return _so_shortage_pp_exists(item_code, warehouse)
+    rows = frappe.db.sql(
+        """
+        SELECT mr.name
+        FROM `tabMaterial Request` mr
+        JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
+        WHERE mr.docstatus != 2
+          AND COALESCE(mr.status, '') NOT IN ('Stopped', 'Cancelled', 'Issued', 'Received')
+          AND mr.material_request_type = 'Purchase'
+          AND mri.item_code = %s
+          AND mri.warehouse = %s
+          AND mri.description LIKE %s
+        LIMIT 1
+        """,
+        [item_code, warehouse, "%[Calc SO]%"],
+    )
+    return rows[0][0] if rows else None
+
+
+def _open_po_qty(item_code, warehouse):
+    """Sum (qty - received_qty) on open Purchase Orders for item × warehouse.
+
+    Returns qty in stock UOM (multiplied by `poi.conversion_factor` so two
+    POs with different purchase UOMs are summed correctly).
+
+    BTP-001 (2026-05-14): Pending PO statuses are now read from
+    `TOC Settings.pending_po_statuses` (+ optional Draft workflow states
+    from `pending_po_workflow_states`). Defaults match the legacy
+    hardcoded clause so existing sites with the field blank see no
+    change. See `_po_eligibility_sql`.
+    """
+    po_statuses, po_wf = _toc_po_statuses_and_wf()
+    eligibility = _po_eligibility_sql(po_statuses, po_wf, alias="po")
+    params = list(po_statuses)
+    if po_wf and _po_has_workflow_column():
+        params += list(po_wf)
+    result = frappe.db.sql(
+        f"""
+        SELECT COALESCE(SUM(GREATEST(
+            (poi.qty - IFNULL(poi.received_qty, 0)) * IFNULL(poi.conversion_factor, 1),
+            0
+        )), 0) AS qty
+        FROM `tabPurchase Order Item` poi
+        JOIN `tabPurchase Order` po ON po.name = poi.parent
+        WHERE poi.item_code = %s
+          AND poi.warehouse = %s
+          AND ({eligibility})
+        """,
+        [item_code, warehouse] + params,
+    )
+    return flt(result[0][0] if result else 0)
+
+
+def _wo_required_component_qty(item_code, warehouse):
+    """Sum required-but-not-yet-transferred qty on open Work Orders where
+    `item_code` is a component picked from `warehouse`.
+
+    `Work Order Item.source_warehouse` is the warehouse the component is
+    consumed from. We scope by that so a component required at WH-A does
+    not depress the cover signal at WH-B.
+
+    Returns qty in stock UOM (WO Item required_qty is already in stock
+    UOM of the component per ERPNext).
+
+    BTP-001 (2026-05-14): Pending WO statuses are now read from TOC
+    Settings via `_toc_wo_statuses_and_wf` so the cover/shortage signal
+    matches whatever the user configures globally.
+    """
+    wo_statuses, wo_wf = _toc_wo_statuses_and_wf()
+    eligibility = _wo_eligibility_sql(wo_statuses, wo_wf, alias="wo")
+    params = list(wo_statuses)
+    if wo_wf and _wo_has_workflow_column():
+        params += list(wo_wf)
+    result = frappe.db.sql(
+        f"""
+        SELECT COALESCE(SUM(GREATEST(
+            woi.required_qty - IFNULL(woi.transferred_qty, 0), 0
+        )), 0) AS qty
+        FROM `tabWork Order Item` woi
+        JOIN `tabWork Order` wo ON wo.name = woi.parent
+        WHERE woi.item_code = %s
+          AND woi.source_warehouse = %s
+          AND ({eligibility})
+        """,
+        [item_code, warehouse] + params,
+    )
+    return flt(result[0][0] if result else 0)
+
+
+def _shortage_action_artifact_exists(item_code, warehouse, action_type):
+    """Same as `_shortage_cover_artifact_exists` but matches the
+    `[Calc Action]` marker so Shortage Action and Shortage Cover dedup
+    independently of each other.
+    """
+    if action_type == "Purchase":
+        rows = frappe.db.sql(
+            """
+            SELECT mr.name
+            FROM `tabMaterial Request` mr
+            JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
+            WHERE mr.docstatus != 2
+              AND COALESCE(mr.status, '') NOT IN ('Stopped', 'Cancelled', 'Issued', 'Received')
+              AND mr.material_request_type = 'Purchase'
+              AND mri.item_code = %s
+              AND mri.warehouse = %s
+              AND mri.description LIKE %s
+            LIMIT 1
+            """,
+            [item_code, warehouse, "%[Calc Action]%"],
+        )
+    else:
+        rows = frappe.db.sql(
+            """
+            SELECT pp.name
+            FROM `tabProduction Plan` pp
+            JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
+            WHERE pp.docstatus != 2
+              AND COALESCE(pp.status, '') NOT IN ('Completed', 'Closed')
+              AND ppi.item_code = %s
+              AND COALESCE(pp.for_warehouse, '') = %s
+              AND pp.custom_creation_reason LIKE %s
+            LIMIT 1
+            """,
+            [item_code, warehouse, "%[Calc Action]%"],
+        )
+    return rows[0][0] if rows else None
+
+
+@frappe.whitelist()
+def run_shortage_action_automation(triggered_by="shortage_action_manual"):
+    """SPA-001 (2026-05-14) — Shortage Action automation.
+
+    Iterates every `Item Minimum Manufacture` row whose `auto_on_shortage`
+    or `auto_on_max_level` flag is set. For each row evaluates the mode(s),
+    creates a Production Plan / Material Request (per `action_type`) and
+    writes one TOC Production Plan Run Item.
+
+    Returns:
+        dict {ok, run_log, created, skipped, errors, evaluated, message}
+    """
+    frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
+
+    settings = frappe.get_cached_doc("TOC Settings")
+    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
+    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
+    default_so_warehouse = settings.get("default_so_warehouse") or None
+    company = _get_company()
+
+    # Pull every row that opted in to at least one mode.
+    rows = frappe.db.sql(
+        """
+        SELECT name, parent AS item_code, warehouse,
+               action_type,
+               auto_on_shortage,
+               auto_on_max_level,
+               max_level_threshold_pct,
+               max_level,
+               lead_time_days,
+               safety_factor,
+               min_manufacturing_qty,
+               uom,
+               adu
+        FROM `tabItem Minimum Manufacture`
+        WHERE warehouse IS NOT NULL AND warehouse != ''
+          AND (COALESCE(auto_on_shortage, 0) = 1
+               OR COALESCE(auto_on_max_level, 0) = 1)
+        """,
+        as_dict=True,
+    )
+
+    if not rows:
+        return {
+            "ok": True, "run_log": None,
+            "created": 0, "skipped": 0, "errors": 0, "evaluated": 0,
+            "message": "No Item Minimum Manufacture rows have Auto on Shortage or Auto on Max Level enabled.",
+        }
+
+    # Item names for nicer logs.
+    item_names = {
+        r["name"]: r["item_name"]
+        for r in frappe.db.get_all(
+            "Item",
+            filters={"name": ["in", list({r.item_code for r in rows})]},
+            fields=["name", "item_name"],
+        )
+    }
+    # MOQ index for the same items so we re-use the same per-row stock-UOM conversion.
+    idx = _build_min_mfg_index(list({r.item_code for r in rows}))
+
+    run_log = frappe.new_doc("TOC Production Plan Run Log")
+    run_log.run_started = now_datetime()
+    run_log.triggered_by = triggered_by
+    run_log.company = company
+    run_log.sales_projection = ""
+    run_log.warehouse = default_so_warehouse or ""
+    run_log.pending_so_statuses_used = "\n".join(pending_statuses) if pending_statuses else ""
+    run_log.default_so_warehouse_used = default_so_warehouse or ""
+    run_log.calc_a_created = 0
+    run_log.calc_a_skipped = 0
+    run_log.calc_b_created = 0
+    run_log.calc_b_skipped = 0
+    run_log.errors = 0
+    run_log.flags.ignore_mandatory = True
+    run_log.insert(ignore_permissions=True)
+
+    created   = 0
+    skipped   = 0
+    errors    = 0
+
+    for row in rows:
+        item_code = row.item_code
+        warehouse = row.warehouse
+        item_name = item_names.get(item_code) or item_code
+        action_type = (row.action_type or "Manufacture")
+        row_idx     = idx.get((item_code, warehouse))
+        minmfg      = flt(row_idx.min_qty_stock_uom) if row_idx else 0.0
+        threshold   = flt(row.max_level_threshold_pct or 0)
+        max_level   = flt(row.max_level or 0)
+
+        try:
+            # Pending SO qty in stock UOM at this warehouse (Calc B pattern).
+            pending_so_rows = frappe.db.sql(
+                f"""
+                SELECT COALESCE(SUM(
+                    soi.stock_qty - IFNULL(soi.delivered_qty, 0)
+                                  * IFNULL(soi.conversion_factor, 1)
+                ), 0) AS qty
+                FROM `tabSales Order Item` soi
+                JOIN `tabSales Order` so ON so.name = soi.parent
+                WHERE soi.item_code = %s
+                  AND COALESCE(NULLIF(soi.warehouse, ''),
+                               NULLIF(so.set_warehouse, ''),
+                               %s) = %s
+                  AND ({_pending_so_eligibility_sql(pending_statuses, confirmed_states)})
+                  AND soi.stock_qty
+                      > IFNULL(soi.delivered_qty, 0)
+                        * IFNULL(soi.conversion_factor, 1)
+                """,
+                [item_code, default_so_warehouse or warehouse, warehouse]
+                + list(pending_statuses)
+                + list(confirmed_states if confirmed_states and _so_has_workflow_column() else []),
+            )
+            pending_so = flt(pending_so_rows[0][0] if pending_so_rows else 0)
+            stock      = flt(_warehouse_stock(item_code, warehouse))
+            open_wo    = flt(_pending_wo_qty(item_code, warehouse))
+            open_po    = flt(_open_po_qty(item_code, warehouse))
+            wo_req     = flt(_wo_required_component_qty(item_code, warehouse))
+
+            mode_used = None      # "Shortage" | "Max Level"
+            qty       = 0.0
+            reason    = ""
+            cover_pct_val = None
+
+            if int(row.auto_on_shortage or 0) == 1:
+                supply = stock + open_wo
+                demand = pending_so + wo_req
+                short  = round(demand - supply, 4)
+                if short > 0:
+                    mode_used = "Shortage"
+                    qty       = max(short, minmfg)
+                    reason = (
+                        f"[Calc Action][Shortage Mode] {action_type} action at {warehouse}\n"
+                        f"  Demand = pending SO ({pending_so:.3f}) + WO component req ({wo_req:.3f}) "
+                        f"= {demand:.3f}\n"
+                        f"  Supply = stock ({stock:.3f}) + open WO output ({open_wo:.3f}) "
+                        f"= {supply:.3f}\n"
+                        f"  Shortage = Demand − Supply = {short:.3f} (stock UOM)\n"
+                        f"  MOQ floor = {minmfg:.3f}\n"
+                        f"  Order Qty = max(shortage, MOQ) = {qty:.3f}"
+                    )
+
+            if mode_used is None and int(row.auto_on_max_level or 0) == 1 and max_level > 0:
+                cover = (stock + open_wo + open_po) - (pending_so + wo_req)
+                cover_pct_val = round((cover / max_level) * 100.0, 2) if max_level else 0
+                if cover_pct_val < threshold:
+                    mode_used = "Max Level"
+                    needed = max(max_level - cover, 0)
+                    qty    = max(needed, minmfg)
+                    reason = (
+                        f"[Calc Action][Max Level Mode] {action_type} action at {warehouse}\n"
+                        f"  Supply = stock ({stock:.3f}) + open WO ({open_wo:.3f}) "
+                        f"+ open PO ({open_po:.3f}) = {(stock+open_wo+open_po):.3f}\n"
+                        f"  Demand = pending SO ({pending_so:.3f}) + WO component req ({wo_req:.3f}) "
+                        f"= {(pending_so+wo_req):.3f}\n"
+                        f"  Cover  = Supply − Demand = {cover:.3f}\n"
+                        f"  Cover % of max_level ({max_level:.3f}) = {cover_pct_val:.2f}% "
+                        f"(threshold {threshold:.2f}%)\n"
+                        f"  Refill Qty = max(max_level − cover, MOQ) = {qty:.3f}"
+                    )
+
+            base_payload = {
+                "item_code": item_code,
+                "item_name": item_name,
+                "warehouse": warehouse,
+                "calc_used": "Calc Action",
+                "currALso": pending_so,
+                "itmwo":    open_wo,
+                "itmwstk":  stock,
+                "minmfg":   minmfg,
+                "qty_of_shortage": (qty if mode_used else 0),
+            }
+
+            if mode_used is None:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Skipped - No Shortage",
+                    "production_qty": 0,
+                    "reason": (
+                        f"[Calc Action] {action_type} at {warehouse}: neither mode fired. "
+                        f"Shortage-mode: demand {pending_so+wo_req:.3f} vs supply {stock+open_wo:.3f}. "
+                        + (f"Max-level mode: cover_pct {cover_pct_val:.2f}% >= threshold {threshold:.2f}%."
+                           if cover_pct_val is not None else "Max-level mode disabled or max_level=0.")
+                    ),
+                })
+                # Stamp last_updated_on so the user can see the engine ran.
+                if row_idx:
+                    frappe.db.set_value(
+                        "Item Minimum Manufacture", row.name,
+                        "last_updated_on", now_datetime(),
+                        update_modified=False,
+                    )
+                continue
+
+            # Dedup against any active Shortage Action artifact for this pair.
+            existing = _shortage_action_artifact_exists(item_code, warehouse, action_type)
+            if existing:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": (
+                        "Skipped - MR Exists" if action_type == "Purchase"
+                        else "Skipped - PP Exists"
+                    ),
+                    "production_qty": 0,
+                    "production_plan": existing,
+                    "reason": (
+                        f"[Calc Action] Active {('Material Request' if action_type=='Purchase' else 'Production Plan')} "
+                        f"{existing} already covers {item_code} at {warehouse} (mode={mode_used})."
+                    ),
+                })
+                continue
+
+            if action_type == "Purchase":
+                mr_name = _create_purchase_mr_for_shortage(
+                    item_code, item_name, qty, warehouse,
+                    reason.replace("[Calc Action]", "[Calc Action][Calc SO surrogate]"),
+                    company,
+                    lead_time_days=int(row.lead_time_days or 0),
+                )
+                frappe.db.commit()
+                created += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Created (MR)",
+                    "production_qty": qty,
+                    "production_plan": mr_name,
+                    "reason": reason,
+                })
+            else:
+                bom_no = frappe.db.get_value(
+                    "BOM",
+                    {"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
+                    "name",
+                )
+                if not bom_no:
+                    skipped += 1
+                    _append_run_item(run_log, {
+                        **base_payload,
+                        "status": "Skipped - No BOM",
+                        "production_qty": 0,
+                        "reason": (
+                            f"[Calc Action][Manufacture] {item_code} has no active default submitted BOM. "
+                            f"Switch Action Type to Purchase if this item is bought, not made."
+                        ),
+                    })
+                    continue
+                pp_name = _create_production_plan(
+                    item_code, bom_no, qty, warehouse,
+                    reason, company, projection_ref="",
+                )
+                _submit_pp_and_create_work_orders(pp_name)
+                frappe.db.commit()
+                created += 1
+                _append_run_item(run_log, {
+                    **base_payload,
+                    "status": "Created (PP)",
+                    "production_qty": qty,
+                    "production_plan": pp_name,
+                    "work_orders": _wo_names_for_pp(pp_name),
+                    "reason": reason,
+                })
+
+            # Stamp last_updated_on on the source row so the user sees activity.
+            frappe.db.set_value(
+                "Item Minimum Manufacture", row.name,
+                "last_updated_on", now_datetime(),
+                update_modified=False,
+            )
+
+        except Exception:
+            errors += 1
+            frappe.log_error(
+                frappe.get_traceback(),
+                f"TOC Shortage Action automation: {item_code} @ {warehouse}",
+            )
+            _append_run_item(run_log, {
+                "item_code": item_code,
+                "item_name": item_name,
+                "warehouse": warehouse,
+                "calc_used": "Calc Action",
+                "status": "Error - See Log",
+                "qty_of_shortage": 0,
+                "production_qty": 0,
+                "reason": (
+                    "[Calc Action] Engine exception while processing this row. "
+                    "Open the Error Log for the full traceback."
+                ),
+            })
+
+    # Final counter save (mirror SPE-001 closing pattern).
+    run_log.calc_b_created = created
+    run_log.calc_b_skipped = skipped
+    run_log.errors = errors
+    run_log.run_completed = now_datetime()
+    run_log.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "ok": True,
+        "run_log": run_log.name,
+        "created": created,
+        "skipped": skipped,
+        "errors":  errors,
+        "evaluated": len(rows),
+        "message": (
+            f"Shortage Action Run complete: {created} artifact(s) created, "
+            f"{skipped} skipped, {errors} errors across {len(rows)} row(s) evaluated."
+        ),
+    }
+
+
+def _pending_so_eligibility_sql(pending_statuses, confirmed_states):
+    """Build the boolean fragment used inside `WHERE (…)` to match an SO line
+    against the user-configured PATH A workflow_state + PATH B status set.
+
+    Returns the SQL text only; params are appended by the caller in this
+    order: pending_statuses…, confirmed_states… (only when workflow_state
+    column exists).
+    """
+    parts = []
+    if pending_statuses:
+        ph = ", ".join(["%s"] * len(pending_statuses))
+        parts.append(f"(so.docstatus = 1 AND so.status IN ({ph}))")
+    if confirmed_states and _so_has_workflow_column():
+        ph = ", ".join(["%s"] * len(confirmed_states))
+        parts.append(f"(so.docstatus = 0 AND so.workflow_state IN ({ph}))")
+    if not parts:
+        return "1=0"
+    return " OR ".join(parts)
 
 
 # =============================================================================

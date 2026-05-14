@@ -50,8 +50,21 @@ Saved via `save_item_toc_settings` → `item.save()` (fires `on_item_validate`).
 
 ### 3. Bulk Configure Modal (field-level apply)
 
-Select rows → "Bulk Configure" → apply 5 field categories independently.
+Select rows → "Bulk Configure" → apply 8 field categories independently.
 Calls `bulk_save_toc_settings` (`frappe.db.set_value` — fast, no `on_item_validate`).
+
+| Category | Field keys | Scope | Notes |
+|---|---|---|---|
+| TOC Enable | `toc_enabled` | Item scalar | radio ON/OFF |
+| Replenishment Mode | `replenishment_mode` | Item scalars (`custom_toc_auto_purchase`, `custom_toc_auto_manufacture`) | radio |
+| ADU Period | `adu_period` | Item scalar | select |
+| Custom ADU | `custom_adu` | Item scalars | number; blank → auto |
+| BOM Check | `check_bom_availability` | Item scalar | radio |
+| **Min Mfg — Auto ADU (IMM-003)** | `minmfg_auto_adu` | Every child row of `custom_minimum_manufacture` | radio ON/OFF — flips `auto_adu` on EVERY existing warehouse row of each selected Item. Items without rows are silently skipped. |
+| **Min Mfg — Lead Time (IMM-003)** | `minmfg_lead_time_days` | Every child row | Int — uniform write across rows. Engine uses this in `max_level = ADU × lead × safety`. |
+| **Min Mfg — Safety Factor (IMM-003)** | `minmfg_safety_factor` | Every child row | Float — defaults to 1.0 when blank. |
+
+The three IMM-003 fields go through `_bulk_set_minmfg_field(item, fieldname, value)` — a single `UPDATE tabItem Minimum Manufacture SET <field> = %s WHERE parent = %s AND parentfield = 'custom_minimum_manufacture'` per item. Deliberately excluded from bulk: `adu` (engine-owned or row-specific), `min_manufacturing_qty` (warehouse-specific batch sizing).
 
 ### 4. ⚡ Auto-Enable TOC (Bulk Auto-Configure) — added 2026-04-29
 

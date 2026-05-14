@@ -285,22 +285,20 @@ class ProductionOverview {
         monthSel.value = String(now.getMonth() + 1);
         yearInp.value  = String(now.getFullYear());
 
-        // ── WO/SO/PO default statuses + warehouse list ──────────────────
+        // ── TS-001 (2026-05-14) — Read-only pending-filter banner ───────
+        // The per-report SO/WO/PO multi-select pickers were removed.
+        // TOC Settings is the single source of truth. We keep `this._selWo`
+        // / `_selSo` / `_selPo` as empty arrays so every downstream
+        // frappe.call falls back to TOC Settings on the server.
+        this._selWo = [];
+        this._selSo = [];
+        this._selPo = [];
         frappe.call({
-            method: "chaizup_toc.api.production_overview_api.get_default_statuses",
+            method: "chaizup_toc.api.wo_kitting_api.get_toc_pending_filters",
             callback: (r) => {
                 if (!r.message) return;
-                const d = r.message;
-                this._selWo = [...(d.wo_statuses || [])];
-                this._selSo = [...(d.so_statuses || [])];
-                this._selPo = [...(d.po_statuses || [])];
-                this._populateMsPanel("por-wo-status-list", "por-wo-panel", "por-wo-label",
-                    d.all_wo_statuses || [], this._selWo);
-                this._populateMsPanel("por-so-status-list", "por-so-panel", "por-so-label",
-                    d.all_so_statuses || [], this._selSo);
-                this._populateMsPanel("por-po-status-list", "por-po-panel", "por-po-label",
-                    d.all_po_statuses || [], this._selPo);
-            }
+                this._renderPendingBanner(r.message);
+            },
         });
 
         // ── Warehouse list ─────────────────────────────────────────────
@@ -421,10 +419,9 @@ class ProductionOverview {
                 const panel  = e.target.closest(".por-ms-panel");
                 const panelId = panel ? panel.id : null;
                 if (!panelId) return;
+                // TS-001 (2026-05-14): WO/SO/PO panels removed; only the
+                // Warehouse multi-select panel remains.
                 if (panelId === "por-wh-panel")  this._updateMsLabel("por-wh-panel", "por-wh-label");
-                if (panelId === "por-wo-panel")  this._updateMsLabel("por-wo-panel", "por-wo-label");
-                if (panelId === "por-so-panel")  this._updateMsLabel("por-so-panel", "por-so-label");
-                if (panelId === "por-po-panel")  this._updateMsLabel("por-po-panel", "por-po-label");
             }
         });
 
@@ -602,9 +599,11 @@ class ProductionOverview {
         this._chartsLoaded     = false;
         this._aiInsightLoaded  = false;
 
-        this._selWo = this._getSelectedMs("por-wo-status-list");
-        this._selSo = this._getSelectedMs("por-so-status-list");
-        this._selPo = this._getSelectedMs("por-po-status-list");
+        // TS-001 (2026-05-14): status selectors removed; rely on TOC Settings.
+        // Warehouse is still a per-report filter.
+        this._selWo = [];
+        this._selSo = [];
+        this._selPo = [];
         this._selWh = this._getSelectedMs("por-wh-list");
 
         this._showState("loading");
@@ -2040,6 +2039,29 @@ Warehouse-scoped to your filter.`;
     _closeModal(modalId) {
         const el = document.getElementById(modalId);
         if (el) el.classList.remove("open");
+    }
+
+    // TS-001 (2026-05-14): read-only pending-filter banner renderer.
+    // Populates the three chip groups from the get_toc_pending_filters
+    // payload. The banner is purely informational — TOC Settings is the
+    // single source of truth for which statuses are pending.
+    _renderPendingBanner(payload) {
+        const fillList = (elId, items) => {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            const arr = Array.isArray(items) ? items : [];
+            if (!arr.length) {
+                el.innerHTML = `<span class="por-pending-chip por-pending-chip-empty">none configured</span>`;
+                return;
+            }
+            el.innerHTML = arr.map(s => {
+                const isWf = typeof s === "string" && s.indexOf("Workflow: ") === 0;
+                return `<span class="por-pending-chip${isWf ? " wf" : ""}" title="${isWf ? "Draft-SO workflow_state" : "Submitted status"}">${this._esc(s)}</span>`;
+            }).join("");
+        };
+        fillList("por-pending-so-list", (payload && payload.so) || []);
+        fillList("por-pending-wo-list", (payload && payload.wo) || []);
+        fillList("por-pending-po-list", (payload && payload.po) || []);
     }
 
     // ── Multi-select helpers ──────────────────────────────────────────────

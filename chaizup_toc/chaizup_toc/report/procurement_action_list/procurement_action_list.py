@@ -33,8 +33,12 @@ def execute(filters=None):
     data = []
     for i, b in enumerate(buffers):
         freight = {"Green":"N/A","Yellow":"Standard","Red":"Express/Air","Black":"EMERGENCY"}
+        # BTP-001 (2026-05-14): result dict key renamed to `mr_type`.
+        # Column fieldname `buffer_type` kept for saved-filter back-compat.
         data.append({"rank":i+1,"item_code":b["item_code"],"item_name":b["item_name"],
-            "stock_uom":b.get("stock_uom",""),"buffer_type":b["buffer_type"],"target_buffer":b["target_buffer"],
+            "stock_uom":b.get("stock_uom",""),
+            "buffer_type":(b.get("mr_type") or b.get("buffer_type") or ""),
+            "target_buffer":b["target_buffer"],
             "on_hand":b["on_hand"],"on_order":b.get("wip_or_on_order",0),
             "committed":b.get("backorders_or_committed",0),"ip":b["inventory_position"],
             "bp_pct":b["bp_pct"],"zone":b["zone"],"po_qty":b["order_qty"],

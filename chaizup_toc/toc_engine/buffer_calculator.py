@@ -310,8 +310,11 @@ def _calculate_single(item, rule, settings):
         "stock_uom": item.stock_uom,
         "warehouse": rule.warehouse,
         "company": company,
-        # buffer_type kept for TOC Buffer Log backward compat — equals mr_type
-        "buffer_type": mr_type,
+        # BTP-001 (2026-05-14): `buffer_type` removed from the result dict.
+        # `mr_type` is the canonical Replenishment Mode value
+        # (Manufacture / Purchase / Monitor). Consumers were updated to
+        # read `mr_type`; the legacy log column is filled from this same
+        # value by `mr_generator._log_snapshot`.
         "mr_type": mr_type,
         # Position
         "on_hand": pos.get("on_hand", 0),

@@ -74,6 +74,14 @@ scheduler_events = {
         "30 6 * * *": [
             "chaizup_toc.tasks.daily_tasks.daily_adu_update"
         ],
+        # ── 06:35 AM Daily: Item Minimum Manufacture ADU + Max Level refresh (IMM-002) ──
+        # Runs 5 minutes after daily_adu_update so the per-Item ADU writer
+        # is finished. Per-warehouse ADU read directly from SLE outflows.
+        # Updates adu, adu_lookback_days, max_level, last_updated_on on
+        # every Item Minimum Manufacture row with a warehouse set.
+        "35 6 * * *": [
+            "chaizup_toc.tasks.daily_tasks.update_min_mfg_adu_levels"
+        ],
         # ── 07:00 AM Daily: Production Priority Run ──
         # Calculates all FG buffers, generates MRs for Red/Yellow
         "0 7 * * *": [

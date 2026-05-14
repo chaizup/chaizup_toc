@@ -6,13 +6,24 @@
  "engine": "InnoDB",
  "field_order": [
   "warehouse",
+  "action_type",
   "min_manufacturing_qty",
-  "uom"
+  "uom",
+  "lead_time_days",
+  "safety_factor",
+  "auto_adu",
+  "adu",
+  "adu_lookback_days",
+  "max_level",
+  "auto_on_shortage",
+  "auto_on_max_level",
+  "max_level_threshold_pct",
+  "last_updated_on"
  ],
  "fields": [
   {
-   "columns": 3,
-   "description": "Warehouse where this minimum production batch size applies. The automation matches item+warehouse to find the floor quantity.",
+   "columns": 2,
+   "description": "Warehouse this rule applies to. Engine matches item + warehouse to scope ADU, stock, open Work Orders, open POs, and the resulting Production Plan / Material Request.",
    "fieldname": "warehouse",
    "fieldtype": "Link",
    "in_filter": 1,
@@ -22,31 +33,133 @@
    "reqd": 1
   },
   {
-   "columns": 5,
-   "description": "Minimum units to produce per run (in the selected UOM). If the calculated shortage is less than this, the Production Plan qty is raised to this value to avoid under-utilising production machines.",
-   "fieldname": "min_manufacturing_qty",
-   "fieldtype": "Float",
+   "columns": 2,
+   "default": "Manufacture",
+   "description": "Decides WHAT the engine creates when a shortage is detected (Shortage Cover) or when an auto-trigger fires (Shortage Action). <br><b>Manufacture</b> &rarr; create a Production Plan (and Work Orders via the standard ERPNext submit pipeline). <br><b>Purchase</b> &rarr; create a Material Request of type Purchase with quantity converted into the Item Purchase UOM.",
+   "fieldname": "action_type",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Min Purchase / Production Qty",
-   "non_negative": 1,
+   "label": "Action Type",
+   "options": "Manufacture\nPurchase",
    "reqd": 1
   },
   {
-   "columns": 2,
-   "description": "UOM for Min Manufacturing Qty. The automation converts this to the item's Stock UOM before comparing with the shortage quantity.",
+   "columns": 1,
+   "description": "Minimum order quantity (MOQ) per run. If the calculated shortage is less than this, the engine raises the qty to this floor. Stored in the selected UOM and converted to stock UOM before comparisons.",
+   "fieldname": "min_manufacturing_qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Min Qty",
+   "non_negative": 1,
+   "precision": "3",
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "description": "Unit of Measure for Min Qty. Only UOMs configured in the parent Item Units of Measure table (plus Stock UOM) are allowed. UOM conversion is applied automatically when comparing to shortage and when writing the resulting MR (purchase UOM) / PP (stock UOM).",
    "fieldname": "uom",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "UOM",
    "options": "UOM",
    "reqd": 1
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "Replenishment lead time in days. Used in the max_level formula AND in the MR schedule_date (mr.schedule_date = today + lead_time_days).",
+   "fieldname": "lead_time_days",
+   "fieldtype": "Int",
+   "label": "Lead (d)",
+   "non_negative": 1
+  },
+  {
+   "columns": 1,
+   "default": "1.0",
+   "description": "Buffer multiplier in max_level = ADU x lead x safety. 1.0 = no safety, 1.5 = 50% cushion, 2.0 = full cushion. Use higher values for volatile demand or unreliable suppliers.",
+   "fieldname": "safety_factor",
+   "fieldtype": "Float",
+   "label": "Safety x",
+   "non_negative": 1,
+   "precision": "2"
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "description": "ON: engine refreshes ADU automatically every day at 06:35 AM from Stock Ledger Entry outflows for this warehouse, once enough days of history exist (>= TOC Settings.adu_lookback_days). OFF: user enters ADU manually; engine skips this row.",
+   "fieldname": "auto_adu",
+   "fieldtype": "Check",
+   "label": "Auto ADU"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "Average Daily Usage at this warehouse. Auto-refreshed daily when Auto ADU is ON; manually editable when Auto ADU is OFF.",
+   "fieldname": "adu",
+   "fieldtype": "Float",
+   "label": "ADU",
+   "non_negative": 1,
+   "precision": "4"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "Lookback window (days) used the last time the engine wrote this ADU. Snapshot at compute time so historical ADU values stay interpretable even after the TOC Settings adu_lookback_days is later changed. Read-only.",
+   "fieldname": "adu_lookback_days",
+   "fieldtype": "Int",
+   "label": "Lookback (d)",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "description": "Auto-calculated replenishment cap: ADU x lead_time_days x safety_factor. Read-only. Refreshed by the daily 06:35 AM task AND on every Item save (so lead/safety edits take effect immediately).",
+   "fieldname": "max_level",
+   "fieldtype": "Float",
+   "label": "Max Level",
+   "non_negative": 1,
+   "precision": "3",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "Shortage Action mode 1. When ON, the engine checks <code>(pending_so + wo_required) &minus; stock &minus; open_wo</code> at this warehouse. If positive, it creates a Production Plan OR Material Request per Action Type, at qty = max(shortage, Min Qty).",
+   "fieldname": "auto_on_shortage",
+   "fieldtype": "Check",
+   "label": "Auto on Shortage"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "description": "Shortage Action mode 2. When ON, the engine checks current cover percentage: <code>cover_pct = ((stock + open_wo + open_po) &minus; (pending_so + wo_required)) / max_level x 100</code>. If cover_pct falls below the threshold, it creates a Production Plan OR Material Request per Action Type, at qty = max(max_level - cover, Min Qty).",
+   "fieldname": "auto_on_max_level",
+   "fieldtype": "Check",
+   "label": "Auto on Max Level"
+  },
+  {
+   "columns": 1,
+   "default": "50",
+   "description": "Threshold (percent of max_level) below which the Auto on Max Level mode fires. Example: 50 means trigger when cover falls below half of max_level. Common values: 30 (aggressive), 50 (default), 70 (conservative).",
+   "fieldname": "max_level_threshold_pct",
+   "fieldtype": "Percent",
+   "label": "Threshold %",
+   "non_negative": 1
+  },
+  {
+   "columns": 1,
+   "description": "Timestamp of the last engine-driven refresh (ADU + max_level OR a Shortage Action evaluation). Format: dd-mmm-yyyy hh:mm. Empty until first scheduler run touches this row.",
+   "fieldname": "last_updated_on",
+   "fieldtype": "Datetime",
+   "label": "Last Updated",
+   "read_only": 1
   }
  ],
  "grid_page_length": 20,
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-04-22 10:00:00.000000",
+ "modified": "2026-05-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Chaizup Toc",
  "name": "Item Minimum Manufacture",

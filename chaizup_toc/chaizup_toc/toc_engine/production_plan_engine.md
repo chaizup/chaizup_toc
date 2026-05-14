@@ -199,12 +199,393 @@ Default: `To Deliver and Bill`, `To Deliver`, `On Hold`. Configurable in TOC Set
 ## Min Manufacturing Qty
 
 Defined on the **Item Master** in the `custom_minimum_manufacture` child table
-(DocType: `Item Minimum Manufacture`). Columns: Warehouse, Min Manufacturing Qty, UOM.
+(DocType: `Item Minimum Manufacture`). Columns (post IMM-001, 2026-05-13):
+
+| Column                 | Type   | Purpose |
+|------------------------|--------|---------|
+| `warehouse`            | Link   | Warehouse-specific override. Engine matches item × warehouse. |
+| `min_manufacturing_qty`| Float  | The MINMFG floor (in `uom`). |
+| `uom`                  | Link   | UOM. **Gated** to UOMs configured in the parent `Item.uoms` + `stock_uom`. |
+| `lead_time_days`       | Int    | Replenishment lead time. Feeds `max_level` and Purchase Priority urgency. |
+| `safety_factor`        | Float  | Buffer multiplier (default 1.0). 1.5 = 50% cushion, 2.0 = full cushion. |
+| `max_level`            | Float, read-only | Auto: `min_manufacturing_qty × lead_time_days × safety_factor`. Computed in both client JS and server `validate()`. |
 
 **UOM Conversion**: `min_qty_in_stock_uom = min_manufacturing_qty × conversion_factor`
 from `UOM Conversion Detail {parent: item_code, uom: min_uom}`. Falls back to 1.0.
 
 **Final production qty**: `max(shortage, min_mfg_qty_in_stock_uom)`
+
+### IMM-002 — ADU-driven max-level + daily refresh (supersedes IMM-001) (2026-05-13)
+
+**Formula change**
+
+The IMM-001 formula `max_level = min_manufacturing_qty × lead × safety` was wrong: the cap measures replenishment cover, which depends on the **consumption rate** (ADU), not the batch size. Corrected:
+
+```
+max_level = ADU × lead_time_days × safety_factor      (safety defaults to 1.0)
+```
+
+**New columns**
+
+| Column              | Type     | Owner   | Description |
+|---------------------|----------|---------|-------------|
+| `adu`               | Float    | Engine  | Average Daily Usage for this item × warehouse, computed daily from `tabStock Ledger Entry` outflows over the lookback window. Read-only. |
+| `adu_lookback_days` | Int      | Engine  | Snapshot of `TOC Settings.adu_lookback_days` at the moment ADU was computed. Lets historical readers interpret an old ADU value even after the global setting changes. Read-only. |
+| `last_updated_on`   | Datetime | Engine  | Wall-clock timestamp of the last daily refresh. Empty until the scheduler first touches the row. Read-only. |
+| `max_level`         | Float    | Auto    | `ADU × lead × safety`, rounded to 3 dp. Recomputed (a) by the daily task and (b) on every Item save (so lead/safety edits take effect immediately). Read-only. |
+
+**Daily refresh**
+
+`chaizup_toc.tasks.daily_tasks.update_min_mfg_adu_levels`, scheduled at **06:35 AM** (5 minutes after `daily_adu_update` which runs at 06:30):
+
+1. Reads `TOC Settings.adu_lookback_days` (single source of truth, default 90).
+2. For each row in `tabItem Minimum Manufacture` with a non-empty `warehouse`:
+   - Sums `abs(SLE.actual_qty)` where `actual_qty < 0`, `posting_date` in the lookback window, `is_cancelled = 0`, scoped by `(item_code, warehouse)`.
+   - Writes `adu = total_out / lookback_days` rounded to 4 dp.
+   - Writes `adu_lookback_days` = lookback (snapshot).
+   - Recomputes `max_level = adu × lead × safety` (safety floor 1.0).
+   - Stamps `last_updated_on = now()`.
+   - All writes via `frappe.db.set_value(..., update_modified=False)` so the parent Item's `modified` is not bumped daily.
+3. One `frappe.db.commit()` at the end.
+
+**Live verification (one row)**
+
+```
+seed: item=CZMAT/1585 warehouse=Work In Progress - CCP (599 SLE rows in last 90 days)
+after task:  adu=131.506   lookback=90   max_level=789.036   ts=2026-05-14 00:52:27
+expected:    131.506 × 5 × 1.2 = 789.036                                            OK
+```
+
+### Invariants (IMM-002)
+
+| Invariant | Where enforced | Failure mode |
+|---|---|---|
+| Rows cannot be added when `Item.uoms` is empty or the Item is unsaved | `item_toc.js _setup_min_mfg_grid` hides Add-Row + shows hint; `form_render` auto-deletes any stray row | Without this, the daily task could not compute ADU for unresolvable UOMs |
+| Row UOM must be in `Item.uoms[].uom` ∪ `Item.stock_uom` | Client `frm.set_query`; child `uom` handler; server `_validate_min_mfg_rows` at top of `on_item_validate` | Bad UOM → silent stock_uom conversion failure |
+| `adu`, `adu_lookback_days`, `last_updated_on`, `max_level` are engine-owned | `read_only=1` on the doctype JSON; `update_modified=False` in the daily writer | Manual overwrites get clobbered on next 06:35 run |
+| `max_level = adu × lead × safety` (safety → 1.0 when blank) | Client `_recompute_max_level`; server `ItemMinimumManufacture.validate()`; server `_validate_min_mfg_rows`; daily `update_min_mfg_adu_levels` | Discrepancy between the four sites = drift; recompute everywhere is intentional |
+| Daily task scopes SLE by **warehouse** | `update_min_mfg_adu_levels` SQL `AND sle.warehouse = %s` | Without this, two warehouses for the same item share one global ADU and the per-warehouse cap loses meaning |
+
+### RESTRICT — IMM-002
+
+- Do NOT remove the `_validate_min_mfg_rows` call from the **top** of `on_item_validate`. It must run before the `if not doc.custom_toc_enabled: return` because the engine reads `custom_minimum_manufacture` for every BOM-having item regardless of TOC mode.
+- Do NOT make `adu_lookback_days` / `last_updated_on` / `max_level` writable. They are engine-owned. Removing `read_only=1` lets users persist values that the next 06:35 AM run will overwrite, and silently breaks downstream buffer-cap / Purchase Priority readers.
+- Do NOT bind a client recompute on `max_level` itself — infinite loop, because `_recompute_max_level` writes back via `set_value`.
+- Do NOT filter the UOM dropdown without first verifying `configured_uoms.length > 0`. Frappe silently drops empty `["UOM","name","in",[]]` filters and would let every UOM through.
+- Do NOT change `update_modified=False` in the daily task. Otherwise every Item with a min-mfg row gets its `modified` bumped daily, contaminating audit history.
+- Do NOT drop the `warehouse` scope from the SLE query. Per-warehouse ADUs are the whole point of having multiple rows per item.
+
+### TS-001 — TOC Settings as single source of truth; reports become read-only (2026-05-14)
+
+The user-facing rule: **TOC Settings is the one place that decides which Sales Order / Work Order / Purchase Order statuses count as "pending" anywhere in the app.** Every TOC report now reads from those 6 fields; per-report status pickers (WKP-034 / POR equivalents) are removed.
+
+#### What changed
+
+1. **WKP page** (`wo_kitting_planner.html` + `.js` + `.css`)
+   - Removed the three `.wkp-ms-*` panels (WO Status / SO Status / PO Status) and the *Load* button.
+   - Replaced with a single read-only banner `#wkp-pending-banner` with three chip groups + an "Edit in TOC Settings" link.
+   - `_loadDynamicFilters()` rewritten to call the new whitelist `get_toc_pending_filters` and feed `_renderPendingBanner()`.
+   - All the multi-select internals (`_populateMsPanel`, `_toggleMsPanel`, `_selectAllMs`, `_updateMsLabel`, `_readMsSelections`, `_readStatusSelections`, `_markStatusFiltersDirty`, `_clearStatusFiltersDirty`) were deleted.
+   - `this._selWo / _selSo / _selPo` kept on the controller as **always-empty arrays** so every existing `frappe.call(...args: { wo_statuses: JSON.stringify(this._selWo), ... })` round-trips correctly — the server resolves the empty list to TOC Settings on the back end.
+
+2. **Production Overview page** (`production_overview.html` + `.js`)
+   - Same treatment: removed the three `.por-ms-*` SO/WO/PO panels.
+   - Added `_renderPendingBanner` on the controller.
+   - `getDefaultStatuses` (initial bootstrap) replaced by the shared `get_toc_pending_filters` call.
+   - The Warehouse multi-select is untouched (per-report filter; not a status filter).
+
+3. **Backend** (`wo_kitting_api.py`)
+   - **New whitelist** `get_toc_pending_filters()` returns `{wo, so, po, edit_route}`. Source: TOC Settings → workflow-state entries pre-formatted with the `Workflow: ` prefix when the column exists.
+   - **New helpers** `_toc_settings_wo_statuses` / `_toc_settings_so_statuses` / `_toc_settings_po_statuses` resolve the defaults from TOC Settings.
+   - **Fallback path** in every WKP/POR endpoint switched: `_wkp_parse_status_list(arg, _toc_settings_*())` instead of `_wkp_parse_status_list(arg, _DEFAULT_WKP_*)`. Explicit overrides via API kwargs still win; the default for "blank kwarg" is now TOC Settings.
+   - Production Overview API got three thin shims `_por_default_wo_statuses / _so / _po` that read the shared helpers and strip `Workflow:` entries where the relevant SQL helper doesn't yet handle them (POR's WO + PO branches do not, by design — only SO has `_so_status_clause`).
+
+4. **Engine** (`production_plan_engine.py`) — already wired in BTP-001. `_pending_wo_qty`, `_open_po_qty`, `_wo_required_component_qty` all consult TOC Settings via `_toc_wo_statuses_and_wf` / `_toc_po_statuses_and_wf`. No further change.
+
+#### Live verification
+
+```
+get_toc_pending_filters →
+  so = ['To Deliver and Bill', 'To Deliver', 'On Hold', 'Confirmed', 'Workflow: Confirmed']
+  wo = ['Not Started', 'In Process', 'Material Transferred']
+  po = ['To Receive and Bill', 'To Receive']
+
+Smoke after removal:
+  Calc SO re-run:            0 created / 45 skipped — unchanged
+  Calc Action (0 opted-in):  evaluated=0 — clean exit
+  get_open_work_orders:      22 rows (using TOC Settings defaults)
+  simulate_kitting on 1 WO:  kit_status="partial" — engine path intact
+  get_production_overview:   91 items — uses TOC Settings defaults
+```
+
+#### Restricted — TS-001
+
+- Do NOT re-introduce per-report status pickers anywhere in the TOC app. The user-facing contract is now "TOC Settings is the only place to change pending semantics".
+- The shared whitelist `chaizup_toc.api.wo_kitting_api.get_toc_pending_filters` is the contract for every banner. Renaming it requires updating both `wo_kitting_planner.js` and `production_overview.js`.
+- WKP's `this._selWo / _selSo / _selPo` stay on the controller as always-empty arrays. Removing the field declarations would break the `JSON.stringify(this._selWo || [])` calls in every existing `frappe.call`.
+- Do NOT delete `production_overview_api.get_default_statuses`. The POR page no longer calls it but other endpoints (e.g. `get_so_detail_for_item`) may rely on the same shape; keep the whitelist for back-compat.
+
+---
+
+### BTP-001 — Buffer-type final removal + configurable WO / PO pending statuses (2026-05-14)
+
+Two intertwined cleanups that ship together.
+
+#### Part A — Final removal of "Buffer Type" (FG / SFG / RM / PM)
+
+The FG / SFG / RM / PM classification was already decommissioned in spirit (the Item Custom Field had been `hidden=1, read_only=1` for weeks; the result dict carried `mr_type` as the canonical key). BTP-001 removes the last vestiges:
+
+| What | Where | Action |
+|---|---|---|
+| `Item-custom_toc_buffer_type` Custom Field | `Item` doctype | New patch `chaizup_toc.patches.v1_0.drop_item_buffer_type_field` deletes the Custom Field and (defensively) drops the column if it lingers. |
+| `TOC Item Group Rule` doctype | `chaizup_toc/doctype/toc_item_group_rule/` | Folder removed from the repo. New patch `chaizup_toc.patches.v1_0.drop_toc_item_group_rule` runs `frappe.delete_doc("DocType", ...)` and drops `tabTOC Item Group Rule`. No Python or table reference remained. |
+| `"buffer_type"` key in engine result dict | `buffer_calculator.py` | Removed. The dict now carries only `mr_type` (Manufacture / Purchase / Monitor). |
+| Engine-dict consumers (reports + pipeline_api + daily_tasks + mr_generator log writer) | various | Updated to read `mr_type` first, falling back to `buffer_type` only for round-trip safety against any out-of-tree caller. |
+| `buffer_type` filter fieldname in saved Report Views | `production_priority_board.py`, `procurement_action_list.py` | Kept (renaming would invalidate user-saved filters / bookmarks). Filter value dispatches against `mr_type` internally. |
+| `TOC Buffer Log.buffer_type` column | DB schema | Kept (migration safety; column stores Manufacture / Purchase / Monitor — same set the rest of the app uses). Engine writes via `data.get("mr_type") or data.get("buffer_type") or ""`. |
+
+The result: there is no longer any FG/SFG/RM/PM-style classification anywhere in the user-facing surface. Replenishment routing is fully expressed by:
+- `Item.custom_toc_auto_purchase` / `custom_toc_auto_manufacture` (single-item flags)
+- `Item Minimum Manufacture.action_type` (per-warehouse routing)
+
+#### Part B — Configurable WO + PO pending statuses
+
+The engine used to hardcode `('Not Started', 'In Process', 'Material Transferred')` for Work Orders and `NOT IN ('Closed', 'Cancelled', 'Completed')` for Purchase Orders. SO statuses were already user-configurable in TOC Settings — BTP-001 brings WO and PO to parity.
+
+**New TOC Settings fields** (under a new section "Pending Work Order &amp; Purchase Order Statuses"):
+
+| Field | Default | Purpose |
+|---|---|---|
+| `pending_wo_statuses` | `Not Started\nIn Process\nMaterial Transferred` | Submitted ($docstatus=1$) WO statuses counted as "open WO output" |
+| `pending_wo_workflow_states` | empty | Workflow states on Draft WOs to also count as open (when WO has a Workflow assigned) |
+| `pending_po_statuses` | `To Receive\nTo Receive and Bill` | Submitted PO statuses counted as "incoming supply" |
+| `pending_po_workflow_states` | empty | Same on Draft POs |
+
+**New engine helpers** (`production_plan_engine.py`):
+
+```
+_parse_wo_statuses(raw_text)            → list[str]   default = pending defaults
+_parse_wo_workflow_states(raw_text)     → list[str]
+_parse_po_statuses(raw_text)            → list[str]
+_parse_po_workflow_states(raw_text)     → list[str]
+_wo_has_workflow_column()               → bool (cached at module level)
+_po_has_workflow_column()               → bool (cached)
+_toc_wo_statuses_and_wf()               → (statuses, wf) from TOC Settings cache
+_toc_po_statuses_and_wf()               → (statuses, wf) from TOC Settings cache
+_wo_eligibility_sql(statuses, wf, alias)→ "({alias}.docstatus=1 AND … IN (…)) OR (…wf…)"  / "1=0"
+_po_eligibility_sql(statuses, wf, alias)→ "({alias}.docstatus=1 AND … IN (…)) OR (…wf…)"  / "1=0"
+```
+
+**Threaded into**: `_pending_wo_qty`, `_open_po_qty`, `_wo_required_component_qty`. Every downstream report / calculation that consumes these helpers picks up the user-configured statuses for free.
+
+**Defaults preserve old behaviour**: if a site leaves the new fields blank, `_parse_wo_statuses(None)` / `_parse_po_statuses(None)` return the exact same lists that were previously hardcoded. No site sees an unexpected number change.
+
+#### Restricted — BTP-001
+
+- Do NOT re-introduce `Item-custom_toc_buffer_type`, `TOC Item Group Rule`, or a `buffer_type` key in the engine result dict. The retirement is by design — replenishment routing lives on the Item / Item Minimum Manufacture row.
+- The `buffer_type` filter fieldname on the legacy Script Reports MUST stay. Renaming invalidates every saved Report View / dashboard user has bookmarked. The value dispatches against `mr_type` internally.
+- The `TOC Buffer Log.buffer_type` column stays for migration safety. Renaming the column would break historical buffer logs and the DBM weekly evaluator.
+- WO / PO eligibility SQL is built dynamically from TOC Settings. Do NOT add hardcoded `status IN (...)` clauses in new engine code — call `_wo_eligibility_sql` / `_po_eligibility_sql` so the user's TOC Settings choice always wins.
+- Empty status list at the engine MUST resolve to `1=0` (match nothing), NOT to unfiltered SQL. The `_parse_*` helpers fall back to a non-empty default to avoid this trap, but `_wo_eligibility_sql` / `_po_eligibility_sql` also short-circuit to `1=0` defensively.
+- Workflow-state branches MUST stay gated by `_wo_has_workflow_column()` / `_po_has_workflow_column()`. Sites that have no Workflow on Work Order / Purchase Order do not have the column and the query raises `OperationalError 1054` otherwise.
+
+#### Live verification
+
+```
+Item-custom_toc_buffer_type Custom Field:  GONE
+TOC Item Group Rule doctype:               GONE
+TOC Settings new fields present:           pending_wo_statuses / _workflow_states / pending_po_statuses / _workflow_states
+_parse_wo_statuses(None):                  ['Not Started', 'In Process', 'Material Transferred']
+_parse_po_statuses(None):                  ['To Receive', 'To Receive and Bill']
+_wo_eligibility_sql(['In Process'], [], 'wo'):  (wo.docstatus = 1 AND wo.status IN (%s))
+_pending_wo_qty(CZPFG621 @ WAREHOUSE 1.9 (CZWH-5) - CCP) = 360.0
+_open_po_qty (CZMAT/909 @ WAREHOUSE 1.9 (CZWH-5) - CCP) = 750000.0
+run_so_shortage_automation re-run:         created=0  skipped=45  errors=0   (unchanged)
+```
+
+### SPA-001 — Action-aware Shortage Cover + Shortage Action engine (2026-05-14)
+
+Builds on SPE-001. Two related shipments:
+
+#### Shortage Cover is now Action-Type aware
+
+`run_so_shortage_automation` now reads `action_type` from each (item × warehouse) row of `Item Minimum Manufacture` (via the new `_build_min_mfg_index` helper) and branches:
+- `action_type = "Manufacture"` → existing Production Plan path (unchanged behaviour, with a new status `"Created (PP)"`).
+- `action_type = "Purchase"` → new `_create_purchase_mr_for_shortage` helper writes a Material Request of type `Purchase`. UOM conversion is identical to `mr_generator._create_mr` — `Item.purchase_uom` is resolved, the qty (which arrives in stock UOM) is divided by `UOM Conversion Detail.conversion_factor` to land in the supplier-facing purchase UOM. Status on the Run Item: `"Created (MR)"`.
+- Items with no min-mfg row default to `Manufacture` (matches the pre-SPA-001 behaviour).
+- Dedup splits: `_so_shortage_pp_exists` (PPs marked `[Calc SO]`) for Manufacture, new `_shortage_cover_artifact_exists(..., "Purchase")` (MRs whose `description` carries `[Calc SO]`) for Purchase.
+
+#### New "Shortage Action" engine (Calc Action)
+
+`run_shortage_action_automation(triggered_by="shortage_action_manual")` is a separate auto-monitoring engine. It iterates every `Item Minimum Manufacture` row where `auto_on_shortage = 1` OR `auto_on_max_level = 1`. Two evaluation modes:
+
+| Mode | Formula | Trigger |
+|---|---|---|
+| Shortage | `demand = pending_so + wo_required_components`; `supply = stock + open_wo_output`; `shortage = demand − supply` | `shortage > 0` → create PP / MR for `max(shortage, MOQ)` |
+| Max Level | `cover = (stock + open_wo + open_po) − (pending_so + wo_required_components)`; `cover_pct = cover / max_level × 100` | `cover_pct < row.max_level_threshold_pct` → create PP / MR for `max(max_level − cover, MOQ)` |
+
+Shortage mode is checked first; max-level mode is only evaluated if the shortage branch did not fire (so they never compound into duplicate artifacts on the same run). Reason text carries the marker `[Calc Action]` plus `[Shortage Mode]` / `[Max Level Mode]` plus `[Manufacture]` / `[Purchase]` so the Run Log is fully self-describing.
+
+#### New helpers (engine internal)
+
+| Helper | Purpose |
+|---|---|
+| `_build_min_mfg_index(item_codes)` | Richer per-row dict keyed by `(item, warehouse)` carrying `min_qty_stock_uom, action_type, auto_on_shortage, auto_on_max_level, max_level_threshold_pct, max_level, lead_time_days, safety_factor, row_name`. Used by both Calc SO (action-aware) and Calc Action. Legacy `_build_min_mfg_map` retained for Calc A / B / v1 `_process_item`. |
+| `_create_purchase_mr_for_shortage(item, name, qty_stock_uom, wh, reason, company, lead_time_days)` | Standalone MR writer. Resolves `Item.purchase_uom` + `UOM Conversion Detail.conversion_factor` and writes the MR line in the supplier-facing UOM. Distinct from `mr_generator._create_mr` (which encodes TOC buffer-zone metadata not relevant here). |
+| `_shortage_cover_artifact_exists(item, wh, action_type)` | Dedup for Calc SO Purchase branch (MR matched by `[Calc SO]` in description). Manufacture branch still uses `_so_shortage_pp_exists`. |
+| `_shortage_action_artifact_exists(item, wh, action_type)` | Dedup for Calc Action — independent of Calc SO so each engine tracks its own active artifacts. PPs matched by `[Calc Action]` in `custom_creation_reason`; MRs matched by `[Calc Action]` in description. |
+| `_open_po_qty(item, wh)` | Sum `(qty − received_qty) × conversion_factor` for open POs at the warehouse (stock UOM). |
+| `_wo_required_component_qty(item, wh)` | Sum `GREATEST(required_qty − transferred_qty, 0)` from `Work Order Item` where the item is consumed at this `source_warehouse` and the parent WO is open. |
+| `_pending_so_eligibility_sql(pending_statuses, confirmed_states)` | SQL fragment factory shared between `_discover_pending_so_pairs` and the per-row SO query in Calc Action. |
+
+#### Schema additions on `Item Minimum Manufacture`
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `action_type` | Select (Manufacture / Purchase) | `Manufacture` | drives PP vs MR creation in both Calc SO and Calc Action |
+| `auto_on_shortage` | Check | `0` | enable Shortage-mode in Calc Action |
+| `auto_on_max_level` | Check | `0` | enable Max-Level-mode in Calc Action |
+| `max_level_threshold_pct` | Percent | `50` | threshold for Max-Level-mode |
+
+Plus widened column widths and richer HTML descriptions per requirement.
+
+#### Run Log / Run Item Select extensions
+
+- `TOC Production Plan Run Log.triggered_by` += `shortage_action_manual`, `shortage_action_cron`.
+- `TOC Production Plan Run Item.calc_used` += `Calc Action`.
+- `TOC Production Plan Run Item.status` += `Created (PP)`, `Created (MR)`, `Skipped - MR Exists` (existing Select would have rejected these strings, breaking the run-log writer).
+
+#### TOC Settings
+
+New `Button` field `run_shortage_action_automation_now` rendered after the existing Run Sales Order Shortage button. JS wiring `_wire_shortage_action_run_button` follows the same disabled-while-running guard pattern, links to the Run Log on completion.
+
+#### Live verification
+
+```
+Schema: action_type, auto_on_shortage, auto_on_max_level, max_level_threshold_pct  → OK
+Calc SO re-run after SPA-001:  created=0  skipped=45  errors=0   (dedup intact across action type split)
+Calc Action with 0 opted-in rows:  evaluated=0  created=0
+Calc Action seeded row (Manufacture, max_level=10000, threshold=90%, stock=0):
+  → Created (PP) MFG-PP-2026-00068  qty=10000
+  → reason: cover_pct 0.00% < threshold 90.00% → max_level - cover = 10000
+Dedup re-run:  Skipped - PP Exists  (correct)
+```
+
+#### Restricted — SPA-001
+
+- `_build_min_mfg_index` MUST be the dispatch source for Calc SO and Calc Action. Reading the doctype directly inside the engine loop misses the action_type fallback and the stock-UOM conversion.
+- `_create_purchase_mr_for_shortage` MUST resolve `Item.purchase_uom` and divide qty by `conversion_factor`. Skipping the conversion writes the MR in stock UOM and confuses suppliers (e.g. "5000 Gram" instead of "5 KG").
+- Shortage Action evaluates Shortage mode FIRST, Max-Level mode SECOND, with `if mode_used is None and …` gating. Do NOT change to `if … OR …` — that would create two artifacts on a single run.
+- WO component query MUST filter `source_warehouse = row.warehouse`. Aggregating across warehouses double-counts demand on multi-warehouse items.
+- Dedup keys are split: `[Calc SO]` for Shortage Cover, `[Calc Action]` for Shortage Action. Do NOT merge them — they track different lifecycles.
+- Do NOT include `min_manufacturing_qty` in the bulk dispatch (toc_item_settings) — it is per-warehouse batch sizing and meaningless to bulk across items. Same rule as IMM-003.
+- Do NOT remove the `Created (PP)` / `Created (MR)` / `Skipped - MR Exists` Select options. The engine writes these strings; reverting the schema makes every Calc-SO / Calc-Action row fail Frappe Select validation and the run-log write rolls back.
+
+### SPE-001 — Run-Log on Manual SP + Standalone Sales-Order Shortage Engine (2026-05-13)
+
+Two fixes shipped together because they touch the same `_run_for_projection` / Run-Log infrastructure.
+
+#### Fix 1 — Manual Sales-Projection button now writes a Run Log
+
+The whitelist `run_production_plan_automation(projection_name, triggered_by)` (legacy v1 path, called by the *Sales Projection* form button) previously called `_process_item` directly and never produced a `TOC Production Plan Run Log`. Only the *TOC Settings → Run Now* button (v2 path) wrote logs. Manual runs from the SP form looked like they did nothing because no log row appeared.
+
+Fix: `run_production_plan_automation` now delegates to `_run_for_projection(sp_doc, triggered_by, settings)` — the same v2 entry the TOC Settings runner uses. Cron and both manual paths now share one log writer.
+
+Side effects:
+- Return shape changed from `list[dict]` (per row) to `dict({ok, run_log, summary, message})`. The SP form JS (`sales_projection.js`) was updated to render the new shape with a link to the Run Log. The legacy array shape is also tolerated so older callers don't break.
+- The v1 `_process_item` is still exported for `mr_generator.py` (buffer-triggered FG/SFG items). Do NOT delete.
+
+#### Fix 2 — Standalone Sales-Order Shortage Engine (Calc SO)
+
+New whitelist `run_so_shortage_automation(triggered_by="so_shortage_manual")` scans **every pending Sales Order across the whole company** (no Sales Projection required) and creates a Production Plan per (item × warehouse) where:
+
+```
+pending_so_qty_stock_uom − bin_actual_qty − open_wo_qty > 0
+```
+
+`production_qty = max(shortage, MINMFG_per_warehouse_in_stock_uom)`.
+
+**Key invariants and why they matter**
+
+1. **UOM safety.** Pending qty is summed as `soi.stock_qty − soi.delivered_qty × soi.conversion_factor`. This converts every SO line to **stock UOM** before aggregation, so two SOs that punch the same item in different transaction UOMs (kg vs 25-kg bag, dozen vs pieces, …) are summed correctly. `min_mfg_map` is resolved the same way (`min_qty × UOM Conversion Detail.conversion_factor`).
+2. **Warehouse resolution** per SO line uses `COALESCE(NULLIF(soi.warehouse,''), NULLIF(so.set_warehouse,''), default_so_warehouse)`. Lines that still resolve to NULL are dropped (can't plan against a phantom warehouse).
+3. **Eligibility** uses the **same SO status + workflow_state filter** as Calc B (`projection_pending_so_statuses` + `projection_confirmed_so_workflow_states` from TOC Settings, with `_so_has_workflow_column()` guard). Workflow_state path is opt-in and never throws on sites without an SO Workflow.
+4. **Dedup**: `_so_shortage_pp_exists(item, warehouse)` blocks a second SO-shortage PP for the same pair while the prior one is still active (docstatus != 2 AND status NOT IN Completed/Closed). Matched by the `[Calc SO]` marker in `custom_creation_reason`.
+5. **Run Log shape**: one log per call, `sales_projection` blank, `triggered_by` ∈ {`so_shortage_manual`, `so_shortage_cron`}, `calc_used = "Calc SO"` on every child row. Counters re-use `calc_b_created` / `calc_b_skipped` / `errors` so the existing list view + email helper keep working without a schema change.
+6. **One closing save** for counters. Earlier draft kept a per-iteration save block AFTER the `try/except`; every `continue` in the skip branches bypassed it, leaving the persisted skipped counter trailing the returned counter by 1 when the last iteration was a skip. The single closing save eliminates the desync.
+
+**Schema additions (one-time migrate)**
+
+- `TOC Production Plan Run Log.triggered_by` options extended with `so_shortage_manual`, `so_shortage_cron`.
+- `TOC Production Plan Run Item.calc_used` options extended with `Calc SO`.
+- `TOC Production Plan Run Item.status` options extended with `Error - See Log` (existing engine code was already writing this string; the Select was rejecting it silently before SPE-001 hit it).
+- `TOC Settings` field order + button:
+  - Field `run_so_shortage_automation_now` (Button) inserted after `run_projection_automation_now`. JS handler `_wire_so_shortage_run_button` mirrors `_wire_projection_run_button`: confirm dialog → `frappe.call` → message with Run Log link.
+
+**Live verification**
+
+```
+[1] _discover_pending_so_pairs → 45 pairs, e.g. CZPFG607 @ WAREHOUSE 1.9 (CZWH-5) - CCP = 19440.000 (stock UOM)
+[3] First run:  created=18  skipped=27  errors=0  pairs=45
+[run-log RUN-2026-05-14-0004] triggered_by='so_shortage_manual'  calc_b_created=18  calc_b_skipped=27 (after fix)
+[3] Second run (dedup): created=0  skipped=45  errors=0  ✓ counters match response
+```
+
+**Restricted — SPE-001**
+
+- The SQL in `_discover_pending_so_pairs` MUST use `soi.stock_qty − delivered_qty × conversion_factor`. Substituting `soi.qty − delivered_qty` mixes transaction UOMs across SOs and silently distorts shortage by the conversion factor.
+- The dedup query MUST exclude Completed / Closed PPs (`status NOT IN`), otherwise the engine cannot re-plan an item even after its previous PP is consumed.
+- Do NOT call `run_so_shortage_automation` from `daily_production_plan_automation`. The 02:00 cron is projection-driven; SO-shortage is currently opt-in (manual button only). If you add a cron entry later, use `triggered_by="so_shortage_cron"`.
+- Do NOT collapse `run_so_shortage_automation` and `run_projection_automation_for_all_warehouses` into one entry. They share helpers (`_warehouse_stock`, `_pending_wo_qty`, `_create_production_plan`, `_submit_pp_and_create_work_orders`, `_append_run_item`) but their dedup keys and run-log markers (`[Calc A] / [Calc B]` vs `[Calc SO]`) are intentionally distinct.
+- Do NOT remove the `_process_item` v1 function from the engine. `mr_generator.py` still calls it for buffer-triggered FG/SFG items. The legacy whitelist `run_production_plan_automation` now delegates to v2 but the v1 helper is still used elsewhere.
+
+### IMM-003 — Per-row Auto-ADU toggle + history gate + bulk UI (2026-05-13)
+
+**New column**
+
+| Column     | Type    | Default | Owner | Description |
+|------------|---------|---------|-------|-------------|
+| `auto_adu` | Check   | `1`     | User  | Decides who owns the `adu` field for THIS row. ON ⇒ engine writes ADU at 06:35 AM (subject to the history gate); OFF ⇒ user enters ADU manually and the engine never touches the row. |
+
+`adu` itself is no longer `read_only=1` in the doctype JSON — the form-side JS toggles its editability per row based on `auto_adu` via `grid_row.toggle_editable("adu", !auto)`.
+
+**Sufficient-history gate** (engine, `update_min_mfg_adu_levels`)
+
+For every `auto_adu = 1` row, the task SKIPS the write (and does NOT stamp `last_updated_on`) unless the earliest SLE outflow for `(item, warehouse)` is on or before `today - lookback_days`. Reason: with only 5 days of history and a 90-day lookback, `adu = total_out / 90` is ~5% of the real consumption rate, and the resulting `max_level` cap is artificially tiny — silently undersizing safety stock. A "warm-up" row stays empty until coverage arrives, which is the safer signal.
+
+The daily-task log message now reports four buckets:
+```
+MinMfg ADU Done: <N updated>, <K manual (auto_adu off)>, <W warming up (insufficient history)>, <E errors>, lookback=<L>d
+```
+
+**Bulk UI** (page `toc-item-settings`)
+
+The existing Bulk Configuration modal gains three rows (all under the same `APPLY ↔ field` pattern as the existing fields):
+- **Min Manufacture — Auto ADU** (radio ON/OFF) → bulk-sets `auto_adu` on every `Item Minimum Manufacture` row of the selected items.
+- **Min Manufacture — Lead Time (days)** (Int) → bulk-sets `lead_time_days`.
+- **Min Manufacture — Safety Factor** (Float, default 1.0) → bulk-sets `safety_factor`.
+
+Backend handler is the existing `chaizup_toc.chaizup_toc.page.toc_item_settings.toc_item_settings.bulk_save_toc_settings` with three new field keys: `minmfg_auto_adu`, `minmfg_lead_time_days`, `minmfg_safety_factor`. Each is dispatched to `_bulk_set_minmfg_field(item, fieldname, value)` which runs ONE `UPDATE tabItem Minimum Manufacture SET <field> = %s WHERE parent = %s AND parentfield = 'custom_minimum_manufacture'`. Items with no rows are silently no-op&apos;d.
+
+**Restricted (IMM-003)**
+
+- The bulk endpoint MUST NOT include `adu` or `min_manufacturing_qty` in the writable field set. `adu` is either engine-owned (auto_adu=1) or per-row (auto_adu=0) and `min_manufacturing_qty` is warehouse-specific batch sizing — neither is meaningful to cross-item bulk.
+- The daily-task history gate MUST NOT be relaxed to "any data present". A short-history row with a wide lookback understates ADU by orders of magnitude.
+- `auto_adu = 0` rows MUST be skipped entirely by the daily task. Even writing `last_updated_on` would mislead the user about ownership.
+- `_toggle_adu_readonly` in `public/js/item_toc.js` MUST use `grid_row.toggle_editable("adu", !auto)`. Setting `read_only` via `set_df_property` does not update the per-row cell editability in a child grid.
+
+**Live verification (IMM-003)**
+
+```
+Schema:         auto_adu column present                                                  OK
+Manual row:     auto_adu=0, adu=42  →  daily task leaves it untouched                    OK
+Auto + covered: auto_adu=1, history >= lookback  →  daily task writes adu / ts / max    OK
+Auto + warmup:  auto_adu=1, history < lookback   →  daily task SKIPS (warming up)        OK*
+Bulk:           bulk_save_toc_settings(item, {minmfg_auto_adu:0, lead:14, safety:1.75},
+                fields_to_apply=[3 minmfg_*]) → both rows updated                        OK
+```
+
+(* Verified at lookback=90 against a dataset whose deepest history is ~10 days; every row was correctly placed into the warm-up bucket per the log counter.)
 
 ---
 

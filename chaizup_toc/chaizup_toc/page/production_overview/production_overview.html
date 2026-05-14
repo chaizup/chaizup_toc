@@ -232,6 +232,67 @@
 .por-ms-actions { display:flex; gap:6px; padding:5px 12px; }
 .por-ms-divider { height:1px; background:var(--por-border); margin:2px 0; }
 
+/* TS-001 (2026-05-14) — Read-only pending-filter banner */
+.por-pending-banner {
+  background: var(--por-sl-50);
+  border: 1px solid var(--por-border);
+  border-radius: 8px;
+  padding: 6px 12px 7px;
+  font-size: 11px;
+  color: var(--por-sl-700);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 280px;
+}
+.por-pending-banner-head {
+  display: flex; align-items: center; gap: 8px;
+}
+.por-pending-banner-edit {
+  margin-left: auto;
+  color: var(--por-brand);
+  font-weight: 600;
+  font-size: 11px;
+  text-decoration: none;
+}
+.por-pending-banner-edit:hover { text-decoration: underline; }
+.por-pending-banner-row {
+  display: flex; flex-wrap: wrap; gap: 14px;
+}
+.por-pending-chip-group {
+  display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
+}
+.por-pending-chip-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--por-sl-500);
+}
+.por-pending-chip-list {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--por-sl-900);
+}
+.por-pending-chip-list .por-pending-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 1px 3px 1px 0;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--por-border);
+  font-size: 10px;
+}
+.por-pending-chip-list .por-pending-chip.wf {
+  background: rgba(99, 102, 241, 0.10);
+  border-color: rgba(99, 102, 241, 0.30);
+  color: #4338ca;
+}
+.por-pending-chip-list .por-pending-chip-empty {
+  color: var(--por-sl-400);
+  font-style: italic;
+}
+
 /* Planning mode toggle */
 .por-toggle-wrap { display:flex; align-items:center; gap:6px; }
 .por-toggle { position:relative; width:34px; height:18px; flex-shrink:0; }
@@ -1070,66 +1131,34 @@ Empty selection = ALL warehouses.">
       </div>
     </div>
 
-    <!-- WO Status multi-select -->
-    <div class="por-filter-grp" title="Statuses to treat as OPEN for Work Orders.
-Affects Open WO count, Planned Qty, Pending WO Qty, sub-assembly detection, and the Charts tab.
-Default excludes Completed/Stopped/Cancelled. Multi-select.
-Universe is dynamic — pulled from your actual Work Order data.">
-      <span class="por-filter-lbl">WO Status</span>
-      <div class="por-ms-wrap">
-        <button class="por-ms-btn" id="por-wo-btn" data-ms-panel="por-wo-panel">
-          <i class="fa-solid fa-hammer" style="font-size:10px;"></i>
-          <span id="por-wo-label">Default</span>
-          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
-        </button>
-        <div class="por-ms-panel" id="por-wo-panel">
-          <div class="por-ms-actions">
-            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-wo-panel" data-val="all">All</button>
-            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-wo-panel" data-val="none">None</button>
-          </div>
-          <div class="por-ms-divider"></div>
-          <div id="por-wo-status-list"></div>
-        </div>
+    <!-- TS-001 (2026-05-14) — Read-only pending-filter banner.
+         The per-report SO / WO / PO multi-select pickers were removed.
+         TOC Settings is the single source of truth; the banner below is
+         purely informational. Populated by JS via
+         `chaizup_toc.api.wo_kitting_api.get_toc_pending_filters` (shared
+         endpoint used by WKP + POR). -->
+    <div class="por-pending-banner" id="por-pending-banner"
+         title="Pending Sales Order / Work Order / Purchase Order statuses are configured globally in TOC Settings.&#10;Every TOC report on this site reads the same lists so reports never diverge.&#10;Click &quot;Edit in TOC Settings&quot; to change them.">
+      <div class="por-pending-banner-head">
+        <i class="fa-solid fa-circle-info" style="font-size:11px;color:var(--por-brand);"></i>
+        <strong style="font-size:11px;letter-spacing:.04em;">Active Pending Filter (read-only)</strong>
+        <a href="/app/toc-settings" target="_blank" rel="noopener" class="por-pending-banner-edit">
+          <i class="fa-solid fa-up-right-from-square" style="font-size:10px;margin-right:3px;"></i>Edit in TOC Settings
+        </a>
       </div>
-    </div>
-
-    <!-- SO Status multi-select -->
-    <div class="por-filter-grp" title="Statuses considered as PENDING for Sales Orders. Includes any custom workflow_state surfaced as &quot;Workflow: <state>&quot; entries, so you can mark Draft+Confirmed orders as pending.">
-      <span class="por-filter-lbl">SO Status</span>
-      <div class="por-ms-wrap">
-        <button class="por-ms-btn" id="por-so-btn" data-ms-panel="por-so-panel">
-          <i class="fa-solid fa-file-invoice" style="font-size:10px;"></i>
-          <span id="por-so-label">Default</span>
-          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
-        </button>
-        <div class="por-ms-panel" id="por-so-panel">
-          <div class="por-ms-actions">
-            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-so-panel" data-val="all">All</button>
-            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-so-panel" data-val="none">None</button>
-          </div>
-          <div class="por-ms-divider"></div>
-          <div id="por-so-status-list"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- PO Status multi-select -->
-    <div class="por-filter-grp" title="Statuses considered as PENDING for Purchase Orders (used in PP-Tree shortage/supply calculation). Dynamic — pulled from your actual PO data.">
-      <span class="por-filter-lbl">PO Status</span>
-      <div class="por-ms-wrap">
-        <button class="por-ms-btn" id="por-po-btn" data-ms-panel="por-po-panel">
-          <i class="fa-solid fa-cart-shopping" style="font-size:10px;"></i>
-          <span id="por-po-label">Default</span>
-          <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
-        </button>
-        <div class="por-ms-panel" id="por-po-panel">
-          <div class="por-ms-actions">
-            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-po-panel" data-val="all">All</button>
-            <button class="por-btn por-btn-default por-btn-sm" data-ms-select="por-po-panel" data-val="none">None</button>
-          </div>
-          <div class="por-ms-divider"></div>
-          <div id="por-po-status-list"></div>
-        </div>
+      <div class="por-pending-banner-row">
+        <span class="por-pending-chip-group">
+          <span class="por-pending-chip-label"><i class="fa-solid fa-file-invoice" style="font-size:9px;"></i> Pending SO</span>
+          <span class="por-pending-chip-list" id="por-pending-so-list">&hellip;</span>
+        </span>
+        <span class="por-pending-chip-group">
+          <span class="por-pending-chip-label"><i class="fa-solid fa-hammer" style="font-size:9px;"></i> Pending WO</span>
+          <span class="por-pending-chip-list" id="por-pending-wo-list">&hellip;</span>
+        </span>
+        <span class="por-pending-chip-group">
+          <span class="por-pending-chip-label"><i class="fa-solid fa-cart-shopping" style="font-size:9px;"></i> Pending PO</span>
+          <span class="por-pending-chip-list" id="por-pending-po-list">&hellip;</span>
+        </span>
       </div>
     </div>
 

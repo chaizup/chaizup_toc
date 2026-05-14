@@ -648,7 +648,47 @@ def bulk_save_toc_settings(item_codes, toc_data, fields_to_apply):
                 frappe.db.set_value("Item", item_code, "custom_toc_check_bom_availability",
                                     cint(toc_data.get("check_bom_availability", 1)))
 
+            # ── IMM-003 (2026-05-13): Min Manufacture / Purchase bulk fields ───────
+            # Each of these mutates EVERY existing row of the item's
+            # `custom_minimum_manufacture` child table. Items that have no
+            # rows yet are unaffected (we do NOT auto-create warehouse rows
+            # in bulk — that requires a warehouse choice which is per-item).
+            #
+            # RESTRICT:
+            #   - Do NOT include `adu` or `min_manufacturing_qty` in this map.
+            #     ADU is engine-owned (auto_adu=1) or row-specific (auto_adu=0)
+            #     and min_qty is warehouse-specific batch sizing — neither is
+            #     meaningfully bulk-settable across items.
+            #   - update_modified=False keeps the parent Item.modified clean.
+            elif field == "minmfg_auto_adu":
+                val = cint(toc_data.get("minmfg_auto_adu", 1))
+                _bulk_set_minmfg_field(item_code, "auto_adu", val)
+
+            elif field == "minmfg_lead_time_days":
+                val = cint(toc_data.get("minmfg_lead_time_days", 0))
+                _bulk_set_minmfg_field(item_code, "lead_time_days", val)
+
+            elif field == "minmfg_safety_factor":
+                val = flt(toc_data.get("minmfg_safety_factor") or 0) or 1.0
+                _bulk_set_minmfg_field(item_code, "safety_factor", val)
+
         updated += 1
 
     frappe.db.commit()
     return {"success": True, "updated": updated}
+
+
+def _bulk_set_minmfg_field(item_code, fieldname, value):
+    """
+    Update `fieldname` on every Item Minimum Manufacture row whose parent is
+    `item_code`. Used by `bulk_save_toc_settings` for the IMM-003 fields.
+    Single UPDATE per item is enough — we do not need per-row set_value
+    here because the field is a scalar that applies uniformly.
+    """
+    frappe.db.sql(
+        f"UPDATE `tabItem Minimum Manufacture` "
+        f"SET `{fieldname}` = %s "
+        f"WHERE parent = %s AND parenttype = 'Item' "
+        f"      AND parentfield = 'custom_minimum_manufacture'",
+        (value, item_code),
+    )

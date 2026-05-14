@@ -73,8 +73,11 @@ def get_data(filters):
     if filters and filters.get("zone"):
         buffers = [b for b in buffers if b["zone"] == filters["zone"]]
 
+    # BTP-001 (2026-05-14): the result dict carries `mr_type` only.
+    # Filter key in saved Report Views is still `buffer_type` (renaming
+    # invalidates user bookmarks); it dispatches against `mr_type` here.
     if filters and filters.get("buffer_type"):
-        buffers = [b for b in buffers if b.get("buffer_type") == filters["buffer_type"]]
+        buffers = [b for b in buffers if (b.get("mr_type") or b.get("buffer_type")) == filters["buffer_type"]]
 
     data = []
     for i, b in enumerate(buffers):
@@ -83,7 +86,8 @@ def get_data(filters):
             "item_code": b["item_code"],
             "item_name": b["item_name"],
             "stock_uom": b.get("stock_uom", ""),
-            "buffer_type": b["buffer_type"],
+            # `buffer_type` column kept for back-compat — value comes from `mr_type`.
+            "buffer_type": b.get("mr_type") or b.get("buffer_type") or "",
             "warehouse": b["warehouse"],
             "target_buffer": b["target_buffer"],
             "on_hand": b["on_hand"],

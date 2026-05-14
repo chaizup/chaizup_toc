@@ -157,6 +157,31 @@
 
 <div class="wkp-root" id="wkp-root">
 
+  <!-- ════ 0. COLLAPSE STRIP (WKP-038, 2026-05-14) ════
+       Slim strip pinned above the command bar with a single toggle
+       button. Hides #wkp-cmd to recover ~80 px of vertical space on
+       small / low-PPI screens. State persisted in sessionStorage
+       (key: wkp.cmd.hidden) so it survives tab switches but resets
+       on full refresh / new browser session.
+
+       RESTRICT:
+         - Toggle button id #wkp-cmd-toggle is read by JS in _bindControls.
+         - Do NOT animate the cmd via display:none — height/opacity
+           animation lets the layout settle smoothly.
+  -->
+  <div class="wkp-cmd-strip" id="wkp-cmd-strip"
+       data-tip="Click to hide the controls bar above and recover vertical space. The hidden state is remembered for this browser session only.">
+    <div class="wkp-cmd-strip-info">
+      <i class="fa-solid fa-sliders" style="font-size:10px;color:var(--slate-400)"></i>
+      <span id="wkp-cmd-strip-label">Controls &amp; Filters</span>
+    </div>
+    <button class="wkp-cmd-toggle-btn" id="wkp-cmd-toggle" type="button"
+            data-tip="Hide / show the controls bar above. Toggle to claim more vertical space for the table on small screens.">
+      <i class="fa-solid fa-chevron-up" id="wkp-cmd-toggle-icon"></i>
+      <span id="wkp-cmd-toggle-label">Hide</span>
+    </button>
+  </div>
+
   <!-- ════ 1. COMMAND BAR ════ -->
   <div class="wkp-cmd" id="wkp-cmd">
 
@@ -222,78 +247,44 @@
                 data-tip="Clear search">&times;</button>
       </div>
 
-      <!-- WO Status multi-select (WKP-034) -->
-      <div class="wkp-filter-group"
-           data-tip="Statuses to treat as OPEN for Work Orders.&#10;Affects every tab on this page: WO Plan, Material Shortage, Dispatch, Item View, Purchase Priority, and the AI Advisor.&#10;Default = Not Started, In Process, Material Transferred.&#10;Universe is dynamic — pulled from your actual Work Order data.">
-        <label class="wkp-filter-label">WO Status:</label>
-        <div class="wkp-ms-wrap">
-          <button type="button" class="wkp-ms-btn" id="wkp-wo-btn" data-ms-panel="wkp-wo-panel">
-            <i class="fa-solid fa-hammer" style="font-size:10px;"></i>
-            <span id="wkp-wo-label">Default</span>
-            <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
-          </button>
-          <div class="wkp-ms-panel" id="wkp-wo-panel">
-            <div class="wkp-ms-actions">
-              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-wo-panel" data-val="all">All</button>
-              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-wo-panel" data-val="none">None</button>
-            </div>
-            <div class="wkp-ms-divider"></div>
-            <div id="wkp-wo-status-list"><div class="wkp-ms-hint">Loading&hellip;</div></div>
-          </div>
+      <!-- ═══════════════════════════════════════════════════════════════════
+           TS-001 (2026-05-14) — Read-only pending-filter banner
+           ─────────────────────────────────────────────────────────────────
+           The WKP-034 per-report multi-select pickers were removed.
+           TOC Settings is now the single source of truth. The banner below
+           shows what the engine treats as pending RIGHT NOW; clicking the
+           "Edit in TOC Settings" link jumps to the global config form.
+           Populated client-side from
+           `chaizup_toc.api.wo_kitting_api.get_toc_pending_filters`.
+           ═══════════════════════════════════════════════════════════════ -->
+      <div class="wkp-pending-banner" id="wkp-pending-banner"
+           data-tip="Pending Sales Order / Work Order / Purchase Order statuses are configured globally in TOC Settings.&#10;Every TOC report on this site reads the same lists so reports never diverge.&#10;Click &quot;Edit in TOC Settings&quot; to change them.">
+        <div class="wkp-pending-banner-head">
+          <i class="fa-solid fa-circle-info" style="font-size:11px;color:var(--brand-600)"></i>
+          <strong style="font-size:11px;letter-spacing:.04em">Active Pending Filter (read-only)</strong>
+          <a href="/app/toc-settings" target="_blank" rel="noopener" class="wkp-pending-banner-edit"
+             data-tip="Open TOC Settings to change which statuses are treated as pending. Applies to every TOC report on this site.">
+            <i class="fa-solid fa-up-right-from-square" style="font-size:10px;margin-right:3px"></i>Edit in TOC Settings
+          </a>
+        </div>
+        <div class="wkp-pending-banner-row">
+          <span class="wkp-pending-chip-group" id="wkp-pending-so">
+            <span class="wkp-pending-chip-label"><i class="fa-solid fa-file-invoice" style="font-size:9px"></i> Pending SO</span>
+            <span class="wkp-pending-chip-list" id="wkp-pending-so-list">&hellip;</span>
+          </span>
+          <span class="wkp-pending-chip-group" id="wkp-pending-wo">
+            <span class="wkp-pending-chip-label"><i class="fa-solid fa-hammer" style="font-size:9px"></i> Pending WO</span>
+            <span class="wkp-pending-chip-list" id="wkp-pending-wo-list">&hellip;</span>
+          </span>
+          <span class="wkp-pending-chip-group" id="wkp-pending-po">
+            <span class="wkp-pending-chip-label"><i class="fa-solid fa-cart-shopping" style="font-size:9px"></i> Pending PO</span>
+            <span class="wkp-pending-chip-list" id="wkp-pending-po-list">&hellip;</span>
+          </span>
         </div>
       </div>
-
-      <!-- SO Status multi-select (WKP-034) -->
-      <div class="wkp-filter-group"
-           data-tip="Statuses considered as PENDING for Sales Orders.&#10;Includes any custom workflow_state on Sales Order surfaced as &quot;Workflow: &lt;state&gt;&quot; entries so a Draft SO with workflow_state=Confirmed counts as pending without flipping its docstatus.&#10;Affects: Dispatch Bottleneck and Item View tabs, AI demand context.">
-        <label class="wkp-filter-label">SO Status:</label>
-        <div class="wkp-ms-wrap">
-          <button type="button" class="wkp-ms-btn" id="wkp-so-btn" data-ms-panel="wkp-so-panel">
-            <i class="fa-solid fa-file-invoice" style="font-size:10px;"></i>
-            <span id="wkp-so-label">Default</span>
-            <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
-          </button>
-          <div class="wkp-ms-panel" id="wkp-so-panel">
-            <div class="wkp-ms-actions">
-              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-so-panel" data-val="all">All</button>
-              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-so-panel" data-val="none">None</button>
-            </div>
-            <div class="wkp-ms-divider"></div>
-            <div id="wkp-so-status-list"><div class="wkp-ms-hint">Loading&hellip;</div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- PO Status multi-select (WKP-034) -->
-      <div class="wkp-filter-group"
-           data-tip="Statuses considered as PENDING for Purchase Orders.&#10;Used by the &quot;Current &amp; Expected&quot; stock mode and the Purchase Priority tab to count incoming supply.&#10;Default = To Receive and Bill, To Receive.&#10;Universe is dynamic — pulled from your actual PO data.">
-        <label class="wkp-filter-label">PO Status:</label>
-        <div class="wkp-ms-wrap">
-          <button type="button" class="wkp-ms-btn" id="wkp-po-btn" data-ms-panel="wkp-po-panel">
-            <i class="fa-solid fa-cart-shopping" style="font-size:10px;"></i>
-            <span id="wkp-po-label">Default</span>
-            <i class="fa-solid fa-chevron-down" style="font-size:9px;opacity:.6;"></i>
-          </button>
-          <div class="wkp-ms-panel" id="wkp-po-panel">
-            <div class="wkp-ms-actions">
-              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-po-panel" data-val="all">All</button>
-              <button type="button" class="wkp-btn wkp-btn-sm" data-ms-select="wkp-po-panel" data-val="none">None</button>
-            </div>
-            <div class="wkp-ms-divider"></div>
-            <div id="wkp-po-status-list"><div class="wkp-ms-hint">Loading&hellip;</div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Load button (recalculates everything with the current status selection) -->
-      <button type="button" class="wkp-load-btn" id="wkp-load-btn"
-              data-tip="Recalculate every tab with the currently selected WO / SO / PO statuses.&#10;The button pulses whenever a filter changes to remind you to apply it.">
-        <i class="fa-solid fa-rotate"></i> Load
-      </button>
 
       <!-- Back-compat: hidden legacy single-status select. Some tests / external
-           callers still bind to #wkp-status-filter; the new multi-select drives
-           the data. Kept off-screen so existing selectors do not throw. -->
+           callers still bind to #wkp-status-filter; safely no-op kept here. -->
       <select id="wkp-status-filter" style="display:none">
         <option value=""></option>
       </select>
@@ -941,19 +932,22 @@
     <div class="wkp-pop-action" id="wkp-pop-action" style="display:none"></div>
   </div>
 
-  <!-- ════ 5. MATERIAL SHORTAGE MODAL ════ -->
+  <!-- ════ 5. MATERIAL SHORTAGE MODAL (WKP-039: v2 chrome) ════ -->
   <div class="wkp-overlay" id="wkp-modal" style="display:none">
-    <div class="wkp-modal">
+    <div class="wkp-modal wkp-modal-wide" id="wkp-modal-card" data-tone="warn">
       <div class="wkp-modal-head">
-        <div>
-          <div class="wkp-modal-title" id="wkp-modal-title">Material Shortage Detail</div>
-          <div class="wkp-modal-sub" id="wkp-modal-sub"></div>
+        <div class="wkp-m2-title-row">
+          <span class="wkp-m2-title-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
+          <div>
+            <div class="wkp-modal-title" id="wkp-modal-title">Material Shortage Detail</div>
+            <div class="wkp-modal-sub" id="wkp-modal-sub"></div>
+          </div>
         </div>
         <button class="wkp-modal-close" id="wkp-modal-close" title="Close">&#x2715;</button>
       </div>
       <!-- Recommendation card injected here by JS -->
       <div id="wkp-modal-reco"></div>
-      <div class="wkp-modal-body" id="wkp-modal-body"></div>
+      <div class="wkp-modal-body wkp-m2-body" id="wkp-modal-body"></div>
       <div class="wkp-modal-foot" id="wkp-modal-foot">
         <button class="wkp-btn wkp-btn-brand" id="wkp-create-mr-btn" style="display:none">
           &#x1F6D2; Order Missing Materials &mdash; Create Purchase MR
@@ -962,17 +956,48 @@
     </div>
   </div>
 
-  <!-- ════ 6. WORK ORDER DETAIL MODAL ════ -->
+  <!-- ════ 6. WORK ORDER DETAIL MODAL (WKP-039: v2 chrome) ════ -->
   <div class="wkp-overlay" id="wkp-wo-modal" style="display:none">
-    <div class="wkp-modal wkp-modal-wide">
+    <div class="wkp-modal wkp-modal-wide" id="wkp-wo-card" data-tone="brand">
       <div class="wkp-modal-head">
-        <div>
-          <div class="wkp-modal-title" id="wkp-wo-title">Work Order Detail</div>
-          <div class="wkp-modal-sub" id="wkp-wo-sub"></div>
+        <div class="wkp-m2-title-row">
+          <span class="wkp-m2-title-icon"><i class="fa-solid fa-list-check"></i></span>
+          <div>
+            <div class="wkp-modal-title" id="wkp-wo-title">Work Order Detail</div>
+            <div class="wkp-modal-sub" id="wkp-wo-sub"></div>
+          </div>
         </div>
         <button class="wkp-modal-close" id="wkp-wo-close" title="Close">&#x2715;</button>
       </div>
-      <div class="wkp-modal-body" id="wkp-wo-body"></div>
+      <div class="wkp-modal-body wkp-m2-body" id="wkp-wo-body"></div>
+    </div>
+  </div>
+
+  <!-- ════ 7. ROW-DETAIL MODAL (WKP-037 — Material Shortage + Purchase Priority "Details") ════
+       The Material Shortage and Purchase Priority tabs used to render
+       Details as inline expand rows (.wkp-sr-detail-row / wkp-pp-d-...).
+       Page-level filters (item-group, search, tab-sum click filters) could
+       affect their visibility because the rows lived in the SAME <tbody>
+       as the filtered rows. From 2026-05-14 the Details button opens this
+       modal instead; content lives OUTSIDE the table so no filter can
+       touch it.
+       ─────────────────────────────────────────────────────────────────
+       The Details button now fires a delegated click that locates the
+       per-row hidden source div (.wkp-row-detail-source) and clones its
+       HTML into #wkp-row-detail-body. -->
+  <div class="wkp-overlay" id="wkp-row-detail-modal" style="display:none">
+    <div class="wkp-modal wkp-modal-wide" id="wkp-row-detail-card" data-tone="info">
+      <div class="wkp-modal-head">
+        <div class="wkp-m2-title-row">
+          <span class="wkp-m2-title-icon"><i class="fa-solid fa-circle-info"></i></span>
+          <div>
+            <div class="wkp-modal-title" id="wkp-row-detail-title">Material Details</div>
+            <div class="wkp-modal-sub" id="wkp-row-detail-sub"></div>
+          </div>
+        </div>
+        <button class="wkp-modal-close" id="wkp-row-detail-close" title="Close">&#x2715;</button>
+      </div>
+      <div class="wkp-modal-body wkp-m2-body" id="wkp-row-detail-body"></div>
     </div>
   </div>
 

@@ -222,9 +222,16 @@ def get_pipeline_data(
     # 2. TOC buffer overlay (once, shared by all callers)
     toc_map = _get_toc_map(item_codes)
 
-    # 3a. Apply buffer_type filter using toc_map (buffer type is now resolved server-side)
+    # 3a. Apply replenishment-mode filter using toc_map.
+    # BTP-001 (2026-05-14): the engine result dict no longer carries the
+    # `buffer_type` key — Replenishment Mode is `mr_type`. The kwarg name
+    # `buffer_type` is kept on this whitelist for back-compat with old
+    # callers / bookmarks; it dispatches against `mr_type` here.
     if buffer_type and buffer_type != "All":
-        item_codes = [ic for ic in item_codes if toc_map.get(ic, {}).get("buffer_type") == buffer_type]
+        item_codes = [
+            ic for ic in item_codes
+            if (toc_map.get(ic, {}).get("mr_type") or toc_map.get(ic, {}).get("buffer_type")) == buffer_type
+        ]
         items = [i for i in items if i["item_code"] in item_codes]
         if not items:
             return _empty_response()

@@ -22,6 +22,13 @@ from frappe.utils import flt
 
 
 def on_item_validate(doc, method):
+    # IMM-001 (2026-05-13): MUST run BEFORE the TOC-enabled early return.
+    # The custom_minimum_manufacture table is consulted by the Production
+    # Plan engine for every item with a BOM, regardless of whether
+    # custom_toc_enabled is set. Skipping validation for non-TOC items
+    # would let invalid UOM rows persist and break the engine downstream.
+    _validate_min_mfg_rows(doc)
+
     if not doc.custom_toc_enabled:
         return
 
@@ -66,3 +73,50 @@ def on_item_validate(doc, method):
             "TOC is enabled but no buffer rules added. "
             "Add warehouse rules in Section 5 below.",
             indicator="orange", alert=True)
+
+
+def _validate_min_mfg_rows(doc):
+    """Validate every Item Minimum Manufacture child row + recompute max_level.
+
+    Called from on_item_validate above. Runs regardless of `custom_toc_enabled`
+    because the table is independent of TOC mode — the Production Plan engine
+    consults it directly even on non-TOC items.
+    """
+    rows = doc.get("custom_minimum_manufacture") or []
+    if not rows:
+        return
+
+    allowed = {r.uom for r in (doc.get("uoms") or []) if r.uom}
+    if doc.stock_uom:
+        allowed.add(doc.stock_uom)
+
+    if not allowed:
+        # Hard guard: any row at all with zero UOMs configured is illegal.
+        frappe.throw(
+            "Cannot save: <b>Minimum Manufacture / Purchase Qty per Warehouse</b> "
+            "has rows but the Item has no <b>Units of Measure</b> configured. "
+            "Add at least one UOM in the Units of Measure section first, then "
+            "re-pick the UOM on each Min Manufacture row.",
+            title="UOM Required",
+        )
+
+    for idx, row in enumerate(rows, start=1):
+        if row.uom and row.uom not in allowed:
+            frappe.throw(
+                f"Row #{idx} of <b>Minimum Manufacture / Purchase Qty per "
+                f"Warehouse</b> uses UOM <b>{frappe.utils.escape_html(row.uom)}</b>, "
+                f"which is NOT in this Item Units of Measure table. "
+                f"Allowed UOMs: {', '.join(sorted(allowed)) or '(none)'}.",
+                title="UOM not configured on this Item",
+            )
+
+        # IMM-002: max_level = ADU × lead × safety  (corrected formula).
+        # The daily engine task (update_min_mfg_adu_levels) refreshes
+        # `adu` + `adu_lookback_days` + `last_updated_on` + `max_level`.
+        # On every Item save we ALSO recompute max_level so a lead /
+        # safety edit takes effect immediately (between scheduled runs).
+        # Safety factor defaults to 1.0 when blank.
+        adu  = flt(row.adu or 0)
+        lead = int(row.lead_time_days or 0)
+        sf   = flt(row.safety_factor or 0) or 1.0
+        row.max_level = round(adu * lead * sf, 3)
