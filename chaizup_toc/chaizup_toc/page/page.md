@@ -1,15 +1,17 @@
 # page/ — Frappe Desk Pages
 
-Six custom Frappe Desk Pages providing interactive operational interfaces beyond what Script Reports offer.
+Eight custom Frappe Desk Pages providing interactive operational interfaces beyond what Script Reports offer.
 
 ```
 page/
-├── toc_dashboard/        ← Live buffer priority dashboard (auto-refreshing)
-├── toc_item_settings/    ← Bulk TOC configuration per item (added 2026-04-26)
-├── toc_user_guide/       ← Self-contained tutorial — all formulas, logic, triggers (added 2026-04-26)
-├── kitting_report/       ← Full kitting readiness board (demand + supply + BOM)
-├── supply_chain_tracker/ ← 7-stage supply chain Kanban pipeline
-└── wo_kitting_planner/   ← Work Order kitting planner (7 tabs, WKP-001..033)
+├── toc_dashboard/             ← Live buffer priority dashboard (auto-refreshing)
+├── toc_item_settings/         ← Bulk TOC configuration per item (added 2026-04-26)
+├── toc_user_guide/            ← Self-contained tutorial — all formulas, logic, triggers (added 2026-04-26)
+├── kitting_report/            ← Full kitting readiness board (demand + supply + BOM)
+├── supply_chain_tracker/      ← 7-stage supply chain Kanban pipeline
+├── wo_kitting_planner/        ← Work Order kitting planner (7 tabs, WKP-001..033)
+├── production_overview/       ← Production Overview (3 tabs: items / AI / charts)
+└── item_shortage_dashboard/   ← Item Shortage Dashboard — Tabulator grid, both-UOM cells, quick-filter chips, drill-down, branded XLSX export (added 2026-05-14)
 ```
 
 ## Critical HTML Template Rule (affects ALL pages)

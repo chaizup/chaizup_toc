@@ -218,39 +218,35 @@ def _pp_has_custom_ref_column():
 
 def _has_open_pp(item_code, warehouse):
     """
-    Check for existing Draft/Submitted buffer-triggered PP for this item+warehouse.
+    Check for existing Draft/Submitted ANY-origin PP for this item+warehouse
+    whose status is NOT terminal (Completed / Closed / Cancelled).
 
-    When custom_projection_reference column exists: only matches PPs with blank
-    projection_reference (i.e. buffer-triggered, not projection-triggered).
-    When column is missing (fixtures not yet imported): falls back to matching ANY
-    non-cancelled PP for the item+warehouse — conservative dedup, avoids OperationalError.
+    2026-05-14 (user requirement): dedup now considers ANY non-terminal PP,
+    not just buffer-triggered ones with blank projection_reference. Reason:
+    a projection-triggered PP from yesterday IS in-flight supply for the same
+    item × warehouse — letting the buffer engine create another PP today
+    results in duplicate Work Orders on the floor.
+
+    When custom_projection_reference column exists: still queries it for
+    legacy callers (returns name only). When column is missing (fixtures not
+    yet imported): identical broad-match fallback.
     """
-    if _pp_has_custom_ref_column():
-        # Full dedup: only buffer-triggered PPs (blank projection reference)
-        return frappe.db.sql(
-            """
-            SELECT pp.name FROM `tabProduction Plan` pp
-            JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
-            WHERE pp.docstatus < 2
-              AND ppi.item_code = %s AND ppi.warehouse = %s
-              AND (pp.custom_projection_reference IS NULL OR pp.custom_projection_reference = '')
-            LIMIT 1
-            """,
-            (item_code, warehouse),
-        )
-    else:
-        # Fallback: fixtures not imported — match any non-cancelled PP for item+warehouse.
-        # Conservative: may over-block on sites before fixture import, but never crashes.
-        return frappe.db.sql(
-            """
-            SELECT pp.name FROM `tabProduction Plan` pp
-            JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
-            WHERE pp.docstatus < 2
-              AND ppi.item_code = %s AND ppi.warehouse = %s
-            LIMIT 1
-            """,
-            (item_code, warehouse),
-        )
+    from chaizup_toc.toc_engine.auto_remarks import PP_TERMINAL_STATUSES
+
+    ph = ", ".join(["%s"] * len(PP_TERMINAL_STATUSES))
+    # Single query — whether the projection-reference column exists or not,
+    # the dedup semantics are now identical (block on ANY non-terminal PP).
+    return frappe.db.sql(
+        f"""
+        SELECT pp.name FROM `tabProduction Plan` pp
+        JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
+        WHERE pp.docstatus < 2
+          AND COALESCE(pp.status, '') NOT IN ({ph})
+          AND ppi.item_code = %s AND ppi.warehouse = %s
+        LIMIT 1
+        """,
+        PP_TERMINAL_STATUSES + [item_code, warehouse],
+    )
 
 
 def _create_buffer_production_plan(data):
@@ -276,10 +272,22 @@ def _create_buffer_production_plan(data):
         or frappe.db.get_value("Warehouse", data["warehouse"], "company")
         or ""
     )
-    reason = (
+    # 2026-05-14: auto-created PPs carry the full pending-check block so the
+    # operator can see WHY this PP was created (zone+BP%) AND which existing
+    # docs would have blocked it (configured pending statuses).
+    from chaizup_toc.toc_engine.auto_remarks import format_auto_creation_remark
+    summary = (
         f"TOC Buffer Replenishment | Zone: {data['zone']} | "
         f"BP: {data['bp_pct']}% | Target: {data['target_buffer']} | "
         f"IP: {data['inventory_position']} | Order Qty: {data['order_qty']}"
+    )
+    reason = format_auto_creation_remark(
+        doc_type="Production Plan",
+        item_code=data["item_code"],
+        warehouse=data["warehouse"],
+        qty=data["order_qty"],
+        reason_summary=summary,
+        source_engine="TOC Buffer (Manufacture mode)",
     )
 
     pp_name = _create_production_plan(
@@ -301,16 +309,29 @@ def _create_buffer_production_plan(data):
 
 
 def _has_open_mr(item_code, warehouse, mr_type):
-    """Check for existing draft/submitted MR for this item+warehouse."""
-    return frappe.db.sql("""
+    """Check for any "still pending" MR for this item+warehouse+type.
+
+    2026-05-14 (user requirement): broader dedup — ANY MR whose status is NOT
+    terminal (Stopped / Cancelled / Received / Issued / Transferred /
+    Manufactured) is treated as still in flight and blocks a new auto-MR.
+    See chaizup_toc.toc_engine.auto_remarks.MR_TERMINAL_STATUSES for the
+    canonical exclusion list.
+    """
+    from chaizup_toc.toc_engine.auto_remarks import MR_TERMINAL_STATUSES
+
+    ph = ", ".join(["%s"] * len(MR_TERMINAL_STATUSES))
+    return frappe.db.sql(
+        f"""
         SELECT mr.name FROM `tabMaterial Request` mr
         JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
         WHERE mr.docstatus < 2
-        AND mr.material_request_type = %s
-        AND mr.status NOT IN ('Stopped', 'Cancelled')
-        AND mri.item_code = %s AND mri.warehouse = %s
+          AND mr.material_request_type = %s
+          AND COALESCE(mr.status, '') NOT IN ({ph})
+          AND mri.item_code = %s AND mri.warehouse = %s
         LIMIT 1
-    """, (mr_type, item_code, warehouse))
+        """,
+        [mr_type] + MR_TERMINAL_STATUSES + [item_code, warehouse],
+    )
 
 
 def _create_mr(data, settings):
@@ -365,6 +386,26 @@ def _create_mr(data, settings):
     mr.custom_toc_inventory_position = data["inventory_position"]
     mr.custom_toc_sr_pct = data["sr_pct"]
 
+    # 2026-05-14: auto-MR carries a full creation remark + pending-check block.
+    # Goes into Material Request Item.description (Long Text) so any operator
+    # reviewing the MR can see WHY it was auto-created AND which statuses the
+    # dedup check considered "still pending" the last time it ran.
+    from chaizup_toc.toc_engine.auto_remarks import format_auto_creation_remark
+    summary = (
+        f"TOC Buffer | Zone: {data['zone']} | BP: {data['bp_pct']}% | "
+        f"Target: {data['target_buffer']} | IP: {data['inventory_position']} | "
+        f"F4: {data['target_buffer']} − {data['inventory_position']} "
+        f"= {data['order_qty']} {stock_uom}"
+    )
+    item_description = format_auto_creation_remark(
+        doc_type="Material Request",
+        item_code=data["item_code"],
+        warehouse=data["warehouse"],
+        qty=f"{data['order_qty']} {stock_uom} ({mr_qty} {purchase_uom})",
+        reason_summary=summary,
+        source_engine="TOC Buffer (Purchase mode)",
+    )
+
     mr.append("items", {
         "item_code": data["item_code"],
         "item_name": data["item_name"],
@@ -374,12 +415,7 @@ def _create_mr(data, settings):
         "conversion_factor": conversion_factor,
         "warehouse": data["warehouse"],
         "schedule_date": mr.schedule_date,
-        "description": (
-            f"TOC Replenishment | Zone: {data['zone']} | "
-            f"BP: {data['bp_pct']}% | Target: {data['target_buffer']} | "
-            f"IP: {data['inventory_position']} | "
-            f"Formula: F4 Order Qty = {data['target_buffer']} − {data['inventory_position']} = {data['order_qty']} {stock_uom}"
-        ),
+        "description": item_description,
     })
 
     mr.flags.ignore_permissions = True

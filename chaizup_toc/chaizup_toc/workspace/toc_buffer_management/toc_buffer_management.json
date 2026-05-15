@@ -138,6 +138,19 @@
       "description": "Dynamic Buffer Management \u2014 TMR/TMG trigger history, buffer size changes."
     },
     {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "dashboard",
+      "is_query_report": 0,
+      "label": "Item Shortage Dashboard",
+      "link_count": 0,
+      "link_to": "item-shortage-dashboard",
+      "link_type": "Page",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Modern single-pane shortage dashboard \u2014 Tabulator grid, inline both-UOM cells, drill-down modal, CSV/XLSX export, email."
+    },
+    {
       "hidden": 0,
       "is_query_report": 0,
       "label": "Stock Masters",

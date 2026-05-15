@@ -1,6 +1,6 @@
 # report/ — Script Reports Index
 
-Four Script Reports covering the full operational and analytical surface of the TOC Buffer Management system.
+Four Script Reports covering the daily operational and analytical surface of the TOC Buffer Management system.
 
 ```
 report/
@@ -9,6 +9,13 @@ report/
 ├── buffer_status_report/         ← Historical: how has buffer health changed over time
 └── dbm_analysis_report/          ← Weekly: is DBM correctly auto-sizing buffers
 ```
+
+> **Note (2026-05-14):** An "Item Shortage Dashboard" Script Report briefly
+> shipped here and was retired (ISD-008) in favour of the
+> [Item Shortage Dashboard Page](../page/item_shortage_dashboard/item_shortage_dashboard.md)
+> at `/app/item-shortage-dashboard`. The Page surface absorbed every feature
+> (filters, drill-down, both-UOM cells, server XLSX export, email) and adds
+> a Tabulator-based UI the Script Report shell could not host cleanly.
 
 ---
 

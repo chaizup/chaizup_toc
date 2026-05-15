@@ -1,0 +1,899 @@
+<!-- =============================================================================
+  CONTEXT: Item Shortage Dashboard Page — single-pane item shortage view.
+    Renders 27 columns of supply/demand per (item × warehouse rule). Every
+    numeric cell is clickable → drill-down modal with contributing docs.
+    Uses Tabulator (frontend plugin) for the grid: native sort + multi-sort
+    via shift-click, column reorder, frozen header, CSV/XLSX/JSON export,
+    row formatter for the pending-SO light-red highlight.
+
+  MEMORY: chaizup_item_shortage_dashboard.md § Page (added 2026-05-14)
+          app_chaizup_toc.md § Pages
+
+  INSTRUCTIONS:
+    - Class / ID prefix:  isd-  (Item Shortage Dashboard).
+    - CSS variables:      --isd-* mirroring the Tiger Theme slate palette.
+    - Tabulator + Font Awesome loaded from CDN. SRI hashes intentionally
+      omitted to keep version bumps local-only (no need to recompute hash
+      every time we bump the lib).
+    - All onclick / oninput attribute values use &quot; never raw '.
+      Frappe wraps the entire HTML template body in a single-quoted JS
+      string at page-script generation time — a single raw ' anywhere
+      breaks the wrap → SyntaxError → BLANK PAGE.
+    - CSS % values MUST end with `;` before `}` to dodge Frappe's
+      microtemplate %} block-close parser.
+    - Use --slate-* (defined here as --isd-sl-*); NEVER --stone-* (undefined).
+
+  DANGER ZONE:
+    - Frappe HTML template single-quote rule (WKP-001):
+        onclick="fn(&quot;x&quot;)" — CORRECT
+        onclick="fn('x')"          — BREAKS PAGE
+    - %} sequence rule: width:40%;} CORRECT — width:40%} BREAKS PAGE
+    - Tabulator placeholder injection: pass element node, NOT inline HTML
+      with raw apostrophes — Frappe wraps the JS template too.
+
+  RESTRICT:
+    - Do NOT add server-side rendering. All data via frappe.call().
+    - Do NOT rename DOM IDs (#isd-root, #isd-grid, #isd-banner, …) —
+      they are bound by item_shortage_dashboard.js.
+    - Do NOT switch grid library without re-implementing every Tabulator
+      feature listed in the .md file (multi-sort, frozen, export, row fmt).
+============================================================================= -->
+
+<link rel="stylesheet"
+  href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+  crossorigin="anonymous">
+<!-- Tabulator 6.x — modern data grid. CDN with cache busting via querystring. -->
+<link rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator.min.css"
+  crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"
+  crossorigin="anonymous"></script>
+<!-- xlsx is loaded LAZILY by JS when the user clicks Export XLSX, to keep
+     first-paint light. Tabulator's xlsx integration probes window.XLSX. -->
+
+<style>
+/* ============================================================
+   § ROOT VARIABLES — Item Shortage Dashboard (slate palette)
+   Mirror of Tiger Theme used by Production Overview so the page
+   visually aligns with the rest of chaizup_toc.
+   ============================================================ */
+:root {
+  --isd-bg:       #f8fafc;
+  --isd-surface:  #ffffff;
+  --isd-border:   #e2e8f0;
+  --isd-text:     #0f172a;
+  --isd-muted:    #64748b;
+  --isd-sl-50:    #f8fafc;
+  --isd-sl-100:   #f1f5f9;
+  --isd-sl-200:   #e2e8f0;
+  --isd-sl-300:   #cbd5e1;
+  --isd-sl-400:   #94a3b8;
+  --isd-sl-500:   #64748b;
+  --isd-sl-700:   #334155;
+  --isd-sl-900:   #0f172a;
+  --isd-ok:       #10b981;
+  --isd-ok-bg:    #d1fae5;
+  --isd-warn:     #f59e0b;
+  --isd-warn-bg:  #fef3c7;
+  --isd-err:      #ef4444;
+  --isd-err-bg:   #fee2e2;
+  --isd-info:     #0ea5e9;
+  --isd-info-bg:  #e0f2fe;
+  --isd-brand:    #4f46e5;
+  --isd-brand-h:  #4338ca;
+  --isd-r-sm:     4px;
+  --isd-r-md:     8px;
+  --isd-r-lg:     12px;
+  --isd-sh-sm:    0 1px 2px 0 rgba(0,0,0,.05);
+  --isd-sh-md:    0 4px 6px -1px rgba(0,0,0,.1),0 2px 4px -2px rgba(0,0,0,.1);
+}
+
+/* Root container fills the page body. */
+#isd-root {
+  font-family:"DM Sans",system-ui,-apple-system,sans-serif;
+  background:var(--isd-bg);
+  color:var(--isd-text);
+  height:calc(100dvh - 110px);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* Scrollbars (subtle, matches Frappe desk theme). */
+#isd-root ::-webkit-scrollbar { width:6px;height:6px; }
+#isd-root ::-webkit-scrollbar-track { background:transparent; }
+#isd-root ::-webkit-scrollbar-thumb { background:var(--isd-sl-300);border-radius:3px; }
+#isd-root ::-webkit-scrollbar-thumb:hover { background:var(--isd-sl-400); }
+
+/* ============================================================
+   § HEADER — Title + pending-status banner + filters
+   ============================================================ */
+.isd-hdr {
+  background:var(--isd-surface);
+  border-bottom:1px solid var(--isd-border);
+  padding:8px 16px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-shrink:0;
+  box-shadow:var(--isd-sh-sm);
+}
+.isd-title {
+  font-family:"Oswald","DM Sans",sans-serif;
+  font-size:17px;
+  font-weight:600;
+  color:var(--isd-sl-900);
+  letter-spacing:.3px;
+  flex:1;
+}
+.isd-banner {
+  font-size:11px;
+  color:var(--isd-sl-700);
+  background:var(--isd-info-bg);
+  border:1px solid #bae6fd;
+  border-radius:var(--isd-r-md);
+  padding:6px 10px;
+  line-height:1.5;
+  max-width:540px;
+}
+.isd-banner b { color:var(--isd-sl-900); }
+.isd-banner a { color:var(--isd-brand);text-decoration:none; }
+.isd-banner a:hover { text-decoration:underline; }
+
+/* ============================================================
+   § FILTERS BAR — multi-select + month/year + universal search
+   ============================================================ */
+.isd-filters {
+  background:var(--isd-surface);
+  border-bottom:1px solid var(--isd-border);
+  padding:10px 16px;
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:10px;
+  flex-shrink:0;
+}
+.isd-field { display:flex;flex-direction:column;gap:4px; }
+.isd-label {
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--isd-sl-500);
+}
+.isd-input,
+.isd-select {
+  font-size:12px;
+  padding:6px 8px;
+  border:1px solid var(--isd-border);
+  border-radius:var(--isd-r-sm);
+  background:var(--isd-surface);
+  color:var(--isd-text);
+  outline:none;
+  transition:border .15s,box-shadow .15s;
+}
+.isd-input:focus,
+.isd-select:focus {
+  border-color:var(--isd-brand);
+  box-shadow:0 0 0 3px rgba(79,70,229,.15);
+}
+
+/* Chip-style multi-select using <select multiple>. */
+.isd-chips {
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px;
+  min-height:30px;
+  padding:4px 6px;
+  border:1px solid var(--isd-border);
+  border-radius:var(--isd-r-sm);
+  background:var(--isd-surface);
+  cursor:text;
+  align-items:center;
+}
+.isd-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  background:var(--isd-info-bg);
+  color:var(--isd-info);
+  border:1px solid #bae6fd;
+  border-radius:9999px;
+  padding:2px 8px;
+  font-size:11px;
+  font-weight:500;
+}
+.isd-chip-x {
+  cursor:pointer;
+  font-weight:bold;
+  color:var(--isd-sl-500);
+  margin-left:2px;
+}
+.isd-chip-x:hover { color:var(--isd-err); }
+.isd-chip-input {
+  flex:1;
+  min-width:80px;
+  border:none;
+  outline:none;
+  font-size:11px;
+  padding:2px;
+  background:transparent;
+}
+.isd-chip-drop {
+  position:absolute;
+  background:var(--isd-surface);
+  border:1px solid var(--isd-border);
+  border-radius:var(--isd-r-sm);
+  box-shadow:var(--isd-sh-md);
+  max-height:200px;
+  overflow-y:auto;
+  z-index:120;
+  min-width:240px;
+}
+.isd-chip-opt {
+  padding:6px 10px;
+  font-size:12px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.isd-chip-opt:hover { background:var(--isd-sl-100); }
+.isd-chip-opt.isd-chip-opt-sel { background:var(--isd-info-bg);color:var(--isd-info-text); }
+
+/* ============================================================
+   § ACTION BAR — buttons + summary chips
+   ============================================================ */
+.isd-actions {
+  background:var(--isd-surface);
+  border-bottom:1px solid var(--isd-border);
+  padding:8px 16px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  flex-shrink:0;
+}
+.isd-btn {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 12px;
+  font-size:12px;
+  font-weight:500;
+  background:var(--isd-surface);
+  color:var(--isd-sl-700);
+  border:1px solid var(--isd-border);
+  border-radius:var(--isd-r-sm);
+  cursor:pointer;
+  transition:background .15s,border-color .15s,box-shadow .15s;
+}
+.isd-btn:hover {
+  background:var(--isd-sl-50);
+  border-color:var(--isd-sl-300);
+  box-shadow:var(--isd-sh-sm);
+}
+.isd-btn-brand {
+  background:var(--isd-brand);
+  color:#fff;
+  border-color:var(--isd-brand);
+}
+.isd-btn-brand:hover {
+  background:var(--isd-brand-h);
+  border-color:var(--isd-brand-h);
+}
+.isd-summary-bar { display:flex;gap:8px;margin-left:auto;flex-wrap:wrap; }
+/* Modern stat cards — each summary is a tiny card with a left accent strip
+   instead of a flat pill. Improves at-a-glance scannability. ISD-011 */
+.isd-stat {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 12px 6px 10px;
+  font-size:11px;
+  border-radius:var(--isd-r-md);
+  background:var(--isd-surface);
+  color:var(--isd-sl-700);
+  border:1px solid var(--isd-border);
+  box-shadow:var(--isd-sh-sm);
+  position:relative;
+  line-height:1.2;
+}
+.isd-stat::before {
+  content:"";
+  position:absolute;
+  left:0;top:0;bottom:0;
+  width:3px;
+  border-radius:var(--isd-r-md) 0 0 var(--isd-r-md);
+  background:var(--isd-sl-400);
+}
+.isd-stat-val {
+  font-weight:700;
+  color:var(--isd-sl-900);
+  font-size:14px;
+  font-variant-numeric:tabular-nums;
+}
+.isd-stat-err::before  { background:var(--isd-err);  }
+.isd-stat-warn::before { background:var(--isd-warn); }
+.isd-stat-ok::before   { background:var(--isd-ok);   }
+.isd-stat-info::before { background:var(--isd-info); }
+.isd-stat-err  .isd-stat-val { color:var(--isd-err);  }
+.isd-stat-warn .isd-stat-val { color:var(--isd-warn); }
+.isd-stat-ok   .isd-stat-val { color:var(--isd-ok);   }
+.isd-stat-info .isd-stat-val { color:var(--isd-info); }
+
+/* ============================================================
+   § GRID CONTAINER — Tabulator host
+   ============================================================ */
+.isd-grid-wrap {
+  flex:1;
+  display:flex;
+  overflow:hidden;
+  padding:8px 8px 0;
+}
+#isd-grid {
+  flex:1;
+  background:var(--isd-surface);
+  border:1px solid var(--isd-border);
+  border-radius:var(--isd-r-md);
+  box-shadow:var(--isd-sh-sm);
+  overflow:hidden;
+}
+/* ============================================================
+   § TABULATOR OVERRIDES — Native-look + header-wrap + modern row chrome
+   ISD-010 (2026-05-14): Column headers now wrap onto multiple lines so
+     long labels like "Total Shortage incl. Expected (o)" stay readable
+     without horizontal scroll. min-height + vertical centring keeps the
+     header row visually tidy regardless of the longest label.
+   ISD-009: Numeric cells are TWO-LINE — primary stock UOM + secondary
+     conversion (e.g. "1000 g" / "1 kg"). Cell padding bumped so the
+     dual line never clips.
+   ============================================================ */
+.tabulator { background:var(--isd-surface);border:none;font-family:inherit; }
+.tabulator .tabulator-header {
+  background:linear-gradient(180deg,#0f172a 0%, #1e293b 100%);
+  color:#fff;
+  border-bottom:2px solid var(--isd-brand);
+  min-height:60px;
+}
+.tabulator .tabulator-header .tabulator-col {
+  background:transparent !important;
+  color:#fff;
+  border-right:1px solid rgba(255,255,255,.08);
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:.02em;
+  vertical-align:middle;
+}
+/* Wrap header text — ISD-010 */
+.tabulator .tabulator-header .tabulator-col-content {
+  padding:6px 8px !important;
+  white-space:normal !important;
+  display:flex;
+  align-items:center;
+  min-height:60px;
+}
+.tabulator .tabulator-header .tabulator-col-title-holder { width:100%; }
+.tabulator .tabulator-header .tabulator-col-title {
+  white-space:normal !important;
+  overflow:visible !important;
+  text-overflow:clip !important;
+  line-height:1.3 !important;
+  word-break:break-word;
+  display:block !important;
+  text-align:left;
+}
+/* Active sort arrow tint */
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort="ascending"]
+.tabulator-col-content .tabulator-col-sorter .tabulator-arrow,
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort="descending"]
+.tabulator-col-content .tabulator-col-sorter .tabulator-arrow {
+  border-bottom-color:var(--isd-info);
+  border-top-color:var(--isd-info);
+}
+/* Rows */
+.tabulator-row {
+  border-bottom:1px solid var(--isd-sl-100);
+  font-size:12px;
+  min-height:46px;
+  transition:background .12s;
+}
+.tabulator-row.tabulator-row-even { background:var(--isd-sl-50); }
+.tabulator-row.tabulator-row-odd  { background:var(--isd-surface); }
+.tabulator-row.isd-row-pending-so { background:var(--isd-err-bg) !important; }
+.tabulator-row.isd-row-pending-so:hover { background:#fecaca !important; }
+.tabulator-row.tabulator-selectable:hover { background:var(--isd-sl-100) !important; }
+/* Cells */
+.tabulator-cell {
+  padding:6px 10px !important;
+  font-family:inherit;
+  white-space:normal !important;
+  word-break:break-word;
+  vertical-align:middle !important;
+  border-right:1px solid var(--isd-sl-100);
+}
+/* Numeric cell shell — right-aligned, mono-friendly */
+.tabulator-cell.isd-num {
+  text-align:right;
+  font-family:"Geist Mono","Roboto Mono",ui-monospace,monospace;
+  font-variant-numeric:tabular-nums;
+}
+.isd-num-primary {
+  font-weight:600;
+  color:var(--isd-sl-900);
+  font-size:12.5px;
+  line-height:1.25;
+  white-space:nowrap;
+}
+.isd-num-alt {
+  margin-top:2px;
+  font-size:10.5px;
+  line-height:1.3;
+  color:var(--isd-sl-500);
+  white-space:nowrap;
+}
+.isd-uom {
+  font-size:10px;
+  font-weight:500;
+  color:var(--isd-sl-500);
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+.isd-num-empty {
+  color:var(--isd-sl-300);
+}
+.isd-num-mono {
+  font-family:"Geist Mono","Roboto Mono",ui-monospace,monospace;
+  font-variant-numeric:tabular-nums;
+  font-weight:600;
+}
+/* Click affordance for drill-down */
+.isd-cell-click {
+  cursor:pointer;
+  display:inline-block;
+  padding:0 2px;
+  border-radius:4px;
+  transition:background .12s,box-shadow .12s;
+}
+.isd-cell-click:hover {
+  background:#eef2ff;
+  box-shadow:0 0 0 2px rgba(99,102,241,.18);
+}
+.isd-shortage-red    .isd-num-primary { color:var(--isd-err);  }
+.isd-shortage-red    { background:rgba(254,226,226,.55);border-radius:4px; }
+.isd-shortage-orange .isd-num-primary { color:var(--isd-warn); }
+.isd-decision-pill {
+  background:var(--isd-warn-bg);
+  display:inline-block;
+  padding:4px 8px;
+  border-radius:6px;
+  border:1px solid #fde68a;
+}
+.isd-decision-pill .isd-num-primary { color:#92400E; }
+.isd-pct-red    .isd-num-mono { color:var(--isd-err);  }
+.isd-pct-orange .isd-num-mono { color:var(--isd-warn); }
+.isd-pct-green  .isd-num-mono { color:var(--isd-ok);   }
+/* ============================================================
+   § FROZEN COLUMN — z-index + opaque background.
+   ISD-012 (2026-05-14): While horizontally scrolling, the wrapped
+   column headers were rendering ON TOP of the frozen item_code header
+   because Tabulator gives the frozen header column the same z-index
+   as the scroll layer. Bumping z-index AND ensuring the frozen header
+   has an explicit gradient background (matches the rest of the header)
+   makes other headers correctly scroll BEHIND the frozen column.
+   ============================================================ */
+.tabulator .tabulator-frozen {
+  box-shadow:4px 0 6px -3px rgba(15,23,42,.18);
+  z-index:7 !important;
+}
+.tabulator .tabulator-header .tabulator-frozen {
+  background:linear-gradient(180deg,#0f172a 0%, #1e293b 100%) !important;
+  z-index:8 !important;
+}
+.tabulator-row .tabulator-frozen { background:inherit; }
+.tabulator-row.tabulator-row-even .tabulator-frozen { background:var(--isd-sl-50); }
+.tabulator-row.tabulator-row-odd  .tabulator-frozen { background:var(--isd-surface); }
+.tabulator-row.isd-row-pending-so .tabulator-frozen { background:var(--isd-err-bg) !important; }
+.tabulator-row.tabulator-selectable:hover .tabulator-frozen { background:var(--isd-sl-100) !important; }
+
+/* ============================================================
+   § LOADING OVERLAY — replaces innerHTML-style loader.
+   ISD-013 (2026-05-14): The old loader called host.innerHTML and was
+   wiped the moment Tabulator initialised. Now we render an overlay
+   *over* the host (position:absolute), so it can appear before
+   Tabulator mounts AND during refresh without fighting the grid.
+   ============================================================ */
+.isd-grid-wrap { position:relative; }
+.isd-loading-overlay {
+  position:absolute;
+  inset:0;
+  background:rgba(255,255,255,.78);
+  backdrop-filter:blur(2px);
+  -webkit-backdrop-filter:blur(2px);
+  z-index:50;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:14px;
+  color:var(--isd-sl-700);
+  font-size:12.5px;
+  font-weight:500;
+  pointer-events:none;
+  opacity:0;
+  transition:opacity .15s ease-out;
+}
+.isd-loading-overlay.isd-loading-on { opacity:1;pointer-events:auto; }
+.isd-loading-card {
+  display:flex;
+  align-items:center;
+  gap:14px;
+  background:var(--isd-surface);
+  padding:14px 22px;
+  border-radius:var(--isd-r-md);
+  box-shadow:var(--isd-sh-md);
+  border:1px solid var(--isd-border);
+}
+.isd-spinner-big {
+  width:28px;height:28px;
+  border:3px solid var(--isd-sl-200);
+  border-top-color:var(--isd-brand);
+  border-right-color:var(--isd-brand);
+  border-radius:50%;
+  animation:isdSpin .7s linear infinite;
+  flex-shrink:0;
+}
+.isd-loading-text { display:flex;flex-direction:column;gap:2px; }
+.isd-loading-text strong { color:var(--isd-sl-900);font-weight:600; }
+.isd-loading-text span   { color:var(--isd-sl-500);font-size:11px; }
+
+/* ============================================================
+   § QUICK-FILTER CHIPS BAR
+   ISD-014 (2026-05-14): Toggleable filter chips for fast subset
+   queries: Open SO, Open PO, Open WO, Shortage. Multi-select; chips
+   AND together (a row must pass every active chip).
+   ============================================================ */
+.isd-qf {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:8px 16px;
+  background:var(--isd-surface);
+  border-bottom:1px solid var(--isd-border);
+  flex-wrap:wrap;
+}
+.isd-qf-label {
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  color:var(--isd-sl-500);
+  letter-spacing:.04em;
+  margin-right:4px;
+}
+.isd-qf-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 12px;
+  font-size:11px;
+  font-weight:500;
+  background:var(--isd-surface);
+  color:var(--isd-sl-700);
+  border:1px solid var(--isd-border);
+  border-radius:9999px;
+  cursor:pointer;
+  transition:background .12s,border-color .12s,color .12s;
+}
+.isd-qf-chip:hover {
+  background:var(--isd-sl-50);
+  border-color:var(--isd-sl-300);
+}
+.isd-qf-chip.isd-qf-chip-active {
+  background:var(--isd-brand);
+  border-color:var(--isd-brand);
+  color:#fff;
+  box-shadow:0 1px 3px rgba(79,70,229,.32);
+}
+.isd-qf-chip.isd-qf-chip-active .isd-qf-count { background:rgba(255,255,255,.22); }
+.isd-qf-count {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:18px;
+  height:18px;
+  padding:0 4px;
+  background:var(--isd-sl-100);
+  color:inherit;
+  border-radius:9999px;
+  font-size:10px;
+  font-weight:600;
+  font-variant-numeric:tabular-nums;
+}
+.isd-qf-divider {
+  width:1px;height:18px;
+  background:var(--isd-border);
+  margin:0 4px;
+}
+
+/* ============================================================
+   § MODAL — drill-down + email composer
+   ============================================================ */
+.isd-modal-bg {
+  position:fixed;
+  inset:0;
+  background:rgba(15,23,42,.55);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:200;
+  padding:20px;
+  animation:isdFadeIn .12s ease-out;
+}
+@keyframes isdFadeIn { from{opacity:0;}to{opacity:1;} }
+.isd-modal {
+  background:var(--isd-surface);
+  border-radius:var(--isd-r-lg);
+  width:min(900px,95vw);
+  max-height:90vh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  box-shadow:0 25px 50px -12px rgba(0,0,0,.4);
+}
+.isd-modal-hdr {
+  padding:14px 18px;
+  background:var(--isd-sl-900);
+  color:#fff;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  border-bottom:1px solid var(--isd-sl-700);
+}
+.isd-modal-title { font-size:14px;font-weight:600;flex:1; }
+.isd-modal-close {
+  cursor:pointer;
+  color:var(--isd-sl-300);
+  font-size:18px;
+  background:transparent;
+  border:none;
+  padding:0 4px;
+}
+.isd-modal-close:hover { color:#fff; }
+.isd-modal-body { padding:14px 18px;overflow-y:auto;flex:1; }
+.isd-modal-foot {
+  padding:10px 18px;
+  border-top:1px solid var(--isd-border);
+  background:var(--isd-sl-50);
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+}
+.isd-formula {
+  background:var(--isd-sl-50);
+  border:1px solid var(--isd-border);
+  border-radius:var(--isd-r-sm);
+  padding:8px 10px;
+  font-size:12px;
+  color:var(--isd-sl-700);
+  margin-bottom:12px;
+  font-family:"Geist Mono","Roboto Mono",monospace;
+}
+.isd-dtable { width:100%;border-collapse:collapse;font-size:12px; }
+.isd-dtable th,
+.isd-dtable td {
+  padding:6px 8px;
+  border:1px solid var(--isd-border);
+  text-align:left;
+}
+.isd-dtable th {
+  background:var(--isd-sl-100);
+  font-size:11px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--isd-sl-700);
+}
+.isd-dtable td.isd-num { text-align:right;font-family:"Geist Mono","Roboto Mono",monospace; }
+.isd-dtable tfoot td  {
+  background:var(--isd-sl-50);
+  font-weight:700;
+  color:var(--isd-sl-900);
+}
+.isd-dtable a { color:var(--isd-brand);text-decoration:none; }
+.isd-dtable a:hover { text-decoration:underline; }
+
+/* Empty state. */
+.isd-empty {
+  padding:24px;
+  text-align:center;
+  color:var(--isd-sl-500);
+  background:var(--isd-sl-50);
+  border:1px dashed var(--isd-border);
+  border-radius:var(--isd-r-md);
+}
+
+/* Loader. */
+.isd-loader {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:20px;
+  justify-content:center;
+  color:var(--isd-sl-500);
+  font-size:12px;
+}
+.isd-spinner {
+  width:18px;height:18px;
+  border:2px solid var(--isd-sl-200);
+  border-top-color:var(--isd-brand);
+  border-radius:50%;
+  animation:isdSpin .6s linear infinite;
+}
+@keyframes isdSpin { to { transform:rotate(360deg); } }
+
+/* Tooltip (Tabulator passes a function returning string for cell tooltip;
+   we render a styled element via global title attribute fallback). */
+.isd-tip {
+  position:fixed;
+  background:#0f172a;
+  color:#fff;
+  padding:8px 10px;
+  border-radius:6px;
+  font-size:11px;
+  line-height:1.5;
+  max-width:320px;
+  pointer-events:none;
+  opacity:0;
+  transform:translateY(-4px);
+  transition:opacity .12s,transform .12s;
+  z-index:9999;
+  box-shadow:0 4px 12px rgba(0,0,0,.25);
+}
+.isd-tip.isd-tip-on { opacity:1;transform:translateY(0); }
+</style>
+
+<div id="isd-root">
+
+  <!-- ── Header: title + pending-status banner ─────────────────── -->
+  <div class="isd-hdr">
+    <div class="isd-title">
+      <i class="fa-solid fa-warehouse" style="margin-right:6px;color:var(--isd-brand)"></i>
+      Item Shortage Dashboard
+    </div>
+    <div id="isd-banner" class="isd-banner">
+      Loading pending status configuration&hellip;
+    </div>
+  </div>
+
+  <!-- ── Filters bar ───────────────────────────────────────────── -->
+  <div class="isd-filters">
+    <div class="isd-field">
+      <label class="isd-label" for="isd-f-company">Company</label>
+      <select id="isd-f-company" class="isd-select">
+        <option value="">All Companies</option>
+      </select>
+    </div>
+    <div class="isd-field">
+      <label class="isd-label">Item Group</label>
+      <div id="isd-f-ig" class="isd-chips" data-isd-multi="item_group">
+        <input type="text" class="isd-chip-input" placeholder="Type to filter&hellip;"
+               data-isd-chip-input="item_group">
+      </div>
+    </div>
+    <div class="isd-field">
+      <label class="isd-label">Item Name</label>
+      <div id="isd-f-in" class="isd-chips" data-isd-multi="item_name">
+        <input type="text" class="isd-chip-input" placeholder="Type item code or name&hellip;"
+               data-isd-chip-input="item_name">
+      </div>
+    </div>
+    <div class="isd-field">
+      <label class="isd-label">Warehouse</label>
+      <div id="isd-f-wh" class="isd-chips" data-isd-multi="warehouse">
+        <input type="text" class="isd-chip-input" placeholder="Type to filter&hellip;"
+               data-isd-chip-input="warehouse">
+      </div>
+    </div>
+    <div class="isd-field">
+      <label class="isd-label" for="isd-f-month">Will Consumed In (Month)</label>
+      <select id="isd-f-month" class="isd-select">
+        <option value="January">January</option>
+        <option value="February">February</option>
+        <option value="March">March</option>
+        <option value="April">April</option>
+        <option value="May">May</option>
+        <option value="June">June</option>
+        <option value="July">July</option>
+        <option value="August">August</option>
+        <option value="September">September</option>
+        <option value="October">October</option>
+        <option value="November">November</option>
+        <option value="December">December</option>
+      </select>
+    </div>
+    <div class="isd-field">
+      <label class="isd-label" for="isd-f-year">Year</label>
+      <input id="isd-f-year" class="isd-input" type="number"
+             value="2026" min="2020" max="2050">
+    </div>
+    <div class="isd-field" style="grid-column:span 2;min-width:240px;">
+      <label class="isd-label" for="isd-f-search">Universal Search</label>
+      <input id="isd-f-search" class="isd-input" type="text"
+             placeholder="Item code / name / group&hellip;">
+    </div>
+  </div>
+
+  <!-- ── Actions bar: buttons + summary chips ──────────────────── -->
+  <div class="isd-actions">
+    <button id="isd-btn-refresh" class="isd-btn isd-btn-brand" type="button">
+      <i class="fa-solid fa-rotate-right"></i> Refresh
+    </button>
+    <button id="isd-btn-clear" class="isd-btn" type="button">
+      <i class="fa-solid fa-eraser"></i> Clear Filters
+    </button>
+    <button id="isd-btn-csv" class="isd-btn" type="button">
+      <i class="fa-solid fa-file-csv"></i> Export CSV
+    </button>
+    <button id="isd-btn-xlsx" class="isd-btn" type="button">
+      <i class="fa-solid fa-file-excel"></i> Export XLSX
+    </button>
+    <button id="isd-btn-email" class="isd-btn" type="button">
+      <i class="fa-solid fa-envelope"></i> Email
+    </button>
+    <button id="isd-btn-settings" class="isd-btn" type="button">
+      <i class="fa-solid fa-gear"></i> TOC Settings
+    </button>
+    <button id="isd-btn-guide" class="isd-btn" type="button">
+      <i class="fa-solid fa-book"></i> Guide
+    </button>
+    <div id="isd-summary" class="isd-summary-bar"></div>
+  </div>
+
+  <!-- ── Quick-filter chips ─────────────────────────────────────── -->
+  <div class="isd-qf" id="isd-qf">
+    <span class="isd-qf-label">Quick Filters</span>
+    <span class="isd-qf-chip" data-isd-qf="shortage">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      Shortage
+      <span class="isd-qf-count" id="isd-qf-count-shortage">0</span>
+    </span>
+    <span class="isd-qf-chip" data-isd-qf="open_so">
+      <i class="fa-solid fa-cart-shopping"></i>
+      Open SO
+      <span class="isd-qf-count" id="isd-qf-count-open_so">0</span>
+    </span>
+    <span class="isd-qf-chip" data-isd-qf="open_po">
+      <i class="fa-solid fa-truck"></i>
+      Open PO
+      <span class="isd-qf-count" id="isd-qf-count-open_po">0</span>
+    </span>
+    <span class="isd-qf-chip" data-isd-qf="open_wo">
+      <i class="fa-solid fa-gears"></i>
+      Open WO
+      <span class="isd-qf-count" id="isd-qf-count-open_wo">0</span>
+    </span>
+    <span class="isd-qf-divider"></span>
+    <span class="isd-qf-chip" data-isd-qf="below_max">
+      <i class="fa-solid fa-chart-line"></i>
+      Below 50% Max
+      <span class="isd-qf-count" id="isd-qf-count-below_max">0</span>
+    </span>
+  </div>
+
+  <!-- ── Grid host (Tabulator mounts here) ─────────────────────── -->
+  <div class="isd-grid-wrap">
+    <div id="isd-grid"></div>
+    <!-- Loading overlay sits ABOVE the grid; toggled via isd-loading-on -->
+    <div id="isd-loading" class="isd-loading-overlay">
+      <div class="isd-loading-card">
+        <div class="isd-spinner-big"></div>
+        <div class="isd-loading-text">
+          <strong>Loading Item Shortage Dashboard&hellip;</strong>
+          <span>Fetching stock, demand &amp; supply across selected filters</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Floating tooltip (JS positions on hover) ──────────────── -->
+  <div id="isd-tip" class="isd-tip"></div>
+
+</div>

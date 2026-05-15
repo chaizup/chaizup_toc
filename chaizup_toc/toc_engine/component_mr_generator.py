@@ -320,24 +320,32 @@ def _get_bin_qtys(item_code, warehouse):
 
 def _has_open_component_mr(item_code, warehouse):
     """
-    Return True if an open (non-cancelled, non-stopped) Purchase MR already
-    exists for this item + warehouse. Prevents double-ordering when buffer
-    engine and component engine both try to create MRs for the same item.
+    Return True if a "still pending" Purchase MR already exists for this
+    item × warehouse. Prevents double-ordering when buffer engine + component
+    engine both try to create MRs for the same item.
+
+    2026-05-14 (user requirement): broader dedup — uses the canonical
+    MR_TERMINAL_STATUSES list. Any MR whose status is NOT terminal (Stopped /
+    Cancelled / Received / Issued / Transferred / Manufactured) is treated as
+    still in flight and blocks the new component MR.
     """
+    from chaizup_toc.toc_engine.auto_remarks import MR_TERMINAL_STATUSES
+
+    ph = ", ".join(["%s"] * len(MR_TERMINAL_STATUSES))
     return bool(
         frappe.db.sql(
-            """
+            f"""
             SELECT mr.name
             FROM `tabMaterial Request` mr
             JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
             WHERE mr.docstatus < 2
               AND mr.material_request_type = 'Purchase'
-              AND mr.status NOT IN ('Stopped', 'Cancelled')
+              AND COALESCE(mr.status, '') NOT IN ({ph})
               AND mri.item_code = %s
               AND mri.warehouse = %s
             LIMIT 1
             """,
-            (item_code, warehouse),
+            MR_TERMINAL_STATUSES + [item_code, warehouse],
         )
     )
 
@@ -369,6 +377,8 @@ def _create_warehouse_batch_mr(batch_items, warehouse, company, pp_name):
         item_code, item_name, order_qty_stock, stock_uom, shortage, min_qty_stock
     Returns MR name.
     """
+    from chaizup_toc.toc_engine.auto_remarks import format_auto_creation_remark
+
     mr = frappe.new_doc("Material Request")
     mr.material_request_type = "Purchase"
     mr.transaction_date = today()
@@ -394,6 +404,25 @@ def _create_warehouse_batch_mr(batch_items, warehouse, company, pp_name):
                 f" {item['stock_uom']} — min order floor)"
             )
 
+        # 2026-05-14: full remark on every component MR line so operators see
+        # WHY it was auto-created (PP component shortage) AND which statuses
+        # the dedup check considered "still pending" at run time.
+        summary = (
+            f"PP component shortage from {pp_name} | "
+            f"Net shortage: {item['shortage']:.2f} {item['stock_uom']} | "
+            f"Ordered (after MOQ floor): {item['order_qty_stock']:.2f} "
+            f"{item['stock_uom']}{floor_note}"
+        )
+        item_description = format_auto_creation_remark(
+            doc_type="Material Request",
+            item_code=item["item_code"],
+            warehouse=warehouse,
+            qty=f"{item['order_qty_stock']:.2f} {item['stock_uom']} "
+                f"({mr_qty:.2f} {purchase_uom})",
+            reason_summary=summary,
+            source_engine="TOC Component Shortage (post-WO)",
+        )
+
         mr.append("items", {
             "item_code": item["item_code"],
             "item_name": item["item_name"],
@@ -403,10 +432,7 @@ def _create_warehouse_batch_mr(batch_items, warehouse, company, pp_name):
             "conversion_factor": conversion_factor,
             "warehouse": warehouse,
             "schedule_date": mr.schedule_date,
-            "description": (
-                f"TOC Component Shortage | PP: {pp_name} | "
-                f"Required: {item['order_qty_stock']:.2f} {item['stock_uom']}{floor_note}"
-            ),
+            "description": item_description,
         })
 
     mr.flags.ignore_permissions = True

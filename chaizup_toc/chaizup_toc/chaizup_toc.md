@@ -87,6 +87,8 @@ Six interactive operational interfaces:
 | kitting_report | `/app/kitting-report` | Production readiness and BOM component status |
 | supply_chain_tracker | `/app/supply-chain-tracker` | 7-stage supply chain Kanban pipeline |
 | wo_kitting_planner | `/app/wo-kitting-planner` | Work Order kitting planner (7 tabs) |
+| production_overview | `/app/production-overview` | 3-tab production-planning dashboard (items / AI / charts) |
+| item_shortage_dashboard | `/app/item-shortage-dashboard` | Modern shortage dashboard — Tabulator grid, drill-down modal, CSV/XLSX export, email (added 2026-05-14) |
 
 Full documentation: `page/page.md`
 
@@ -100,6 +102,10 @@ Four Script Reports for daily operations and analysis:
 | procurement_action_list | What to buy today (Purchase-mode items) — with freight recommendations |
 | buffer_status_report | Historical buffer trends from TOC Buffer Log |
 | dbm_analysis_report | DBM health check — which buffers need manual review |
+
+> The Item Shortage Dashboard now ships as a **Frappe Page** rather than a
+> Script Report — see `page/item_shortage_dashboard/` and the Pages table
+> above for details (ISD-008, 2026-05-14).
 
 Full documentation: `report/report.md`
 

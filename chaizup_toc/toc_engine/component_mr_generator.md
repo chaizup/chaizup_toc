@@ -145,7 +145,7 @@ Instead of one MR per item, **one MR per warehouse** is created with all shortag
 
 ## Dedup Strategy
 
-`_has_open_component_mr(item_code, warehouse)` — checks for any open, non-stopped, non-cancelled Purchase MR for the item+warehouse. If found, that specific item is excluded from the warehouse batch (other items in the same warehouse still proceed).
+`_has_open_component_mr(item_code, warehouse)` — checks for any **non-terminal** Purchase MR for the item+warehouse. Terminal exclusions are pulled from `chaizup_toc.toc_engine.auto_remarks.MR_TERMINAL_STATUSES` (`Stopped`, `Cancelled`, `Received`, `Issued`, `Transferred`, `Manufactured` — see ARM-001, 2026-05-14). If a non-terminal MR is found, that specific item is excluded from the warehouse batch (other items in the same warehouse still proceed). Each line in the batch MR carries a remark composed via `auto_remarks.format_auto_creation_remark(...)` so operators see the source PP, net shortage, MOQ floor, and the configured pending-status rule on the MR form.
 
 ---
 

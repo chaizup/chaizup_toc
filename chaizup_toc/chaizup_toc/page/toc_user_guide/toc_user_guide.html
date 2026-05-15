@@ -509,6 +509,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
       <tr><td><code class="tug-code">page/supply_chain_tracker/</code></td><td>7-stage Kanban view of open supply chain documents</td></tr>
       <tr><td><code class="tug-code">page/wo_kitting_planner/</code></td><td>Work Order kitting planner across 7 tabs (WKP-001 to WKP-033)</td></tr>
       <tr><td><code class="tug-code">page/production_overview/</code></td><td>Production Overview — count-only summary cards (Total / With-Shortage / Items-w/-Open-WO / Items-w/-Curr-SO / Dispatched / Blocked / Target-Hit), sortable 22-column item table (Item Code, Group, Sub-Asm, Open WOs, Planned/Pending/Produced, Prev/Curr SO &amp; Dispatch, Sales Projection, Total Sales, Proj-vs-Sales %, Coverage %, Target Production, % Target Achieved, Stock, Shortage with item name + current stock, Possible Qty, Active BOM, Production Plans, Cost). Universal search, hyperlinked doc IDs (open in new tab), warehouse-scoped quantities everywhere, Independent/Priority Planning Mode, View-Plan tree (parent → sub-assembly → component supply/shortage), per-UOM cost, AI advisor (DeepSeek), 9-chart production-team Charts tab (Priority Action Board, Daily Production Need, Readiness, Shortage Status, Coverage Health, Shortage Drivers, Top Demand, Projection vs Sales, WOs by Group), 9-sheet Excel export (Cover with Health Snapshot KPIs + Top Action Items / Sheet Guide / Action Plan with priority pills + recommended actions / Simple Report with shortage data bars / Overview / UOM Comparison / Item Master / Group Pivot / Shortage Drivers — autofilter on every sheet, alt-row shading, Google-Sheets-import friendly), quick-filter pills (Open SO, No SO, In Projection, Open WO, No WO, In PP) with mutual-exclusion pairs, per-row "SOs" and "Plan" quick-action buttons under every item name (frozen Item column), shortage modal with "Incoming (Production)" and "Incoming (Purchase)" columns showing aggregated pending WO + PO qty per short component, deterministic stock-UOM column sorting (numeric tie-break by item_code, nulls always at bottom), dynamic status filters incl. custom workflow states, filter-change toasts, custom instant tooltips on every column and filter.</td></tr>
+      <tr><td><code class="tug-code">page/item_shortage_dashboard/</code></td><td>Item Shortage Dashboard Page (added 2026-05-14, modernised same day) — modern single-pane Frappe Desk page using Tabulator 6.3.1 for the data grid. 27 columns covering stock, max-level, pending SO/WO/PO, sales projection, dispatch, ADU / Lead Time / Safety Factor. Filters: Company, Item Group (chip multi), Item Name (chip multi w/ live Item lookup), Warehouse (chip multi), Will-Consumed-In Month/Year, Universal Search. Quick-filter chip bar (Shortage / Open SO / Open PO / Open WO / Below 50% Max) with live counts. Native column sort + multi-sort via shift-click, movable columns, frozen first column (item_code with z-index fix so wrapped headers don&apos;t overlap during horizontal scroll), virtualized rendering for &gt; 250 rows. Cells render BOTH UOMs inline (primary stock UOM number + every conversion as a secondary subtitle — e.g. <code>1000 g</code> over <code>1 kg</code>). Column headers wrap onto multiple lines so long labels stay legible. Light-red row highlight for items with pending Sales Orders. Custom drill-down modal showing contributing docs + formula caption. CSV export, server-side branded XLSX export with 5 sheets (Cover / Items / Shortage Drivers / Pending SO Items / UOM Conversions) via openpyxl + conditional data bars + frozen panes. Email composer preserves pending-SO row highlight in the inline HTML. Compute layer lives at <code class="tug-code">chaizup_toc.api.item_shortage_compute</code> (relocated from the now-removed Script Report folder, ISD-008). CSS prefix isd-, slate palette matching the Tiger Theme.</td></tr>
     </table>
   </div>
 
@@ -1064,6 +1065,14 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
 
   <p>The PP Items row also captures the item&apos;s <strong>Stock UOM</strong> (e.g. <em>Pcs</em>, <em>Kg</em>) from the Item Master. This was a silent gap until 2026-05-12 — the UOM column on the PP Items grid would render empty for engine-created plans, and the ERPNext <code class="tug-code">validate_uom_is_integer</code> check became a no-op. The qty itself has always been in stock UOM (the formula resolves shortage + MINMFG in stock UOM); only the display column was missing the unit label.</p>
 
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">IMM-004 — Section 6 grid columns widened (2026-05-14)</h3>
+  <p>Both child tables that make up <em>Item &rarr; 6. Minimum Purchase / Production Qty per Warehouse</em> now distribute their visible columns across the full 12-column Frappe grid so nothing is clipped or hidden behind the row-expand:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>Item Min Order Qty</strong> &mdash; six columns visible by default (Warehouse / UOM / Min Purchase / Production Qty / Stock UOM / Stock UOM Conversion / Stock UOM Qty). The previous layout summed to 13 of 12 grid columns and silently truncated one of them.</li>
+    <li><strong>Item Minimum Manufacture</strong> &mdash; the auto-trigger flags <em>Auto on Shortage</em>, <em>Auto on Max Level</em>, and the read-only <em>Max Level</em> auto-cap are now visible in the grid alongside Warehouse / Action Type / Min Qty / UOM. This makes it possible to enable Shortage Action triggers without expanding each row. Lead Time, Safety Factor, ADU, and last-run-timestamp are still available in the row-expand view.</li>
+  </ul>
+  <p>No behaviour change to the engines &mdash; this is a UX-only tweak so operators can see what is already there. The full IMM-002 / IMM-003 contract below is unchanged.</p>
+
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">IMM-002 — Min Manufacture / Purchase Qty per Warehouse (2026-05-13)</h3>
   <p>The Item Master section <strong>6. Minimum Purchase / Production Qty per Warehouse</strong> now includes six extra columns alongside Warehouse / Min Qty / UOM:</p>
   <ul style="margin:8px 0 12px 22px">
@@ -1101,6 +1110,44 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
   </ul>
   <p>Each report shows a compact <strong>Active Pending Filter (read-only)</strong> banner at the top of its header. The banner shows three chip groups (SO / WO / PO) with the current lists and an <em>Edit in TOC Settings</em> link that jumps to the global form. Two reports never diverge from each other; the schedulers, the manual buttons, and the engines all read the same configuration.</p>
   <p><strong>Why this matters.</strong> Pre-TS-001, every report had its own pickers. A user who changed the "Show WOs" multi-select on the WO Kitting Planner saw different numbers than what the scheduled job wrote that morning. After TS-001, "what does the engine think is pending right now?" is a single answer everywhere.</p>
+
+  <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">ARM-001 &mdash; Broader auto-dedup + canonical creation remarks (2026-05-14)</h3>
+  <p>Operators reported duplicate Work Orders being created on consecutive days for the same item &times; warehouse. Root cause: the legacy dedup queries used a narrow status exclusion (<code class="tug-code">'Stopped','Cancelled'</code> only) and the buffer engine's <code class="tug-code">_has_open_pp</code> additionally restricted itself to PPs with <em>blank projection_reference</em> &mdash; so a projection-triggered PP from yesterday was invisible to the buffer engine, which happily created another PP today.</p>
+  <p>ARM-001 introduces a single canonical helper, <code class="tug-code">chaizup_toc.toc_engine.auto_remarks</code>, used by every dedup query and every auto-doc remark in the app.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">Dedup rule (now consistent everywhere)</h4>
+  <p>An existing MR / PP / WO / PO BLOCKS a new auto-created doc when:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><code class="tug-code">docstatus &lt; 2</code> (Draft or Submitted &mdash; Cancelled never blocks)</li>
+    <li><code class="tug-code">status NOT IN (terminal list)</code></li>
+  </ul>
+  <p>The terminal lists are:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>MR terminal:</strong> Stopped, Cancelled, Received, Issued, Transferred, Manufactured</li>
+    <li><strong>PP terminal:</strong> Completed, Closed, Cancelled</li>
+    <li><strong>WO terminal:</strong> Completed, Closed, Stopped, Cancelled</li>
+    <li><strong>PO terminal:</strong> Completed, Closed, Cancelled</li>
+  </ul>
+  <p>Anything <em>not</em> on the terminal list (Pending / Partially Ordered / Ordered / Not Started / In Process / Material Transferred / To Receive / &hellip;) counts as "still in flight" and blocks today's auto-doc &mdash; regardless of what statuses are configured on the TOC Settings pending lists. Those configured lists drive the supply / demand <em>quantity</em> formulas; this list drives the <em>dedup</em> gate. Both layers are required and they do not have to match.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">Remarks on every auto-created doc</h4>
+  <p>Every auto-generated MR / PP / WO now carries a multi-line remark in the appropriate field:</p>
+  <ul style="margin:8px 0 12px 22px">
+    <li><strong>MR:</strong> <code class="tug-code">Material Request Item.description</code></li>
+    <li><strong>PP:</strong> <code class="tug-code">Production Plan.custom_creation_reason</code></li>
+    <li><strong>WO:</strong> <code class="tug-code">Work Order.description</code> (only when currently blank &mdash; operator edits are never overwritten)</li>
+  </ul>
+  <p>The remark contains four parts:</p>
+  <ol style="margin:8px 0 12px 22px">
+    <li>Header: <code class="tug-code">[Auto-Generated by &lt;engine&gt;]</code> + doc type + item + warehouse + qty.</li>
+    <li>Trigger summary (e.g. <em>"TOC Buffer | Zone: Red | BP: 78% | Target: 500 | IP: 110"</em>).</li>
+    <li>The auto-generation rule block listing both the configured pending statuses (WO / PO / SO that count as supply / demand) and the four terminal lists used by the dedup gate.</li>
+    <li>(for Calc SO / Calc Action MRs) The original formula breakdown.</li>
+  </ol>
+  <p><strong>Why repeat the same rule on every doc?</strong> Auditability. Three months from now, when an operator opens a 2026-05 MR and asks "why did the engine create this and not block on the older one?", the answer is right there in the description &mdash; including the exact terminal-status sets that were in force at the time.</p>
+
+  <h4 style="font-weight:700;margin:10px 0 6px;color:var(--tug-navy)">This logic applies to AUTOMATION ONLY</h4>
+  <p>Manual creation of MR / PP / WO via the form UI, the API, the import tool, or any non-scheduler path is <em>untouched</em>. Operators are free to create a second MR by hand for any reason &mdash; the broader pending check fires only when the TOC engine (buffer-triggered MR, projection automation Calc A / B, Calc SO, Calc Action, component shortage MR) tries to create a doc itself.</p>
 
   <h3 style="font-weight:700;margin:18px 0 10px;color:var(--tug-navy)">BTP-001 &mdash; Buffer Type removed + configurable WO / PO pending statuses (2026-05-14)</h3>
   <p>Two related housekeeping fixes shipped together.</p>

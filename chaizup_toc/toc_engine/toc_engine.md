@@ -511,20 +511,38 @@ Example: RLT=7, tmg_cycles=3 → window = 21 days
 9. return created_mrs
 ```
 
-### _has_open_mr() — Deduplication Check
+### _has_open_mr() — Deduplication Check (2026-05-14 broadened)
 
 ```sql
+-- Terminal MR statuses live in chaizup_toc.toc_engine.auto_remarks.MR_TERMINAL_STATUSES
 SELECT mr.name FROM `tabMaterial Request` mr
 JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
-WHERE mr.docstatus < 2                      -- draft or submitted (not cancelled)
-AND mr.material_request_type = 'Manufacture'  -- or 'Purchase'
-AND mr.status NOT IN ('Stopped', 'Cancelled')
-AND mri.item_code = 'FG-MASALA-1KG'
-AND mri.warehouse = 'Finished Goods Store'
+WHERE mr.docstatus < 2                                    -- draft or submitted (not cancelled)
+  AND mr.material_request_type = 'Manufacture'            -- or 'Purchase'
+  AND COALESCE(mr.status, '') NOT IN (
+        'Stopped', 'Cancelled', 'Received',
+        'Issued', 'Transferred', 'Manufactured')          -- terminal states (cycle done)
+  AND mri.item_code = 'FG-MASALA-1KG'
+  AND mri.warehouse = 'Finished Goods Store'
 LIMIT 1
 ```
 
-Returns truthy if any open MR exists → item skipped to avoid duplicate MRs.
+Returns truthy if any **non-terminal** MR exists → item skipped to avoid duplicate MRs.
+
+**Why broader than the legacy `('Stopped', 'Cancelled')` filter?** Without the wider
+exclusion list, a MR that had reached `Received` / `Issued` / `Transferred` would still
+block a new auto-MR — the operator would never get a replenishment MR for a real
+shortage because yesterday's MR (already done) was treated as in-flight. The broader
+list correctly says: *"that MR's cycle is complete; today's shortage gets its own MR"*.
+
+**Equivalent broadening also applies to:**
+- `mr_generator._has_open_pp()` — now considers ANY non-terminal PP (drops the legacy
+  `blank-projection_reference` filter so projection-triggered PPs also block buffer-
+  triggered duplicates).
+- `component_mr_generator._has_open_component_mr()` — same MR_TERMINAL_STATUSES list.
+- `production_plan_engine._so_shortage_pp_exists()`, `_shortage_cover_artifact_exists()`,
+  `_shortage_action_artifact_exists()` — all now read from the same canonical
+  `auto_remarks` helper.
 
 ### _create_mr() — MR Document Structure
 
@@ -718,6 +736,81 @@ Cache the result at module level in a `_xxx_column_cache = None` variable to avo
 - Do NOT pass `buffer_type` to `calculate_all_buffers` — parameter was removed in refactor.
 - Do NOT use `stock_uom` directly for Purchase MR `uom` field — must use `purchase_uom` with `conversion_factor`.
 - Do NOT skip `_log_snapshot` — required for DBM trend analysis.
+
+---
+
+## auto_remarks.py — Shared Pending-Status + Remark Helper (2026-05-14)
+
+Central module that:
+1. Defines the canonical TERMINAL status sets used by every dedup query
+   (`MR_TERMINAL_STATUSES`, `PP_TERMINAL_STATUSES`, `WO_TERMINAL_STATUSES`,
+   `PO_TERMINAL_STATUSES`).
+2. Reads the configured pending lists from TOC Settings (`pending_wo_statuses`,
+   `pending_po_statuses`, `projection_pending_so_statuses`).
+3. Provides two formatters used by every auto-engine when stamping
+   description / custom_creation_reason on auto-created docs:
+
+```python
+format_pending_check_block(scope="MR" | "PP" | "WO" | "PO")
+    → multi-line plain-text block listing which statuses count as "still
+       pending" and which are terminal. Embedded into every auto-doc remark
+       so operators can see exactly what the dedup check was looking at when
+       the doc was created.
+
+format_auto_creation_remark(doc_type, item_code, warehouse, qty,
+                             reason_summary, source_engine)
+    → header + summary + format_pending_check_block(...). The single canonical
+       way to compose the description on an auto-created MR/PP/WO line.
+```
+
+### Where the remark appears
+
+| Auto-created doc | Field receiving the remark | Engine |
+|------------------|---------------------------|--------|
+| Buffer-triggered MR (Purchase) | `Material Request Item.description` | `mr_generator._create_mr` |
+| Buffer-triggered PP (Manufacture) | `Production Plan.custom_creation_reason` | `mr_generator._create_buffer_production_plan` + `production_plan_engine._create_production_plan` |
+| Projection-triggered PP (Calc A/B) | `Production Plan.custom_creation_reason` | `production_plan_engine._process_item_v2` |
+| Calc SO PP / MR (Shortage Cover) | `custom_creation_reason` / `MR Item.description` | `production_plan_engine.run_so_shortage_automation` |
+| Calc Action PP / MR | `custom_creation_reason` / `MR Item.description` | `production_plan_engine.run_shortage_action_automation` |
+| Component-shortage MR (post-WO) | `Material Request Item.description` | `component_mr_generator._create_warehouse_batch_mr` |
+| Work Order (auto-created via PP) | `Work Order.description` | `production_plan_engine._stamp_toc_fields_on_work_orders` (only if currently blank) |
+
+### Pending-status rule snapshot
+
+The block embedded into every auto-doc looks like this:
+
+```
+── Auto-generation rule (scope: MR) ──
+Existing docs in these statuses BLOCK a new auto-created doc:
+  • WO pending (counts as supply): Not Started, In Process, Material Transferred
+  • PO pending (counts as supply): To Receive, To Receive and Bill
+  • SO pending (counts as demand): To Deliver and Bill, To Deliver, On Hold
+Terminal statuses (DO NOT block — cycle complete):
+  • MR terminal: Stopped, Cancelled, Received, Issued, Transferred, Manufactured
+  • PP terminal: Completed, Closed, Cancelled
+  • WO terminal: Completed, Closed, Stopped, Cancelled
+  • PO terminal: Completed, Closed, Cancelled
+Source: TOC Settings → Pending Work Order & Purchase Order Statuses
+        (applies to scheduler / TOC engine only — manual creation is unaffected).
+```
+
+### DANGER ZONE (auto_remarks.py)
+
+- The terminal lists are derived from ERPNext core status values. If ERPNext
+  renames a status (e.g. "Received" → "Fully Received") the dedup query silently
+  fails to match and dupes can re-appear.
+- The pending-status block is intentionally embedded into EVERY auto-doc — yes
+  it's repeated text, but auditability beats brevity here. Operators reading a
+  PP three months from now must be able to see what dedup rule was in force.
+
+### RESTRICT (auto_remarks.py)
+
+- Do NOT add Draft (docstatus=0) to any terminal list — Drafts must always
+  count as pending. The terminal list is consulted INSIDE a `docstatus<2`
+  query, so Draft + Submitted are already in scope.
+- Do NOT call `format_auto_creation_remark()` from manual-creation paths
+  (Item form save handler, button-driven flows). The "pending check rule"
+  remark only makes sense on docs the scheduler / TOC engine created itself.
 
 ---
 
