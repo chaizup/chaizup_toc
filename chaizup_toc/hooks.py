@@ -47,6 +47,13 @@ add_to_apps_screen = [
 after_install = "chaizup_toc.setup.install.after_install"
 before_uninstall = "chaizup_toc.setup.install.before_uninstall"
 
+# 2026-05-19 — after_migrate runs on every `bench migrate`. We use it to
+# back-fill the TOC UOM custom fields on existing Work Orders, Production
+# Plans, and BOMs whenever the schema has been updated (the function is
+# idempotent — already-stamped rows are skipped). MRP is intentionally
+# left untouched.
+after_migrate = "chaizup_toc.setup.install.after_migrate"
+
 # ═══════════════════════════════════════════════════════
 # SCHEDULED JOBS — Daily Operating Rhythm
 # ═══════════════════════════════════════════════════════
@@ -116,6 +123,15 @@ doc_events = {
     "Stock Ledger Entry": {
         "after_insert": "chaizup_toc.toc_engine.buffer_calculator.on_stock_movement"
     },
+    # 2026-05-19 — Production entry → refresh WO + PP produced-qty mirror.
+    # Manufacture-purpose Stock Entries write WO.produced_qty via direct
+    # frappe.db.set_value calls (inside Work Order.update_status), which
+    # bypasses validate. The hook below catches this and recomputes
+    # custom_produced_qty_in_uom on both the WO and the parent PP row.
+    "Stock Entry": {
+        "on_submit": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_stock_entry_submit_refresh_produced",
+        "on_cancel": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_stock_entry_submit_refresh_produced",
+    },
     # Sales Order submit/cancel → reserved_qty changes → FG buffer impact
     "Sales Order": {
         "on_submit": "chaizup_toc.toc_engine.buffer_calculator.on_demand_change",
@@ -126,6 +142,10 @@ doc_events = {
         "on_submit": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
         "on_cancel": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
         "on_update_after_submit": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
+        # 2026-05-19 — bidirectional UOM sync: recompute custom_uom/CF/
+        # custom_qty_in_uom from the standard `qty` field. Catches
+        # programmatic writes that don't go through the JS controller.
+        "validate":  "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_uom_fields_on_wo_validate",
     },
     # Purchase Order → on_order changes → RM buffer impact
     # before_insert → copy TOC metadata from source Material Request (if TOC-generated)
@@ -160,9 +180,22 @@ doc_events = {
     "Production Plan": {
         "before_insert": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_production_plan_before_insert",
         "before_cancel": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.on_production_plan_before_cancel",
+        # 2026-05-19 — auto-populate TOC UOM custom fields on every save.
+        # Idempotent (respects user-picked custom_uom; only auto-fills when
+        # blank). Recomputes the in-UOM displays from the standard qty
+        # fields so the row stays in sync after ERPNext writes (BOM
+        # explosion, "Get Sub-Assemblies" button, scheduler back-fills).
+        # See production_plan_engine.stamp_uom_fields_on_pp_validate.
+        "validate":      "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_uom_fields_on_pp_validate",
     },
     # NOTE: TOC Item Buffer calculations (F1/F6/zone thresholds) are handled
     # entirely by TOCItemBuffer.validate() in the controller. No doc_event needed.
+    #
+    # 2026-05-19 — BOM bidirectional UOM sync. Recomputes custom_uom/CF/
+    # custom_qty_in_uom from the standard `quantity` field on every save.
+    "BOM": {
+        "validate": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_uom_fields_on_bom_validate",
+    },
 }
 
 # ═══════════════════════════════════════════════════════
@@ -177,6 +210,18 @@ fixtures = [
         "doctype": "Property Setter",
         "filters": [["module", "=", "Chaizup Toc"]]
     },
+    # 2026-05-19 — List View Settings for ERPNext doctypes we want to ship
+    # opinionated default columns for. The doctype has no `module` field, so
+    # we filter by name (one row per doctype, singleton-style). Adding new
+    # entries here means installs/migrations get the same list-view defaults
+    # as the live dev site.
+    #
+    # Restricted: only doctypes that chaizup_toc actually customises. Do NOT
+    # add unrelated doctypes here — those should stay user-customisable.
+    {
+        "doctype": "List View Settings",
+        "filters": [["name", "in", ["Work Order", "BOM"]]],
+    },
 ]
 
 # ═══════════════════════════════════════════════════════
@@ -186,6 +231,21 @@ doctype_js = {
     "Item": "public/js/item_toc.js",
     "Material Request": "public/js/material_request_toc.js",
     "Stock Entry": "public/js/stock_entry_toc.js",
+    "Work Order":      "public/js/work_order_mrp_uom.js",
+    "Production Plan": "public/js/production_plan_mrp_uom.js",
+    "BOM":             "public/js/bom_uom.js",
+}
+
+# 2026-05-19 — List-view extras: merge framework audit columns
+# (creation / owner / modified / modified_by) into the existing ERPNext
+# `frappe.listview_settings[doctype].add_fields` arrays so they appear
+# as default columns in Report View. These files load AFTER ERPNext's
+# `<dt>_list.js` (Frappe loads by app dependency order) and concat into
+# the existing arrays instead of overwriting — preserving the ERPNext
+# status indicators that depend on the original `add_fields` entries.
+doctype_list_js = {
+    "Work Order": "public/js/work_order_list_extras.js",
+    "BOM":        "public/js/bom_list_extras.js",
 }
 
 # ═══════════════════════════════════════════════════════
@@ -207,6 +267,27 @@ app_include_css = "/assets/chaizup_toc/css/toc.css"
 # ═══════════════════════════════════════════════════════
 override_whitelisted_methods = {
     "erpnext.stock.reorder_item.reorder_item": "chaizup_toc.overrides.reorder_override.toc_reorder_item"
+}
+
+# ═══════════════════════════════════════════════════════
+# OVERRIDE DOCTYPE CLASS — Production Plan
+# 2026-05-19 — Wires ChaizupProductionPlan so the standard
+# "Get Sub Assembly Items" button stamps the TOC UOM custom
+# fields (custom_uom, custom_uom_conversion_factor,
+# custom_required_qty_in_uom, custom_projected_qty_in_uom,
+# custom_qty_to_order_in_uom) immediately when sub-assembly
+# rows are fetched — not only on Save.
+#
+# Closes the gap left by the validate-only path: the JS
+# child events don't fire on bulk row insertion from
+# `frm.call("get_sub_assembly_items", doc: frm.doc)`, so
+# without this override the in-UOM columns stayed at 0
+# until the user clicked Save.
+#
+# See: chaizup_toc/overrides/production_plan.py
+# ═══════════════════════════════════════════════════════
+override_doctype_class = {
+    "Production Plan": "chaizup_toc.overrides.production_plan.ChaizupProductionPlan",
 }
 
 # ═══════════════════════════════════════════════════════

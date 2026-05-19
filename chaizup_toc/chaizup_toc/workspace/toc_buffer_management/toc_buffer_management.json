@@ -151,6 +151,19 @@
       "description": "Modern single-pane shortage dashboard \u2014 Tabulator grid, inline both-UOM cells, drill-down modal, CSV/XLSX export, email."
     },
     {
+      "dependencies": "",
+      "hidden": 0,
+      "icon": "view",
+      "is_query_report": 0,
+      "label": "Item Projection View",
+      "link_count": 0,
+      "link_to": "item-projection-view",
+      "link_type": "Page",
+      "onboard": 0,
+      "type": "Link",
+      "description": "Procurement / planning projection \u2014 stock + WO/PO inbound \u2212 WO/SO demand. Per-cell formula tooltip and voucher drill-down. Branded multi-sheet XLSX."
+    },
+    {
       "hidden": 0,
       "is_query_report": 0,
       "label": "Stock Masters",

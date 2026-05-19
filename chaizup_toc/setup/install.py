@@ -20,8 +20,36 @@ def after_install():
     _setup_roles()
     _create_number_cards()
     _create_dashboard_charts()
+    # 2026-05-19 — Back-fill TOC UOM custom fields on every existing
+    # Work Order + Production Plan + BOM. SKIPS MRP (Item.custom_mrp
+    # remains user-managed per requirement). Idempotent — rows that
+    # already have custom_uom set are left untouched. Wrapped so
+    # back-fill failures never block install.
+    try:
+        backfill_toc_uom_on_existing_records()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(),
+                         "TOC back-fill on after_install failed")
     frappe.db.commit()
     frappe.logger("chaizup_toc").info("=== Chaizup TOC: Post-Install Complete ===")
+
+
+def after_migrate():
+    """Run on every `bench migrate`. The custom-fields portion is handled
+    by fixtures, but the UOM back-fill needs to run when the new fields
+    first appear on an existing site. Idempotent — re-runs skip already-
+    populated rows.
+
+    2026-05-19 — wired in hooks.py:after_migrate so legacy chaizup_toc
+    sites get back-filled the first time they run `bench migrate` after
+    pulling these changes.
+    """
+    try:
+        backfill_toc_uom_on_existing_records()
+        frappe.db.commit()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(),
+                         "TOC back-fill on after_migrate failed")
 
 
 def before_uninstall():
@@ -387,6 +415,247 @@ def _create_number_cards():
             nc.insert()
         except Exception:
             frappe.log_error(frappe.get_traceback(), f"TOC NC: {cd['name']}")
+
+
+# =============================================================================
+# CONTEXT: TOC UOM back-fill on existing records.
+#
+# When a user installs chaizup_toc on a site that already has Work Orders,
+# Production Plans, and BOMs, the new TOC custom fields (custom_uom,
+# custom_uom_conversion_factor, custom_qty_in_uom, etc.) get added by
+# fixtures with NULL/0 default values. The user-facing form would then
+# show empty UOM/CF columns until each record is re-saved one-by-one.
+#
+# This function back-fills the UOM trio on every existing record using:
+#   - custom_uom = item's largest-CF non-stock UOM (auto-pick)
+#   - custom_uom_conversion_factor = the CF for that UOM
+#   - custom_qty_in_uom = standard_qty / CF
+#   - + the produced_qty / creation / owner mirrors on Work Order
+#   - + the per-row in-UOM fields on Production Plan child tables
+#
+# What it DOES NOT touch:
+#   - Item.custom_mrp / Work Order.custom_mrp / Production Plan Item.custom_mrp
+#     MRP is a per-item commercial decision; user populates Item.custom_mrp
+#     manually after install. The auto-fetch chain (Item → WO/PP via the
+#     custom_mrp_source = "Auto from Item" handler) takes over from there.
+#
+# INSTRUCTIONS:
+#   - Idempotent. Only stamps rows where custom_uom IS NULL/empty. Re-runs
+#     are safe; running it 10x has the same effect as running it once.
+#   - Single batched UOM-ladder query per pass (no N+1).
+#   - Direct SQL UPDATEs via frappe.db.sql for speed (no validate/save
+#     overhead per row). Skip update_modified.
+#   - Wrapped per-pass in try/except so a single bad row never aborts the
+#     whole back-fill.
+#
+# DANGER ZONE:
+#   - Do NOT remove the `IS NULL OR = ''` guard on custom_uom. Without it
+#     this overwrites user choices on every re-run.
+#   - Do NOT include `custom_mrp` in the UPDATE list. MRP back-fill would
+#     unintentionally populate from Item.custom_mrp on items the user
+#     hasn't yet priced.
+#   - Direct SQL is intentional. doc.save() would trigger validate +
+#     buffer_calculator hooks on every WO and PP — too slow on large
+#     sites and could create spurious MRs.
+#
+# RESTRICT:
+#   - This function MUST stay idempotent. It's wired into both
+#     after_install and after_migrate; a non-idempotent version would
+#     corrupt data on every bench migrate.
+#   - Don't change the field names — they're referenced by the validate
+#     hooks (stamp_uom_fields_on_*_validate) and the JS controllers.
+# =============================================================================
+def backfill_toc_uom_on_existing_records():
+    """Populate TOC UOM fields on every existing WO + PP + BOM. Skips MRP."""
+    frappe.logger("chaizup_toc").info("=== TOC UOM Back-fill: starting ===")
+
+    # ── 1. Build a single UOM ladder map for ALL items referenced ──────────
+    #    (Faster than per-row lookups across thousands of rows.)
+    item_codes = set()
+    for r in frappe.db.sql(
+            """SELECT DISTINCT production_item FROM `tabWork Order`
+               WHERE production_item IS NOT NULL""", as_dict=True):
+        item_codes.add(r.production_item)
+    for r in frappe.db.sql(
+            """SELECT DISTINCT item_code FROM `tabProduction Plan Item`
+               WHERE item_code IS NOT NULL""", as_dict=True):
+        item_codes.add(r.item_code)
+    for r in frappe.db.sql(
+            """SELECT DISTINCT production_item FROM `tabProduction Plan Sub Assembly Item`
+               WHERE production_item IS NOT NULL""", as_dict=True):
+        item_codes.add(r.production_item)
+    for r in frappe.db.sql(
+            """SELECT DISTINCT item FROM `tabBOM`
+               WHERE item IS NOT NULL""", as_dict=True):
+        item_codes.add(r.item)
+    if not item_codes:
+        frappe.logger("chaizup_toc").info("No existing WO/PP/BOM rows; back-fill skipped")
+        return
+
+    ladders = frappe.db.sql(
+        """
+        SELECT parent AS item_code, uom, conversion_factor
+        FROM `tabUOM Conversion Detail`
+        WHERE parent IN %(c)s AND parenttype = 'Item'
+          AND IFNULL(conversion_factor, 0) > 0
+        ORDER BY conversion_factor DESC
+        """, {"c": tuple(item_codes)}, as_dict=True)
+    stock_uoms = {
+        r.name: r.stock_uom for r in frappe.db.sql(
+            """SELECT name, stock_uom FROM `tabItem` WHERE name IN %(c)s""",
+            {"c": tuple(item_codes)}, as_dict=True)
+    }
+    by_item = {}
+    for r in ladders:
+        by_item.setdefault(r.item_code, []).append(
+            (r.uom, float(r.conversion_factor or 0)))
+
+    def pick(item_code):
+        """Return (uom, cf) — largest non-stock UOM, else stock UOM at CF=1."""
+        rows = by_item.get(item_code) or []
+        s_uom = stock_uoms.get(item_code) or ""
+        for uom, cf in rows:
+            if uom != s_uom and cf > 1.0:
+                return uom, cf
+        return s_uom, 1.0
+
+    # ── 2. Work Order back-fill ────────────────────────────────────────────
+    wo_rows = frappe.db.sql(
+        """SELECT name, production_item, qty, produced_qty,
+                  creation, owner
+           FROM `tabWork Order`
+           WHERE (custom_uom IS NULL OR custom_uom = '')
+             AND production_item IS NOT NULL""",
+        as_dict=True)
+    wo_done = 0
+    for r in wo_rows:
+        try:
+            uom, cf = pick(r.production_item)
+            qty       = float(r.qty or 0)
+            prod      = float(r.produced_qty or 0)
+            frappe.db.sql(
+                """UPDATE `tabWork Order` SET
+                       custom_uom = %(uom)s,
+                       custom_uom_conversion_factor = %(cf)s,
+                       custom_qty_in_uom = %(qiu)s,
+                       custom_produced_qty_in_uom = %(piu)s,
+                       custom_created_time = IFNULL(custom_created_time, %(creation)s),
+                       custom_created_by   = IFNULL(NULLIF(custom_created_by, ''), %(owner)s)
+                   WHERE name = %(name)s""",
+                {"uom": uom, "cf": cf,
+                 "qiu": (qty / cf) if cf else 0,
+                 "piu": (prod / cf) if cf else 0,
+                 "creation": r.creation, "owner": r.owner,
+                 "name": r.name})
+            wo_done += 1
+        except Exception:
+            frappe.log_error(frappe.get_traceback(),
+                             f"TOC back-fill failed for WO {r.name}")
+    frappe.logger("chaizup_toc").info(f"WO back-fill: {wo_done}/{len(wo_rows)} rows stamped")
+
+    # ── 3. Production Plan Item (po_items) back-fill ───────────────────────
+    ppi_rows = frappe.db.sql(
+        """SELECT name, item_code, planned_qty, produced_qty
+           FROM `tabProduction Plan Item`
+           WHERE (custom_uom IS NULL OR custom_uom = '')
+             AND item_code IS NOT NULL""",
+        as_dict=True)
+    ppi_done = 0
+    for r in ppi_rows:
+        try:
+            uom, cf = pick(r.item_code)
+            planned = float(r.planned_qty or 0)
+            prod    = float(r.produced_qty or 0)
+            frappe.db.sql(
+                """UPDATE `tabProduction Plan Item` SET
+                       custom_uom = %(uom)s,
+                       custom_uom_conversion_factor = %(cf)s,
+                       custom_qty_in_uom = %(qiu)s,
+                       custom_produced_qty_in_uom = %(piu)s
+                   WHERE name = %(name)s""",
+                {"uom": uom, "cf": cf,
+                 "qiu": (planned / cf) if cf else 0,
+                 "piu": (prod / cf) if cf else 0,
+                 "name": r.name})
+            ppi_done += 1
+        except Exception:
+            frappe.log_error(frappe.get_traceback(),
+                             f"TOC back-fill failed for PPI {r.name}")
+    frappe.logger("chaizup_toc").info(f"PP Item back-fill: {ppi_done}/{len(ppi_rows)} rows stamped")
+
+    # ── 4. Production Plan Sub Assembly Item back-fill ─────────────────────
+    sub_rows = frappe.db.sql(
+        """SELECT name, production_item, required_qty, projected_qty, qty
+           FROM `tabProduction Plan Sub Assembly Item`
+           WHERE (custom_uom IS NULL OR custom_uom = '')
+             AND production_item IS NOT NULL""",
+        as_dict=True)
+    sub_done = 0
+    for r in sub_rows:
+        try:
+            uom, cf = pick(r.production_item)
+            req = float(r.required_qty or 0)
+            prj = float(r.projected_qty or 0)
+            qty = float(r.qty or 0)
+            frappe.db.sql(
+                """UPDATE `tabProduction Plan Sub Assembly Item` SET
+                       custom_uom = %(uom)s,
+                       custom_uom_conversion_factor = %(cf)s,
+                       custom_required_qty_in_uom  = %(riu)s,
+                       custom_projected_qty_in_uom = %(piu)s,
+                       custom_qty_to_order_in_uom  = %(oiu)s
+                   WHERE name = %(name)s""",
+                {"uom": uom, "cf": cf,
+                 "riu": (req / cf) if cf else 0,
+                 "piu": (prj / cf) if cf else 0,
+                 "oiu": (qty / cf) if cf else 0,
+                 "name": r.name})
+            sub_done += 1
+        except Exception:
+            frappe.log_error(frappe.get_traceback(),
+                             f"TOC back-fill failed for Sub Assembly {r.name}")
+    frappe.logger("chaizup_toc").info(
+        f"Sub Assembly back-fill: {sub_done}/{len(sub_rows)} rows stamped")
+
+    # ── 5. BOM back-fill ───────────────────────────────────────────────────
+    # 2026-05-19 — Also back-fills custom_created_time + custom_created_by
+    # so the BOM list view's Created On / Created By columns work on
+    # legacy records without waiting for next save.
+    bom_rows = frappe.db.sql(
+        """SELECT name, item, quantity, creation, owner
+           FROM `tabBOM`
+           WHERE (custom_uom IS NULL OR custom_uom = ''
+                  OR custom_created_time IS NULL
+                  OR custom_created_by IS NULL
+                  OR custom_created_by = '')
+             AND item IS NOT NULL""",
+        as_dict=True)
+    bom_done = 0
+    for r in bom_rows:
+        try:
+            uom, cf = pick(r.item)
+            q = float(r.quantity or 0)
+            frappe.db.sql(
+                """UPDATE `tabBOM` SET
+                       custom_uom = IFNULL(NULLIF(custom_uom, ''), %(uom)s),
+                       custom_uom_conversion_factor = COALESCE(NULLIF(custom_uom_conversion_factor, 0), %(cf)s),
+                       custom_qty_in_uom = COALESCE(NULLIF(custom_qty_in_uom, 0), %(qiu)s),
+                       custom_created_time = IFNULL(custom_created_time, %(creation)s),
+                       custom_created_by   = IFNULL(NULLIF(custom_created_by, ''), %(owner)s)
+                   WHERE name = %(name)s""",
+                {"uom": uom, "cf": cf,
+                 "qiu": (q / cf) if cf else 0,
+                 "creation": r.creation, "owner": r.owner,
+                 "name": r.name})
+            bom_done += 1
+        except Exception:
+            frappe.log_error(frappe.get_traceback(),
+                             f"TOC back-fill failed for BOM {r.name}")
+    frappe.logger("chaizup_toc").info(f"BOM back-fill: {bom_done}/{len(bom_rows)} rows stamped")
+
+    frappe.db.commit()
+    frappe.logger("chaizup_toc").info("=== TOC UOM Back-fill: complete ===")
+    return {"wo": wo_done, "ppi": ppi_done, "sub": sub_done, "bom": bom_done}
 
 
 def _create_dashboard_charts():

@@ -280,6 +280,31 @@ def create_work_order_from_kitting(item_code, qty, company, bom=None):
     wo.qty = qty
     wo.company = company
     wo.planned_start_date = today()
+    # 2026-05-18 — Stamp MRP from Item.custom_mrp on every auto-created WO.
+    # 2026-05-19 — Also stamp the UOM trio (custom_uom + CF + qty_in_uom)
+    # so the WO's "MRP & UOM" section is coherent on first paint.
+    # Defensive — older sites without fixtures may lack the field; skip silently.
+    try:
+        wo.custom_mrp = flt(frappe.db.get_value("Item", item_code, "custom_mrp") or 0)
+        wo.custom_mrp_source = "Auto from Item"
+        # Pick largest-CF non-stock UOM.
+        stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or ""
+        row = frappe.db.sql(
+            """
+            SELECT uom, conversion_factor
+            FROM `tabUOM Conversion Detail`
+            WHERE parent = %(item)s AND parenttype = 'Item'
+              AND uom != %(s)s
+              AND IFNULL(conversion_factor, 0) > 1
+            ORDER BY conversion_factor DESC LIMIT 1
+            """, {"item": item_code, "s": stock_uom}, as_dict=True)
+        if row:
+            wo.custom_uom = row[0].uom
+            wo.custom_uom_conversion_factor = flt(row[0].conversion_factor)
+            cf = flt(row[0].conversion_factor) or 1.0
+            wo.custom_qty_in_uom = flt(qty) / cf
+    except Exception:
+        pass
     wo.flags.ignore_permissions = True
     wo.insert()
     frappe.db.commit()

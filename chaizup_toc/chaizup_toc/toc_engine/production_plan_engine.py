@@ -553,6 +553,18 @@ def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, 
     # See `apps/erpnext/.../production_plan.json:411` for the label↔fieldname divergence.
     pp.skip_available_sub_assembly_item = 0
 
+    # 2026-05-18 — MRP propagation: stamp Item.custom_mrp + source on every
+    # auto-created PP row so downstream WOs and reports carry the MRP for
+    # free. Source = "Auto from Item" so operators see (and can change to
+    # Manual) the price in the form UI. Defensive try/except — if the
+    # field doesn't exist (older site without fixtures synced) we skip
+    # silently rather than blocking PP creation.
+    _mrp = 0.0
+    try:
+        _mrp = flt(frappe.db.get_value("Item", item_code, "custom_mrp") or 0)
+    except Exception:
+        pass
+
     pp.append("po_items", {
         "item_code": item_code,
         "qty": flt(qty),
@@ -562,6 +574,8 @@ def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, 
         "bom_no": bom_no or "",
         "warehouse": warehouse,
         "planned_start_date": today(),
+        "custom_mrp": _mrp,
+        "custom_mrp_source": "Auto from Item",
     })
 
     pp.flags.ignore_mandatory = True
@@ -674,6 +688,19 @@ def _submit_pp_and_create_work_orders(pp_name, toc_data=None):
                 f"PP material requirements fetch failed for {pp_name} — continuing to save",
             )
 
+        # ── Step 2.5: Stamp the new UOM custom fields on every child row ─────
+        # 2026-05-19 — populates custom_uom, custom_uom_conversion_factor,
+        # and the corresponding *_in_uom fields on po_items + sub_assembly_items
+        # so the row looks coherent on form-open even when the user has not
+        # explicitly picked a UOM. Defensive — never blocks PP save.
+        try:
+            _stamp_uom_fields_on_pp(pp_doc)
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(),
+                f"UOM-field stamp failed for {pp_name} — continuing to save",
+            )
+
         # ── Step 3: Save with sub-assemblies and material requirements ────────
         pp_doc.flags.ignore_mandatory = True
         pp_doc.save()
@@ -759,16 +786,417 @@ def _submit_pp_and_create_work_orders(pp_name, toc_data=None):
 #   - Do NOT load the full WO doc here — that triggers all WO validators.
 #   - Do NOT call frappe.db.commit() here — caller commits after this step.
 # =============================================================================
-def _stamp_toc_fields_on_work_orders(pp_name, toc_data=None):
+def _stamp_uom_fields_on_pp(pp_doc):
+    """
+    Stamp the chaizup_toc UOM custom fields on every po_items +
+    sub_assembly_items row of `pp_doc`. Idempotent + respects user choices.
+
+    Behaviour per row:
+       custom_uom                    — if BLANK, auto-pick item's largest-CF
+                                       UOM. If user already chose one, keep it.
+       custom_uom_conversion_factor  — always (re)computed from custom_uom
+       custom_qty_in_uom             — recomputed as planned_qty / CF
+                                       (po_items)
+       custom_required_qty_in_uom    — recomputed as required_qty / CF
+       custom_projected_qty_in_uom   — recomputed as projected_qty / CF
+       custom_qty_to_order_in_uom    — recomputed as qty / CF
+                                       (Qty to Order on sub_assembly_items)
+
+    Idempotent: safe to call on every PP save. Recomputes the *_in_uom
+    fields from the standard qty fields, so the displayed value stays in
+    sync after ERPNext writes (BOM explosion, "Get Sub-Assemblies" button,
+    scheduler back-fills). User-set custom_uom values are PRESERVED — we
+    only auto-pick when the field is blank.
+
+    2026-05-19 — refactored to be idempotent. Used to overwrite custom_uom
+    on every call which clobbered user choices.
+    """
+    # Collect all the item codes we need ladders for in a single batch.
+    item_codes = set()
+    for r in (pp_doc.get("po_items") or []):
+        if r.get("item_code"):
+            item_codes.add(r.item_code)
+    for r in (pp_doc.get("sub_assembly_items") or []):
+        if r.get("production_item"):
+            item_codes.add(r.production_item)
+    if not item_codes:
+        return
+
+    # Largest-CF UOM per item via one query.
+    ladders = frappe.db.sql(
+        """
+        SELECT parent AS item_code, uom, conversion_factor
+        FROM `tabUOM Conversion Detail`
+        WHERE parent IN %(c)s AND parenttype = 'Item'
+          AND IFNULL(conversion_factor, 0) > 0
+        ORDER BY conversion_factor DESC
+        """, {"c": tuple(item_codes)}, as_dict=True)
+    stock_uoms = {
+        r.name: r.stock_uom for r in frappe.db.sql(
+            """SELECT name, stock_uom FROM `tabItem` WHERE name IN %(c)s""",
+            {"c": tuple(item_codes)}, as_dict=True)
+    }
+    by_item = {}
+    for r in ladders:
+        by_item.setdefault(r.item_code, []).append(
+            (r.uom, flt(r.conversion_factor)))
+
+    def pick_default(item_code):
+        """Auto-pick: largest non-stock UOM; fall back to stock UOM if none."""
+        rows = by_item.get(item_code) or []
+        s_uom = stock_uoms.get(item_code) or ""
+        for uom, cf in rows:
+            if uom != s_uom and cf > 1.0:
+                return uom, cf
+        return s_uom, 1.0
+
+    def cf_for(item_code, uom):
+        """Look up CF for a specific (item, uom) — used when user has
+        already picked custom_uom and we just need its CF."""
+        for u, cf in (by_item.get(item_code) or []):
+            if u == uom:
+                return flt(cf)
+        return 1.0
+
+    # ── po_items (Items to Manufacture) ──────────────────────────────────
+    for r in (pp_doc.get("po_items") or []):
+        if not r.get("item_code"):
+            continue
+        if r.get("custom_uom"):
+            cf = cf_for(r.item_code, r.custom_uom) or 1.0
+        else:
+            uom, cf = pick_default(r.item_code)
+            r.custom_uom = uom
+        r.custom_uom_conversion_factor = flt(cf)
+        # Recompute in-UOM display from the (possibly updated) standard qty.
+        r.custom_qty_in_uom = (flt(r.planned_qty) / flt(cf)) if cf else 0
+        # 2026-05-19 — Produced Qty mirror (read-only). Standard
+        # `produced_qty` is updated by ERPNext when a Manufacture-purpose
+        # Stock Entry posts; we recompute the in-UOM display here.
+        r.custom_produced_qty_in_uom = (flt(r.produced_qty) / flt(cf)) if cf else 0
+
+    # ── sub_assembly_items ───────────────────────────────────────────────
+    for r in (pp_doc.get("sub_assembly_items") or []):
+        if not r.get("production_item"):
+            continue
+        if r.get("custom_uom"):
+            cf = cf_for(r.production_item, r.custom_uom) or 1.0
+        else:
+            uom, cf = pick_default(r.production_item)
+            r.custom_uom = uom
+        r.custom_uom_conversion_factor = flt(cf)
+        r.custom_required_qty_in_uom  = (flt(r.required_qty)  / flt(cf)) if cf else 0
+        r.custom_projected_qty_in_uom = (flt(r.projected_qty) / flt(cf)) if cf else 0
+        r.custom_qty_to_order_in_uom  = (flt(r.qty)           / flt(cf)) if cf else 0
+
+
+# =============================================================================
+# DOC EVENT — Production Plan validate
+#   Fires on every PP save (draft and submitted). Calls _stamp_uom_fields_on_pp
+#   so the TOC custom fields auto-populate based on the standard qty fields
+#   ERPNext has just written.
+#
+#   Common trigger paths covered:
+#     - User clicks "Get Sub-Assemblies" button → sub_assembly_items rows
+#       added → user clicks Save → validate fires → fields populated.
+#     - Engine auto-creates PP via _save_and_submit_production_plan → the
+#       explicit call at Step 2.5 still works (idempotent), AND the validate
+#       hook fires again on pp_doc.save() for belt-and-braces.
+#     - User manually edits a row → save → validate → fields stay in sync.
+#
+#   2026-05-19 — added per user requirement: "when user fetch sub assembly,
+#   the toc fields automatically update as per qty system populate".
+# =============================================================================
+def stamp_uom_fields_on_pp_validate(doc, method=None):
+    """Frappe doc_event hook called on Production Plan.validate."""
+    try:
+        _stamp_uom_fields_on_pp(doc)
+    except Exception:
+        # Never block a PP save because of UOM stamping. Log + continue.
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"UOM stamp failed for Production Plan {doc.name or '(new)'}",
+        )
+
+
+# =============================================================================
+# Generic UOM sync for single-doc forms (Work Order + BOM)
+#
+# CONTEXT: Bidirectional sync between the standard qty field and the TOC
+#   custom UOM trio (custom_uom + custom_uom_conversion_factor +
+#   custom_qty_in_uom). Forward (custom → standard) is handled by the JS
+#   controllers. Reverse (standard → custom) is handled here, server-side,
+#   on every validate. This catches:
+#     - User typed value in standard qty field (admin only — locked
+#       otherwise) — UI handler keeps custom in sync, validate confirms.
+#     - Programmatic writes by ERPNext / scripts / scheduler — UI handler
+#       doesn't fire here; validate is the only sync gate.
+#     - Form save after JS controller failed to load — validate ensures
+#       data is coherent regardless.
+#
+#   Idempotent + user-safe (mirrors _stamp_uom_fields_on_pp):
+#     - If custom_uom set: keep it, look up CF
+#     - If custom_uom blank AND production_item/item is set: auto-pick
+#       largest-CF non-stock UOM
+#     - custom_qty_in_uom always = standard_qty / CF
+#
+#   2026-05-19 — added per user requirement: "all custom uom and qty
+#   field should proper both ways or bidirectional sync with in build
+#   field. If the inbuild field some changes, the changes will don on
+#   the toc custom fields."
+# =============================================================================
+def _sync_uom_on_single_doc(doc, item_field, std_qty_field, qiu_field="custom_qty_in_uom",
+                             extra_mirrors=None):
+    """
+    Recompute the TOC UOM trio on `doc` based on the value of
+    `doc[std_qty_field]`. Works for any single-document form (WO, BOM)
+    where `doc[item_field]` is the production item.
+
+    `extra_mirrors` — optional list of (std_field, mirror_field) tuples to
+    additionally back-fill. Used by Work Order to mirror `produced_qty`
+    into `custom_produced_qty_in_uom`. Each mirror = std / CF.
+
+    Idempotent. Never overwrites a user-picked custom_uom; only auto-picks
+    when blank.
+    """
+    item_code = doc.get(item_field)
+    if not item_code:
+        return    # no item → can't look up a UOM ladder
+
+    std_qty = flt(doc.get(std_qty_field) or 0)
+
+    # Resolve the chosen UOM (or auto-pick).
+    custom_uom = (doc.get("custom_uom") or "").strip()
+    stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or ""
+
+    if custom_uom:
+        # User has a UOM picked. Look up its CF (might be 0 if user typed
+        # a UOM not in the item's ladder — defensive fallback to 1).
+        cf = flt(frappe.db.get_value(
+            "UOM Conversion Detail",
+            {"parent": item_code, "parenttype": "Item", "uom": custom_uom},
+            "conversion_factor",
+        ) or 1.0)
+    else:
+        # Auto-pick largest non-stock UOM. If none, fall back to stock.
+        row = frappe.db.sql(
+            """
+            SELECT uom, conversion_factor
+            FROM `tabUOM Conversion Detail`
+            WHERE parent = %(item)s AND parenttype = 'Item'
+              AND uom != %(s)s
+              AND IFNULL(conversion_factor, 0) > 1
+            ORDER BY conversion_factor DESC LIMIT 1
+            """, {"item": item_code, "s": stock_uom}, as_dict=True)
+        if row:
+            doc.custom_uom = row[0].uom
+            cf = flt(row[0].conversion_factor)
+        else:
+            # No alt UOM exists — leave custom_uom blank, CF=1.
+            cf = 1.0
+
+    doc.custom_uom_conversion_factor = cf
+    # Always recompute the in-UOM display from the (possibly updated)
+    # standard qty. This is the REVERSE sync direction.
+    doc.set(qiu_field, (std_qty / cf) if cf else 0)
+    # 2026-05-19 — extra mirrors (e.g., WO.produced_qty → WO.custom_produced_qty_in_uom)
+    for std_f, mirror_f in (extra_mirrors or []):
+        std_val = flt(doc.get(std_f) or 0)
+        doc.set(mirror_f, (std_val / cf) if cf else 0)
+
+
+def stamp_uom_fields_on_wo_validate(doc, method=None):
+    """
+    Frappe doc_event hook called on Work Order.validate.
+
+    Keeps WO.custom_uom + CF + custom_qty_in_uom in sync with the
+    standard `qty` field. Runs on every save (draft, submit, edits).
+
+    2026-05-19 — Also mirrors WO.produced_qty (label "Manufactured Qty")
+    into WO.custom_produced_qty_in_uom via the extra_mirrors arg.
+
+    2026-05-19 (later) — Also mirrors the SYSTEM fields `creation` and
+    `owner` into custom_created_time + custom_created_by. Reason: Frappe's
+    standard List View only renders columns from `meta.fields`; system
+    fields aren't there. The mirrors enter the pool as proper Custom
+    Fields and render as ordinary columns.
+    """
+    try:
+        _sync_uom_on_single_doc(doc,
+                                item_field="production_item",
+                                std_qty_field="qty",
+                                extra_mirrors=[
+                                    ("produced_qty", "custom_produced_qty_in_uom"),
+                                ])
+        # Mirror system fields → custom fields for list-view rendering
+        if doc.get("creation"):
+            doc.custom_created_time = doc.creation
+        if doc.get("owner"):
+            doc.custom_created_by = doc.owner
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"WO UOM stamp failed for {doc.name or '(new)'}",
+        )
+
+
+def refresh_produced_qty_mirrors(wo_name):
+    """
+    Recompute `custom_produced_qty_in_uom` on a Work Order AND on its
+    parent Production Plan Item row, using each row's own CF.
+
+    Called from the Stock Entry submit/cancel hook because ERPNext writes
+    `produced_qty` via direct `frappe.db.set_value` calls inside
+    `update_status` / `update_produced_qty`, which bypasses validate.
+    Without this refresh, the in-UOM mirror would lag behind the standard
+    field after a production entry posts.
+
+    Idempotent. Reads existing CF on each row; doesn't touch custom_uom.
+    """
+    if not wo_name:
+        return
+
+    # ── 1. Work Order mirror ──
+    try:
+        wo = frappe.db.get_value(
+            "Work Order", wo_name,
+            ["produced_qty", "custom_uom_conversion_factor",
+             "production_plan", "production_item"],
+            as_dict=True) or {}
+        cf = flt(wo.get("custom_uom_conversion_factor") or 0)
+        if cf > 0:
+            mirror = flt(wo.get("produced_qty") or 0) / cf
+            frappe.db.set_value(
+                "Work Order", wo_name,
+                "custom_produced_qty_in_uom", mirror,
+                update_modified=False)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"Produced-qty mirror refresh failed for WO {wo_name}",
+        )
+
+    # ── 2. Linked Production Plan Item rows ──
+    pp_name = (wo or {}).get("production_plan")
+    item_code = (wo or {}).get("production_item")
+    if not pp_name or not item_code:
+        return
+    try:
+        # ERPNext's PP Item.produced_qty is the SUM of WO.produced_qty for
+        # all WOs created from this PP row. After this Stock Entry posts
+        # against `wo_name`, ERPNext updates the PP Item row directly.
+        rows = frappe.db.sql("""
+            SELECT name, produced_qty, custom_uom_conversion_factor
+            FROM `tabProduction Plan Item`
+            WHERE parent = %(pp)s AND item_code = %(item)s
+        """, {"pp": pp_name, "item": item_code}, as_dict=True)
+        for r in rows:
+            cf = flt(r.custom_uom_conversion_factor or 0)
+            if cf > 0:
+                mirror = flt(r.produced_qty or 0) / cf
+                frappe.db.set_value(
+                    "Production Plan Item", r.name,
+                    "custom_produced_qty_in_uom", mirror,
+                    update_modified=False)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"Produced-qty mirror refresh failed for PP {pp_name}",
+        )
+
+
+def on_stock_entry_submit_refresh_produced(doc, method=None):
+    """
+    Frappe doc_event hook called on Stock Entry submit/cancel/amend.
+
+    When the Stock Entry is a Manufacture-purpose entry tied to a Work
+    Order, refresh the produced-qty mirror on that WO + its parent PP
+    row. ERPNext writes `produced_qty` outside the validate path, so this
+    hook is the only sync point on the production-entry side.
+
+    Idempotent + safe — wraps the refresh in try/except so a Stock Entry
+    submit never fails due to mirror recomputation.
+
+    2026-05-19 — added per user requirement: "On production entry this
+    should also update properly".
+    """
+    try:
+        # Only Manufacture-purpose Stock Entries write produced_qty.
+        # Material Issue / Receipt / Transfer entries don't.
+        purpose = (doc.get("stock_entry_type") or doc.get("purpose") or "")
+        if purpose not in ("Manufacture", "Material Transfer for Manufacture"):
+            # Material Transfer for Manufacture writes
+            # `material_transferred_for_manufacturing` — not produced_qty —
+            # but it still affects WO state so we touch the mirror as a
+            # belt-and-braces refresh (mirror is read from DB, not std_qty,
+            # so this is harmless if produced_qty hasn't changed).
+            if purpose != "Material Transfer for Manufacture":
+                return
+        wo_name = doc.get("work_order")
+        if wo_name:
+            refresh_produced_qty_mirrors(wo_name)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"Stock Entry produced-qty mirror hook failed for {doc.name}",
+        )
+
+
+def stamp_uom_fields_on_bom_validate(doc, method=None):
+    """
+    Frappe doc_event hook called on BOM.validate.
+
+    Keeps BOM.custom_uom + CF + custom_qty_in_uom in sync with the
+    standard `quantity` field.
+
+    2026-05-19 (later) — Also mirrors the SYSTEM fields `creation` and
+    `owner` into custom_created_time + custom_created_by. Same reason as
+    Work Order: standard List View can't render system fields directly,
+    so the mirrors enter meta.fields and become proper columns.
+    """
+    try:
+        _sync_uom_on_single_doc(doc,
+                                item_field="item",
+                                std_qty_field="quantity")
+        if doc.get("creation"):
+            doc.custom_created_time = doc.creation
+        if doc.get("owner"):
+            doc.custom_created_by = doc.owner
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"BOM UOM stamp failed for {doc.name or '(new)'}",
+        )
+
+
+def _stamp_toc_fields_on_work_orders(pp_name, toc_data=None, recorded_by="By System"):
     """
     Stamp TOC buffer metadata on all Work Orders produced by pp_name.
-    toc_data: buffer snapshot dict with keys zone/bp_pct/target_buffer/inventory_position/sr_pct.
+
+    toc_data:    buffer snapshot dict with keys zone/bp_pct/target_buffer/
+                 inventory_position/sr_pct. Set by the engine path for
+                 buffer-triggered PPs; left None for projection PPs and
+                 user-initiated PP→Make Work Order flows.
+    recorded_by: value to write into custom_toc_recorded_by.
+                 - "By System" (default): used by the engine auto-PP path
+                   (`_save_and_submit_production_plan`) — these WOs ARE
+                   system-created, and downstream PO/MR overrides gate on
+                   this value to recognise TOC-automation docs.
+                 - None: skip the recorded_by write entirely. Used by the
+                   user-initiated PP→Make Work Order override
+                   (`ChaizupProductionPlan.make_work_order`) — those WOs
+                   were spawned by a button click, not by the engine, so
+                   they should NOT be tagged "By System".
 
     2026-05-14: Also copies the PP's custom_creation_reason into every WO's
     `description` field (only if the WO description is blank — never overwrite
     a manually edited description) so any operator opening the WO can see the
     auto-creation rationale + the configured pending-status rule without
     drilling back into the parent Production Plan.
+
+    2026-05-19: Added `recorded_by` param so the user-initiated PP→WO
+    override can reuse this stamper for UOM + MRP defaults without
+    mis-tagging button-driven WOs as "By System".
     """
     wo_names = frappe.get_all(
         "Work Order",
@@ -778,7 +1206,9 @@ def _stamp_toc_fields_on_work_orders(pp_name, toc_data=None):
     if not wo_names:
         return
 
-    fields = {"custom_toc_recorded_by": "By System"}
+    fields = {}
+    if recorded_by:
+        fields["custom_toc_recorded_by"] = recorded_by
     if toc_data:
         fields.update({
             "custom_toc_zone":               toc_data.get("zone", ""),
@@ -809,7 +1239,55 @@ def _stamp_toc_fields_on_work_orders(pp_name, toc_data=None):
             auto_wo_description = pp_reason
 
     for wo_name in wo_names:
-        frappe.db.set_value("Work Order", wo_name, fields, update_modified=False)
+        # 2026-05-19 — Skip the buffer/recorded_by UPDATE entirely if `fields`
+        # is empty. Empty dict → empty SET clause → MySQL 1065 ("Query was
+        # empty") on `frappe.db.set_value`. Hit when this function is called
+        # by the user-initiated PP→Make Work Order override with
+        # `recorded_by=None` AND no toc_data — both are skipped so `fields`
+        # is `{}`. Without this guard the error propagates up and bypasses
+        # the inner UOM/MRP stamping inside the try block below.
+        if fields:
+            frappe.db.set_value("Work Order", wo_name, fields, update_modified=False)
+        # 2026-05-18 — MRP propagation: every auto-created WO gets MRP from
+        # its production_item. Source = "Auto from Item" so the WO form
+        # shows the value as read-only by default; user can switch to
+        # Manual to override.
+        # 2026-05-19 — Also stamp the UOM trio: custom_uom (largest-CF UOM
+        # of the production item), custom_uom_conversion_factor, and
+        # custom_qty_in_uom = qty / CF. Keeps the WO's new "MRP & UOM"
+        # section coherent on first paint.
+        try:
+            pi, wo_qty = frappe.db.get_value(
+                "Work Order", wo_name, ["production_item", "qty"]) or (None, 0)
+            if pi:
+                wo_mrp = flt(frappe.db.get_value("Item", pi, "custom_mrp") or 0)
+                # Pick largest-CF non-stock UOM from the item ladder.
+                stock_uom = frappe.db.get_value("Item", pi, "stock_uom") or ""
+                row = frappe.db.sql(
+                    """
+                    SELECT uom, conversion_factor
+                    FROM `tabUOM Conversion Detail`
+                    WHERE parent = %(item)s AND parenttype = 'Item'
+                      AND uom != %(s)s
+                      AND IFNULL(conversion_factor, 0) > 1
+                    ORDER BY conversion_factor DESC LIMIT 1
+                    """, {"item": pi, "s": stock_uom}, as_dict=True)
+                uom = row[0].uom if row else ""
+                cf  = flt(row[0].conversion_factor) if row else 1.0
+                frappe.db.set_value(
+                    "Work Order", wo_name,
+                    {
+                        "custom_mrp":                   wo_mrp,
+                        "custom_mrp_source":            "Auto from Item",
+                        "custom_uom":                   uom,
+                        "custom_uom_conversion_factor": cf,
+                        "custom_qty_in_uom":            (flt(wo_qty) / cf) if cf else 0,
+                    },
+                    update_modified=False,
+                )
+        except Exception:
+            # Don't block stamping if Custom Fields aren't synced yet.
+            pass
         if auto_wo_description:
             # Only stamp description when currently blank — preserve operator edits.
             current = frappe.db.get_value("Work Order", wo_name, "description") or ""

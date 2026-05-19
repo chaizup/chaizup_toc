@@ -1,0 +1,116 @@
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400..800&family=IBM+Plex+Mono:wght@400..600&display=swap"/>
+<link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator.min.css"/>
+<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+
+<!--
+=============================================================================
+CONTEXT: Item Projection View — page-level HTML scaffold.
+  Frappe Page loads this template once; the JS controller mounts dynamic
+  content (filters, banner, KPIs, Tabulator grid, drill-down dialog) into
+  the placeholders here. CSS is in item_projection_view.css; the JS file
+  drives every interaction (filter wiring, click-to-drill, XLSX, tooltips).
+
+MEMORY: app_chaizup_toc.md § Item Projection View
+
+INSTRUCTIONS:
+  - Keep this file thin. Nothing dynamic. Anything that depends on data
+    goes in the JS via `$page.find('#ipv-…')` selectors.
+  - Tabulator is loaded from CDN in JS so the page works on any bench
+    install without extra build steps.
+
+RESTRICT:
+  - Do NOT hard-code data here. Server is the only source.
+  - Do NOT remove any of the #ipv-* placeholders — the JS depends on them.
+=============================================================================
+-->
+<div class="ipv-root">
+  <div class="ipv-hero">
+    <div class="ipv-hero-grid" aria-hidden="true"></div>
+    <div class="ipv-hero-inner">
+      <div class="ipv-hero-left">
+        <div class="ipv-eyebrow">
+          <span class="ipv-eyebrow-dot"></span>
+          Chaizup TOC&nbsp;&nbsp;·&nbsp;&nbsp;Procurement &amp; Planning
+        </div>
+        <h1 class="ipv-title">Item Projection View</h1>
+        <div class="ipv-subtitle">
+          <span class="ipv-sub-formula">Stock</span>
+          <span class="ipv-sub-plus">+</span>
+          <span class="ipv-sub-formula">Will-Receive</span>
+          <span class="ipv-sub-minus">−</span>
+          <span class="ipv-sub-formula">Demand</span>
+          <span class="ipv-sub-rule"></span>
+          Hover any number for the formula. Click for vouchers.
+        </div>
+      </div>
+      <div class="ipv-hero-right">
+        <button class="ipv-btn ipv-btn-ghost ipv-btn-refresh" type="button">
+          <span class="ipv-btn-icon">↻</span>
+          <span>Refresh</span>
+        </button>
+        <button class="ipv-btn ipv-btn-primary ipv-btn-export" type="button">
+          <span class="ipv-btn-icon">⬇</span>
+          <span>Export XLSX</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ipv-banner-host" id="ipv-banner-host"></div>
+
+  <div class="ipv-filter-card">
+    <div class="ipv-filter-grid">
+      <div class="ipv-filter ipv-filter--company">
+        <label>Company</label>
+        <select id="ipv-filter-company"></select>
+      </div>
+      <div class="ipv-filter ipv-filter--items">
+        <label>Items</label>
+        <input id="ipv-filter-item" placeholder="Type item code / name and ↵"/>
+        <div class="ipv-chiplist" id="ipv-filter-item-chips"></div>
+      </div>
+      <div class="ipv-filter ipv-filter--groups">
+        <label>Item Groups</label>
+        <input id="ipv-filter-item-group" placeholder="Type group and ↵"/>
+        <div class="ipv-chiplist" id="ipv-filter-item-group-chips"></div>
+      </div>
+      <div class="ipv-filter ipv-filter--warehouses">
+        <label>Warehouses</label>
+        <input id="ipv-filter-warehouse" placeholder="Type warehouse and ↵"/>
+        <div class="ipv-chiplist" id="ipv-filter-warehouse-chips"></div>
+      </div>
+      <div class="ipv-filter ipv-filter--toggles">
+        <label class="ipv-toggle">
+          <input type="checkbox" id="ipv-filter-only-shortage"/>
+          <span>Only shortage rows</span>
+        </label>
+        <label class="ipv-toggle">
+          <input type="checkbox" id="ipv-filter-group-by" checked/>
+          <span>Group by Item Group</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="ipv-kpi-row" id="ipv-kpi-row"></div>
+
+  <div class="ipv-grid-host">
+    <div class="ipv-grid-overlay" id="ipv-grid-overlay">
+      <div class="ipv-spinner"></div>
+      <div class="ipv-overlay-text">Loading projection data…</div>
+    </div>
+    <div id="ipv-grid"></div>
+  </div>
+
+  <div class="ipv-footer">
+    <span id="ipv-row-count">—</span>
+    <span class="ipv-footer-spacer"></span>
+    <span class="ipv-footer-hint">
+      Tip: hover any number for the back-end formula. Click for vouchers.
+    </span>
+  </div>
+</div>

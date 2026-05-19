@@ -28,6 +28,8 @@ Chaizup TOC is a Theory-of-Constraints add-on for ERPNext that automates four jo
 | `/app/toc-production-plan-run-log` | Audit log of every automation run | DocType |
 | `/app/toc-user-guide` | End-user help (calculators, glossary, change log) | Page |
 | `/app/supply-chain-tracker` | End-to-end MR → RFQ → SQ → PO → PR / WO → JC pipeline | Page |
+| `/app/item-projection-view` | **Item Projection View** — Higher-UOM stock + inflows − demand grid; per-cell formula tooltip + voucher drill-down; branded multi-sheet XLSX (added 2026-05-18) | Page |
+| `/app/query-report/Production Indent Subs` | **Production Indent Subs** — per-WO bill of components for TOC-Pending WOs. Higher + stock UOM qty; FG identity, MRP, group; component identity, group; PP link. (added 2026-05-18) | Script Report |
 
 ---
 

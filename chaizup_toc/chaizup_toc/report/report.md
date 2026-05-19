@@ -1,13 +1,14 @@
 # report/ — Script Reports Index
 
-Four Script Reports covering the daily operational and analytical surface of the TOC Buffer Management system.
+Five Script Reports covering the daily operational and analytical surface of the TOC Buffer Management system.
 
 ```
 report/
 ├── production_priority_board/    ← Daily: what to produce (FG/SFG)
 ├── procurement_action_list/      ← Daily: what to buy (RM/PM)
 ├── buffer_status_report/         ← Historical: how has buffer health changed over time
-└── dbm_analysis_report/          ← Weekly: is DBM correctly auto-sizing buffers
+├── dbm_analysis_report/          ← Weekly: is DBM correctly auto-sizing buffers
+└── production_indent_subs/       ← Per-WO Bill of Components for TOC-Pending WOs (added 2026-05-18)
 ```
 
 > **Note (2026-05-14):** An "Item Shortage Dashboard" Script Report briefly

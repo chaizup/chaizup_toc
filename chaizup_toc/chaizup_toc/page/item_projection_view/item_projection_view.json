@@ -1,0 +1,16 @@
+{
+  "doctype": "Page",
+  "name": "item-projection-view",
+  "page_name": "item-projection-view",
+  "title": "Item Projection View",
+  "module": "Chaizup Toc",
+  "standard": "Yes",
+  "roles": [
+    {"role": "System Manager"},
+    {"role": "TOC Manager"},
+    {"role": "TOC User"},
+    {"role": "Stock Manager"},
+    {"role": "Purchase Manager"},
+    {"role": "Manufacturing Manager"}
+  ]
+}

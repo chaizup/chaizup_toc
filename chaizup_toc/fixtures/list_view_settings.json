@@ -1,0 +1,32 @@
+[
+ {
+  "allow_edit": 0,
+  "disable_auto_refresh": 0,
+  "disable_automatic_recency_filters": 0,
+  "disable_comment_count": 0,
+  "disable_count": 0,
+  "disable_scrolling": 0,
+  "disable_sidebar_stats": 0,
+  "docstatus": 0,
+  "doctype": "List View Settings",
+  "fields": "[{\"fieldname\": \"name\", \"label\": \"ID\"}, {\"fieldname\": \"production_item\", \"label\": \"Item To Manufacture\"}, {\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"custom_mrp\", \"label\": \"MRP\"}, {\"fieldname\": \"custom_qty_in_uom\", \"label\": \"Qty In UOM [TOC]\"}, {\"fieldname\": \"custom_uom\", \"label\": \"UOM [TOC]\"}, {\"fieldname\": \"custom_produced_qty_in_uom\", \"label\": \"Manufactured Qty in UOM [TOC]\"}, {\"fieldname\": \"production_plan\", \"label\": \"Production Plan ID\"}]",
+  "modified": "2026-05-20 00:37:41.504808",
+  "name": "Work Order",
+  "show_tags": 0
+ },
+ {
+  "allow_edit": 0,
+  "disable_auto_refresh": 0,
+  "disable_automatic_recency_filters": 0,
+  "disable_comment_count": 0,
+  "disable_count": 0,
+  "disable_scrolling": 0,
+  "disable_sidebar_stats": 0,
+  "docstatus": 0,
+  "doctype": "List View Settings",
+  "fields": "[{\"fieldname\": \"name\", \"label\": \"ID\"}, {\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"item\", \"label\": \"Item To Manufacture\"}, {\"fieldname\": \"custom_created_time\", \"label\": \"Created On\"}, {\"fieldname\": \"custom_created_by\", \"label\": \"Created By\"}, {\"fieldname\": \"is_active\", \"label\": \"Is Active ?\"}, {\"fieldname\": \"is_default\", \"label\": \"Is Default ?\"}]",
+  "modified": "2026-05-19 23:03:48.789502",
+  "name": "BOM",
+  "show_tags": 0
+ }
+]

@@ -1,6 +1,6 @@
 # page/ — Frappe Desk Pages
 
-Eight custom Frappe Desk Pages providing interactive operational interfaces beyond what Script Reports offer.
+Nine custom Frappe Desk Pages providing interactive operational interfaces beyond what Script Reports offer.
 
 ```
 page/
@@ -11,7 +11,8 @@ page/
 ├── supply_chain_tracker/      ← 7-stage supply chain Kanban pipeline
 ├── wo_kitting_planner/        ← Work Order kitting planner (7 tabs, WKP-001..033)
 ├── production_overview/       ← Production Overview (3 tabs: items / AI / charts)
-└── item_shortage_dashboard/   ← Item Shortage Dashboard — Tabulator grid, both-UOM cells, quick-filter chips, drill-down, branded XLSX export (added 2026-05-14)
+├── item_shortage_dashboard/   ← Item Shortage Dashboard — Tabulator grid, both-UOM cells, quick-filter chips, drill-down, branded XLSX export (added 2026-05-14)
+└── item_projection_view/      ← Item Projection View — Higher-UOM stock + inflows − demand grid; per-cell formula tooltip + voucher drill-down; branded multi-sheet XLSX (added 2026-05-18)
 ```
 
 ## Critical HTML Template Rule (affects ALL pages)

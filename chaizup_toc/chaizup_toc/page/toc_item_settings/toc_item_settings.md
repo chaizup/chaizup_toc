@@ -194,3 +194,8 @@ Select 1+ rows → **"⚡ Auto-Enable TOC"** button (yellow) → calls `bulk_aut
 **Sync Block — 2026-04-27** (previous session)
 - Multi-select bulk configure, Bulk Configure modal, `bulk_save_toc_settings` Python
 - Removed FG/SFG/RM/PM buffer type — replenishment mode from auto flags only
+
+**Sync Block — 2026-05-17 (boundary note, no code change)**
+- A separate, **unrelated** app named `stock_reconciliation_tracking` was added to this bench on 2026-05-17. It is **not connected to chaizup_toc** — no shared DocTypes, no shared hooks, no shared fields, no cross-reads, no cross-writes. The two apps share only the same bench and the same ERPNext core.
+- **No edits made to this page or to chaizup_toc** as part of that work. This entry exists only to prevent a future maintainer from assuming integration where none exists.
+- Restriction reaffirmed (pre-existing): do NOT add stock-reconciliation logic into this page. `toc_item_settings` is for TOC buffer configuration only.
