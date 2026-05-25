@@ -1109,29 +1109,41 @@ def on_stock_entry_submit_refresh_produced(doc, method=None):
     """
     Frappe doc_event hook called on Stock Entry submit/cancel/amend.
 
-    When the Stock Entry is a Manufacture-purpose entry tied to a Work
-    Order, refresh the produced-qty mirror on that WO + its parent PP
-    row. ERPNext writes `produced_qty` outside the validate path, so this
-    hook is the only sync point on the production-entry side.
+    When the Stock Entry is tied to a Work Order, refresh the produced-qty
+    mirror on that WO + its parent PP row. ERPNext writes `produced_qty`
+    outside the validate path (via direct frappe.db.set_value in
+    Work Order.update_status / update_produced_qty), so this hook is the
+    only sync point on the production-entry side.
 
     Idempotent + safe — wraps the refresh in try/except so a Stock Entry
     submit never fails due to mirror recomputation.
 
     2026-05-19 — added per user requirement: "On production entry this
     should also update properly".
+
+    2026-05-25 (v0.0.10) — Trigger logic SIMPLIFIED. Previous condition
+    only refreshed when stock_entry_type == "Manufacture" or "Material
+    Transfer for Manufacture". But:
+      - Custom Stock Entry Types named e.g. "Manufacture - Plant A" carry
+        the right purpose internally but failed the literal name check.
+      - The nested `if purpose != "Material Transfer for Manufacture":
+        return` was logically wrong — it always returned for unknown
+        purposes, including Manufacture-purpose entries with a custom
+        stock_entry_type name. This is the root cause of MFG-WO-2026-*
+        rows showing 0 or stale custom_produced_qty_in_uom while
+        produced_qty has advanced (e.g., WO 00309: produced_qty=5520,
+        mirror=78 corresponds to old produced_qty=4680 × cf=60).
+
+    The new condition: if doc.work_order is set, refresh. The mirror
+    computation reads CURRENT produced_qty from the DB, so it's harmless
+    to refresh on entries that didn't actually advance produced_qty (it
+    just re-writes the same value).
+
+    RESTRICT: do NOT re-add a purpose-name filter here. The work_order
+    field is itself the gate — it's only set on entries that affect WO
+    state. Any name-based filter risks reintroducing the same drift.
     """
     try:
-        # Only Manufacture-purpose Stock Entries write produced_qty.
-        # Material Issue / Receipt / Transfer entries don't.
-        purpose = (doc.get("stock_entry_type") or doc.get("purpose") or "")
-        if purpose not in ("Manufacture", "Material Transfer for Manufacture"):
-            # Material Transfer for Manufacture writes
-            # `material_transferred_for_manufacturing` — not produced_qty —
-            # but it still affects WO state so we touch the mirror as a
-            # belt-and-braces refresh (mirror is read from DB, not std_qty,
-            # so this is harmless if produced_qty hasn't changed).
-            if purpose != "Material Transfer for Manufacture":
-                return
         wo_name = doc.get("work_order")
         if wo_name:
             refresh_produced_qty_mirrors(wo_name)

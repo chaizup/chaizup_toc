@@ -1110,3 +1110,65 @@ The TOC formula already nets ITMWO, CURRSO, PRVSO into the planned qty — letti
 - New patch: chaizup_toc.patches.sync_property_setters (registered in patches.txt).
 - All five fixes verified by phase3_test.execute against MFG-PP-2026-00026 / 00027 + Email Queue row p3k9pa29nl.
 ```
+
+---
+
+## 2026-05-25 · v0.0.10 — `custom_produced_qty_in_uom` mirror correction
+
+### Bug
+`Work Order.custom_produced_qty_in_uom` (label "Manufactured Qty in UOM [TOC]") and `Production Plan Item.custom_produced_qty_in_uom` carried stale or zero values for many existing records despite `produced_qty` and `custom_uom_conversion_factor` being correct. Pre-fix sample on chaizup-erp dev (2026-05-25):
+
+| WO | produced_qty | cf | mirror BEFORE | expected |
+|---|---|---|---|---|
+| MFG-WO-2026-00309 | 5520 | 60 | 78 (stale @ prev=4680) | 92 |
+| MFG-WO-2026-00324 | 121000 | 1000 | 0 | 121 |
+| MFG-WO-2026-00326 | 237944 | 1000 | 0 | 237.944 |
+| MFG-WO-2026-00246 | 180 | 12 | 0 | 15 |
+| MFG-WO-2026-00311 | 72000 | 360 | 0 | 200 |
+
+### Two root causes
+
+1. **Stock Entry hook missed entries.** `on_stock_entry_submit_refresh_produced` had a literal-name purpose check:
+
+   ```python
+   purpose = (doc.get("stock_entry_type") or doc.get("purpose") or "")
+   if purpose not in ("Manufacture", "Material Transfer for Manufacture"):
+       if purpose != "Material Transfer for Manufacture":
+           return
+   ```
+
+   Sites with custom-named Stock Entry Types (e.g., "Manufacture - Plant A") failed the literal check, so the hook early-returned and the mirror was never refreshed. The nested `if`/`return` was logically redundant + made the case even worse — every purpose not in the two exact literals returned.
+
+2. **Install back-fill skipped populated rows.** `setup/install.py:522-554` updates WOs `WHERE custom_uom IS NULL OR custom_uom = ''`. Rows that already had a `custom_uom` but a stale mirror were never re-corrected on app update.
+
+### Fix
+
+**Hook rewrite** (this file, `on_stock_entry_submit_refresh_produced`): the trigger is now `if doc.work_order: refresh_produced_qty_mirrors(wo_name)`. The work_order field is itself the gate — it's only set on entries that affect WO state. The mirror computation reads CURRENT produced_qty from the DB, so it's harmless to refresh on entries that didn't actually advance produced_qty.
+
+**Migrate-time backfill** (`patches/v1_0/recompute_produced_qty_mirror.py`, registered in patches.txt): raw SQL UPDATE on every Work Order and Production Plan Item with `custom_uom_conversion_factor > 0`, regardless of docstatus / status. Runs once on next `bench migrate` (which fires automatically on every Frappe Cloud deploy).
+
+```sql
+UPDATE `tabWork Order`
+   SET custom_produced_qty_in_uom = produced_qty / custom_uom_conversion_factor,
+       custom_qty_in_uom          = qty          / custom_uom_conversion_factor
+ WHERE custom_uom_conversion_factor > 0;
+```
+
+### Restricted areas
+
+- **`on_stock_entry_submit_refresh_produced` MUST NOT re-add a purpose-name filter.** The `doc.work_order` gate is sufficient and works for any Stock Entry Type name (custom-named or canonical). Adding a name-based filter risks reintroducing the same drift on sites with non-canonical type names.
+- **`recompute_produced_qty_mirror` patch MUST NOT scope by docstatus or status.** Stopped / Cancelled / Completed WOs still appear in audit + ageing reports and need correct mirrors.
+- **MUST NOT use `frappe.get_doc().save()` in the patch.** That would fire `validate()` for thousands of rows and cascade-trigger TOC buffer recompute — minutes-long migrate. Raw SQL UPDATE is fast and side-effect-free.
+- **MUST NOT remove the patch entry from patches.txt after deploy.** Frappe's patch-runner uses patches.txt to track which patches have run; removing it could cause re-execution on sites that hadn't run it under its current name.
+
+### Verification (live, 2026-05-25)
+
+Ran `chaizup_toc.patches.v1_0.recompute_produced_qty_mirror.execute` on chaizup-erp dev site. All 6 known-bad WOs corrected. Sweep query:
+
+```sql
+SELECT COUNT(*) FROM `tabWork Order`
+ WHERE custom_uom_conversion_factor > 0
+   AND ABS((produced_qty / custom_uom_conversion_factor) - custom_produced_qty_in_uom) > 0.0001
+```
+
+Returns 0. Same for Production Plan Item. Patch is idempotent — re-running is a no-op.

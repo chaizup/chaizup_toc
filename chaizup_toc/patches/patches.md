@@ -41,6 +41,7 @@ Add a patch whenever you need to:
 1. Fix data created by a buggy earlier version (e.g., wrong field values in existing records)
 2. Migrate data from old schema to new schema (e.g., rename a field, split a field)
 3. Delete/recreate broken workspace/number-card configurations
+4. **Repair stale custom-field mirrors on existing records** (e.g., `v1_0/recompute_produced_qty_mirror.py` — fixes `Work Order.custom_produced_qty_in_uom` rows that drifted because of a hook bug + a too-narrow install back-fill predicate)
 
 Do NOT use patches for:
 - Changes expressible in DocType JSON (Frappe handles these via `bench migrate` → schema sync)

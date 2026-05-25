@@ -9,3 +9,4 @@ chaizup_toc.patches.sync_property_setters
 chaizup_toc.patches.v1_0.add_sales_projection_admin_role
 chaizup_toc.patches.v1_0.drop_item_buffer_type_field
 chaizup_toc.patches.v1_0.drop_toc_item_group_rule
+chaizup_toc.patches.v1_0.recompute_produced_qty_mirror
