@@ -42,6 +42,7 @@ Add a patch whenever you need to:
 2. Migrate data from old schema to new schema (e.g., rename a field, split a field)
 3. Delete/recreate broken workspace/number-card configurations
 4. **Repair stale custom-field mirrors on existing records** (e.g., `v1_0/recompute_produced_qty_mirror.py` — fixes `Work Order.custom_produced_qty_in_uom` rows that drifted because of a hook bug + a too-narrow install back-fill predicate)
+5. **Force-sync fixture changes that the INSERT-only fixture importer ignores** (e.g., `v1_0/sync_bom_list_view_settings.py`, `sync_property_setters.py` — Frappe's `install_fixtures` doesn't UPDATE existing rows, so any change to `list_view_settings.json` / `property_setter.json` needs a paired patch to land on existing sites)
 
 Do NOT use patches for:
 - Changes expressible in DocType JSON (Frappe handles these via `bench migrate` → schema sync)

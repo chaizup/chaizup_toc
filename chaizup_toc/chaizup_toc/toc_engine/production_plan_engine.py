@@ -1105,6 +1105,67 @@ def refresh_produced_qty_mirrors(wo_name):
         )
 
 
+def refresh_wo_batch_fields(wo_name):
+    """
+    v0.0.15 (2026-05-27) — Mirror the produced Batch's identity + dates
+    onto the Work Order's 4 list-view custom fields:
+        custom_batch_no            ← Batch.name
+        custom_manufacturing_date  ← Batch.manufacturing_date
+        custom_batch_date          ← DATE(Batch.creation)
+        custom_best_before_date    ← Batch.expiry_date
+
+    Single-batch-per-WO assumption (chaizup site policy — every WO's
+    Manufacture Stock Entry produces exactly one batch). If a WO ever
+    produces >1 batch, we pick the EARLIEST one by Batch.creation so
+    the displayed values are stable across the WO's lifetime.
+
+    Reads from `tabBatch` where `reference_doctype = "Work Order"`
+    AND `reference_name = wo_name`. Frappe's standard manufacturing
+    flow writes this reference on every batch auto-created from a
+    Manufacture Stock Entry — see ERPNext's
+    `serial_and_batch_bundle.SerialandBatchBundle.create_batch_no` and
+    the auto-generated Batch from `stock_entry.update_work_order`.
+
+    Idempotent — re-running on a WO with already-mirrored values is a
+    no-op (frappe.db.set_value short-circuits identical writes).
+
+    RESTRICT:
+        - The single-batch assumption is a SITE POLICY. If chaizup ever
+          allows >1 batch per WO, this function must change to write a
+          comma-separated list OR show the latest batch. Don't silently
+          aggregate (e.g., MIN/MAX dates) — losing batch identity breaks
+          the audit chain.
+        - Don't change `reference_doctype = "Work Order"` to a different
+          join (e.g., via Stock Entry Detail). ERPNext's Batch reference
+          is the canonical "this batch was born from this WO" link.
+    """
+    if not wo_name:
+        return
+    try:
+        row = frappe.db.sql("""
+            SELECT name, manufacturing_date, expiry_date, DATE(creation) AS batch_date
+              FROM `tabBatch`
+             WHERE reference_doctype = 'Work Order'
+               AND reference_name = %(wo)s
+             ORDER BY creation ASC
+             LIMIT 1
+        """, {"wo": wo_name}, as_dict=True)
+        if not row:
+            return  # no batch yet — WO hasn't manufactured anything
+        b = row[0]
+        frappe.db.set_value("Work Order", wo_name, {
+            "custom_batch_no":           b["name"],
+            "custom_manufacturing_date": b["manufacturing_date"],
+            "custom_batch_date":         b["batch_date"],
+            "custom_best_before_date":   b["expiry_date"],
+        }, update_modified=False)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"WO batch-fields refresh failed for {wo_name}",
+        )
+
+
 def on_stock_entry_submit_refresh_produced(doc, method=None):
     """
     Frappe doc_event hook called on Stock Entry submit/cancel/amend.
@@ -1147,6 +1208,10 @@ def on_stock_entry_submit_refresh_produced(doc, method=None):
         wo_name = doc.get("work_order")
         if wo_name:
             refresh_produced_qty_mirrors(wo_name)
+            # v0.0.15 — also refresh the 4 batch-identity custom fields
+            # so the list view's Batch No / Manufacture Date / Batch Date /
+            # Best Before columns stay in sync with the produced Batch row.
+            refresh_wo_batch_fields(wo_name)
     except Exception:
         frappe.log_error(
             frappe.get_traceback(),

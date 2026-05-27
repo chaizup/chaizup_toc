@@ -9,8 +9,8 @@
   "disable_sidebar_stats": 0,
   "docstatus": 0,
   "doctype": "List View Settings",
-  "fields": "[{\"fieldname\": \"name\", \"label\": \"ID\"}, {\"fieldname\": \"production_item\", \"label\": \"Item To Manufacture\"}, {\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"custom_mrp\", \"label\": \"MRP\"}, {\"fieldname\": \"custom_qty_in_uom\", \"label\": \"Qty In UOM [TOC]\"}, {\"fieldname\": \"custom_uom\", \"label\": \"UOM [TOC]\"}, {\"fieldname\": \"custom_produced_qty_in_uom\", \"label\": \"Manufactured Qty in UOM [TOC]\"}, {\"fieldname\": \"production_plan\", \"label\": \"Production Plan ID\"}]",
-  "modified": "2026-05-20 00:37:41.504808",
+  "fields": "[{\"fieldname\": \"name\", \"label\": \"ID\"}, {\"fieldname\": \"production_item\", \"label\": \"Item To Manufacture\"}, {\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Work Order Actual Status\"}, {\"fieldname\": \"custom_mrp\", \"label\": \"MRP\"}, {\"fieldname\": \"qty\", \"label\": \"Qty\"}, {\"fieldname\": \"custom_qty_in_uom\", \"label\": \"Qty In UOM [TOC]\"}, {\"fieldname\": \"custom_uom\", \"label\": \"UOM [TOC]\"}, {\"fieldname\": \"custom_produced_qty_in_uom\", \"label\": \"Manufactured Qty in UOM [TOC]\"}, {\"fieldname\": \"custom_created_time\", \"label\": \"Created On\"}, {\"fieldname\": \"custom_created_by\", \"label\": \"Created By\"}, {\"fieldname\": \"custom_batch_no\", \"label\": \"Batch No\"}, {\"fieldname\": \"custom_manufacturing_date\", \"label\": \"Manufacture Date\"}, {\"fieldname\": \"custom_batch_date\", \"label\": \"Batch Date\"}, {\"fieldname\": \"custom_best_before_date\", \"label\": \"Best Before Date\"}, {\"fieldname\": \"custom_product_life_days\", \"label\": \"Product Life [Days]\"}]",
+  "modified": "2026-05-27 00:00:00.000000",
   "name": "Work Order",
   "show_tags": 0
  },
@@ -24,8 +24,8 @@
   "disable_sidebar_stats": 0,
   "docstatus": 0,
   "doctype": "List View Settings",
-  "fields": "[{\"fieldname\": \"name\", \"label\": \"ID\"}, {\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"item\", \"label\": \"Item To Manufacture\"}, {\"fieldname\": \"custom_created_time\", \"label\": \"Created On\"}, {\"fieldname\": \"custom_created_by\", \"label\": \"Created By\"}, {\"fieldname\": \"is_active\", \"label\": \"Is Active ?\"}, {\"fieldname\": \"is_default\", \"label\": \"Is Default ?\"}]",
-  "modified": "2026-05-19 23:03:48.789502",
+  "fields": "[{\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"item\", \"label\": \"Item To Manufacture\"}, {\"fieldname\": \"custom_created_time\", \"label\": \"Created On\"}, {\"fieldname\": \"custom_created_by\", \"label\": \"Created By\"}, {\"fieldname\": \"is_active\", \"label\": \"Is Active ?\"}, {\"fieldname\": \"is_default\", \"label\": \"Is Default ?\"}]",
+  "modified": "2026-05-27 00:00:00.000000",
   "name": "BOM",
   "show_tags": 0
  }
