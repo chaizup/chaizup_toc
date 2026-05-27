@@ -175,13 +175,53 @@ RESTRICT
                    class="text-primary">${esc}</a>`;
     };
 
+    // v0.0.21 — Production Plan cell → button-styled hyperlink that opens
+    // the linked PP in a new tab. Renders in COLUMN 2 (Production Plan ID,
+    // which is the second column per the v0.0.18 layout — the spec said
+    // "first column" but column 1 is `name` which the framework reserves
+    // for the WO's own ID; "Production Plan ID" at column 2 is the actual
+    // PP column the user means).
+    //
+    // Empty cells get a muted "—" so the operator sees at-a-glance which
+    // WOs have no PP (those are the manual ones, surfaceable via the
+    // "Has Production Plan?" filter chip from v0.0.19).
+    //
+    // RESTRICT:
+    //   - Keep `target="_blank"` + `rel="noopener"` (same as batch hyperlink).
+    //   - The button-styled class (btn btn-xs btn-default) makes it visually
+    //     distinct from the plain text Batch No hyperlink. Don't downgrade
+    //     to a plain anchor — the user explicitly asked for a BUTTON.
+    //   - URL-encode the PP name because it may contain slashes / colons
+    //     in some site naming series.
+    const fmt_pp_button = (value) => {
+        if (!value) return `<span class="text-muted">—</span>`;
+        const esc = frappe.utils.escape_html(String(value));
+        return `<a href="/app/production-plan/${encodeURIComponent(value)}"
+                   target="_blank"
+                   rel="noopener"
+                   class="btn btn-xs btn-default"
+                   style="font-family: var(--font-stack-monospace); white-space: nowrap;"
+                   title="${esc} — opens in new tab">
+                    <svg style="width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px;"
+                         fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                    </svg>${esc}
+                </a>`;
+    };
+
     frappe.listview_settings[dt] = Object.assign({}, existing, {
+        // v0.0.21 — add `production_plan` to add_fields so the PP-button
+        // formatter has the value to render (production_plan is the
+        // second column per v0.0.18, but its cell formatter needs the
+        // field explicitly fetched).
         add_fields: ["status", "workflow_state", "qty", "item_name",
-                     "creation", "owner"],
+                     "production_plan", "creation", "owner"],
         get_indicator: combined_indicator,
         formatters: Object.assign({}, existing.formatters || {}, {
             production_item: fmt_item_code_and_name,
             custom_batch_no: fmt_batch_no_link,
+            production_plan: fmt_pp_button,
         }),
         // v0.0.16 — onload: scope the standard-filter chips for `status`
         // and `workflow_state` to the values that actually exist on Work
@@ -251,6 +291,85 @@ RESTRICT
             };
             scope_filter("status",         WO_STATUSES);
             scope_filter("workflow_state", WF_STATES);
+
+            // v0.0.20 — LIVE Item Group filter (replaces the broken v0.0.15
+            // stale-snapshot custom_item_group field).
+            //
+            // CORRECTNESS REQUIREMENT (filter accuracy principle):
+            //   Filters MUST reflect CURRENT state, never snapshot. v0.0.15's
+            //   fetch_from approach captured Item.item_group at WO save time,
+            //   so changing the Item's group later left old WOs filtering
+            //   under the OLD group. v0.0.20 resolves Item Group at query
+            //   time against the live tabItem rows — zero drift possible.
+            //
+            // IMPLEMENTATION:
+            //   1. Add a custom toolbar button "Filter by Item Group" that
+            //      opens a Link field picker for Item Group.
+            //   2. On selection, query the live tabItem table for all items
+            //      currently in that group (frappe.db.get_list).
+            //   3. Apply the result as a `production_item in [...]` filter
+            //      on the WO list, which is server-side fast (production_item
+            //      is indexed) and ALWAYS reflects current Item Group
+            //      membership.
+            //
+            // RESTRICT:
+            //   - DO NOT add a stored mirror field to back this filter. The
+            //     whole point is liveness. See memory:feedback_filter_accuracy_principle.
+            //   - DO NOT cache the item-code resolution. Item.item_group
+            //     reclassifications must propagate to the filter immediately.
+            //   - DO NOT remove the button on subsequent refreshes — Frappe
+            //     re-renders the toolbar on each list update; the page-level
+            //     once-flag below guards against duplicate buttons.
+            const setup_item_group_filter = () => {
+                if (!listview.page || listview.__chaizup_ig_filter_setup) return;
+                listview.__chaizup_ig_filter_setup = true;
+
+                listview.page.add_inner_button(__("Filter by Item Group"), () => {
+                    const d = new frappe.ui.Dialog({
+                        title: __("Filter by Item Group (live)"),
+                        fields: [
+                            {
+                                fieldtype: "Link", fieldname: "item_group",
+                                label: __("Item Group"), options: "Item Group",
+                                reqd: 1,
+                                description: __("Resolves to all items currently in this group. Filter reflects CURRENT Item Group membership, never a saved snapshot."),
+                            },
+                        ],
+                        primary_action_label: __("Apply filter"),
+                        primary_action: (values) => {
+                            d.hide();
+                            // Live query — never cached, always current.
+                            frappe.db.get_list("Item", {
+                                filters: { item_group: values.item_group },
+                                fields: ["name"],
+                                limit: 0,        // no limit — all matching items
+                            }).then(items => {
+                                const codes = (items || []).map(i => i.name);
+                                if (!codes.length) {
+                                    frappe.show_alert({
+                                        message: __("No items currently in Item Group {0}", [values.item_group]),
+                                        indicator: "orange",
+                                    });
+                                    return;
+                                }
+                                // Apply as an `in` filter on production_item.
+                                // listview.filter_area.add() adds to the chip
+                                // strip + triggers a list refresh.
+                                listview.filter_area.add([
+                                    [dt, "production_item", "in", codes],
+                                ]);
+                                frappe.show_alert({
+                                    message: __("Filtered to {0} items in Item Group {1}",
+                                                [codes.length, values.item_group]),
+                                    indicator: "green",
+                                });
+                            });
+                        },
+                    });
+                    d.show();
+                });
+            };
+            setup_item_group_filter();
         },
     });
 })();
