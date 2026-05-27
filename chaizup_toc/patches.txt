@@ -17,3 +17,5 @@ chaizup_toc.patches.v1_0.sync_wo_column_widths
 chaizup_toc.patches.v1_0.wo_batch_columns_and_filters
 chaizup_toc.patches.v1_0.wo_product_life_and_filter_scope
 chaizup_toc.patches.v1_0.bom_list_polish
+chaizup_toc.patches.v1_0.wo_uom_required_and_pp_column
+chaizup_toc.patches.v1_0.wo_pp_filter_chips

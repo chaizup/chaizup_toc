@@ -150,7 +150,14 @@ doc_events = {
         # 2026-05-19 — bidirectional UOM sync: recompute custom_uom/CF/
         # custom_qty_in_uom from the standard `qty` field. Catches
         # programmatic writes that don't go through the JS controller.
-        "validate":  "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_uom_fields_on_wo_validate",
+        # v0.0.19 — chained list: UOM stamp first, then has_pp mirror.
+        # Both are derived-field writes; safe to chain in any order, but
+        # UOM-first matches the visual order (UOM section is above
+        # production_plan in the form).
+        "validate": [
+            "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_uom_fields_on_wo_validate",
+            "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_has_pp_on_wo_validate",
+        ],
         # 2026-05-27 (v0.0.17) — sync BOM.custom_wo_count after WO state
         # changes. Hooked on after_insert / on_cancel / on_trash.
         # Idempotent — recomputes from a SELECT COUNT(*), never just +/-1.

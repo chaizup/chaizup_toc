@@ -1040,6 +1040,48 @@ def stamp_uom_fields_on_wo_validate(doc, method=None):
         )
 
 
+def stamp_has_pp_on_wo_validate(doc, method=None):
+    """
+    v0.0.19 (2026-05-27) — Keep `Work Order.custom_has_pp` in sync with
+    the standard `production_plan` field. Fires on every WO validate.
+
+        production_plan set   → custom_has_pp = "Yes"
+        production_plan empty → custom_has_pp = "No"
+
+    Why this hook exists:
+        Frappe's standard-filter chip on a Link field (production_plan)
+        renders as an autocomplete search box, not as "is set / is not
+        set" toggles. To give operators a one-click "WOs without PP"
+        filter, we need a SELECT mirror — custom_has_pp ("Yes"/"No") —
+        backed by a chip that defaults to a 2-option dropdown.
+
+        custom_has_pp is system-managed (read_only=1 + hidden=1 on the
+        form). This validate hook is the single write path that keeps
+        the mirror coherent with the source field on every save.
+
+    Idempotent — re-running on a WO with already-correct custom_has_pp
+    is harmless (overwrites the same value).
+
+    RESTRICT:
+        - DO NOT remove this hook. Without it, custom_has_pp goes stale
+          the moment a user clears or sets production_plan on an
+          existing WO, and the filter chip returns wrong results.
+        - DO NOT change the option strings from "Yes"/"No". Operators'
+          Saved Reports + browser-bookmarked filter URLs encode these
+          strings literally; renaming would break their links.
+        - DO NOT make custom_has_pp editable by removing read_only=1.
+          It's a DERIVED field; any manual write would drift from the
+          source-of-truth (production_plan).
+    """
+    try:
+        doc.custom_has_pp = "Yes" if (doc.get("production_plan") or "").strip() else "No"
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"WO has_pp stamp failed for {doc.name or '(new)'}",
+        )
+
+
 def refresh_produced_qty_mirrors(wo_name):
     """
     Recompute `custom_produced_qty_in_uom` on a Work Order AND on its
