@@ -150,15 +150,20 @@ This applies to BOTH `List View Settings` and `Property Setter`. Editing the JSO
 
 When in doubt: write a patch that `frappe.db.set_value`s the changed columns on the affected row(s), commit, register in `patches.txt`.
 
-## BOM list-view column ordering (2026-05-27, v0.0.11)
+## BOM list-view 8-column layout (2026-05-27, v0.0.17 — supersedes v0.0.11)
 
-The BOM List View Settings fixture defines 6 columns:
-1. **Status** (synthetic `{"type": "Status"}` → renders the colored Active/Default/Template/Not-active pill from ERPNext's `get_indicator` callback)
-2. Item To Manufacture (`item`)
-3. Created On (`custom_created_time`)
-4. Created By (`custom_created_by`)
-5. Is Active ? (`is_active`)
-6. Is Default ? (`is_default`)
+| # | Column | Field | Notes |
+|---|---|---|---|
+| 1 | ID | `name` | docname |
+| 2 | **Status** (coloured pill) | `status_field` (synthetic) | ERPNext `get_indicator` — Template / Default / Active / Not active |
+| 3 | Item To Manufacture | `item` | rendered as `<bold>code</bold> : <muted>item_name</muted>` via JS formatter |
+| 4 | Is Active ? | `is_active` | |
+| 5 | Is Default ? | `is_default` | |
+| 6 | Created By | `owner` | framework column |
+| 7 | Created On | `creation` | framework column |
+| 8 | **Work Orders** (hyperlink) | `custom_wo_count` | Int Custom Field, count of non-cancelled WOs (`docstatus < 2`); cell hyperlinks to `/app/work-order/view/list?bom_no=<bom>` (new tab) |
+
+`custom_wo_count` auto-maintained via doc_events on Work Order: `after_insert` + chained `on_cancel` + `on_trash`. Refresh helper is SSOT (`SELECT COUNT(*)` recount, never +1/-1). Backfilled once for historical BOMs (173 of 647 had ≥1 WO on chaizup-erp 2026-05-27).
 
 ## CRITICAL — List view vs Report view (lesson learned 2026-05-27, v0.0.13)
 
@@ -169,7 +174,7 @@ Before changing list-view appearance, verify the doctype's `default_view` Proper
 | Doctype | default_view | Reasoning |
 |---|---|---|
 | **Work Order** | `List` (flipped from Report in v0.0.13) | combined "Work Order Actual Status" pill only renders in List view |
-| **BOM** | `Report` (intentional) | sortable BOM navigator workflow benefits from tabular sort |
+| **BOM** | `List` (flipped from Report in v0.0.17) | combined "code : name" formatter on item + Work Orders count hyperlink only render in List view |
 
 ## Work Order list-view columns + combined indicator (2026-05-27, v0.0.12)
 

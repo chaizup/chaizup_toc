@@ -24,7 +24,7 @@
   "disable_sidebar_stats": 0,
   "docstatus": 0,
   "doctype": "List View Settings",
-  "fields": "[{\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"item\", \"label\": \"Item To Manufacture\"}, {\"fieldname\": \"custom_created_time\", \"label\": \"Created On\"}, {\"fieldname\": \"custom_created_by\", \"label\": \"Created By\"}, {\"fieldname\": \"is_active\", \"label\": \"Is Active ?\"}, {\"fieldname\": \"is_default\", \"label\": \"Is Default ?\"}]",
+  "fields": "[{\"fieldname\": \"name\", \"label\": \"ID\"}, {\"type\": \"Status\", \"fieldname\": \"status_field\", \"label\": \"Status\"}, {\"fieldname\": \"item\", \"label\": \"Item To Manufacture\"}, {\"fieldname\": \"is_active\", \"label\": \"Is Active ?\"}, {\"fieldname\": \"is_default\", \"label\": \"Is Default ?\"}, {\"fieldname\": \"owner\", \"label\": \"Created By\"}, {\"fieldname\": \"creation\", \"label\": \"Created On\"}, {\"fieldname\": \"custom_wo_count\", \"label\": \"Work Orders\"}]",
   "modified": "2026-05-27 00:00:00.000000",
   "name": "BOM",
   "show_tags": 0

@@ -1105,6 +1105,81 @@ def refresh_produced_qty_mirrors(wo_name):
         )
 
 
+def refresh_bom_wo_count(bom_name):
+    """
+    v0.0.17 (2026-05-27) — Recompute `BOM.custom_wo_count` for a single BOM
+    by counting non-cancelled Work Orders that reference it.
+
+    Single-source-of-truth (SSOT) recompute: always `SELECT COUNT(*)`,
+    never +1/-1. Idempotent — re-running on the same BOM is a no-op
+    when the count hasn't changed.
+
+    NOT-cancelled = docstatus < 2. We count Drafts (docstatus=0) AND
+    Submitted (docstatus=1) because "Work Orders this BOM is being used in"
+    operationally means anything not yet cancelled. Cancelled WOs are
+    historic and should not inflate the count.
+
+    Wrapped in try/except — never block the calling lifecycle hook
+    (after_insert / on_cancel / on_trash) due to a count refresh failure.
+
+    RESTRICT:
+        - Don't change docstatus < 2 to docstatus = 1. Draft WOs are
+          legitimately "in progress" from the BOM's POV.
+        - Don't use frappe.db.count("Work Order", {"bom_no": x}) — same
+          semantics but the SQL approach is cheaper at scale (no doc-
+          level meta resolution).
+        - Don't write update_modified=True. The BOM's modified stamp
+          should reflect editorial changes (BOM rev), not derived-field
+          recomputes. Same convention as refresh_produced_qty_mirrors.
+    """
+    if not bom_name:
+        return
+    try:
+        cnt = frappe.db.sql(
+            "SELECT COUNT(*) FROM `tabWork Order` WHERE bom_no = %s AND docstatus < 2",
+            (bom_name,)
+        )[0][0]
+        frappe.db.set_value("BOM", bom_name, "custom_wo_count", int(cnt or 0),
+                            update_modified=False)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"BOM custom_wo_count refresh failed for {bom_name}",
+        )
+
+
+def refresh_bom_wo_count_for_wo(doc, method=None):
+    """
+    v0.0.17 (2026-05-27) — Frappe doc_event wrapper.
+
+    Called from Work Order's after_insert + on_trash hooks. Refreshes
+    BOM.custom_wo_count for the doc's bom_no AND (on amend / cancel)
+    for any previous bom_no the WO might have referenced.
+
+    The "previous bom_no" check is needed because a WO can be cancelled
+    and re-amended pointing at a different BOM — the original BOM's
+    count would then over-report if we only refreshed the current one.
+    Frappe stores the pre-change snapshot in doc.get_doc_before_save()
+    BUT only during validate; on cancel/insert/trash we don't have it.
+    Pragmatic fallback: refresh ONLY the current bom_no, accept the
+    rare-edge-case staleness, document it.
+
+    RESTRICT: don't add expensive cross-BOM refresh logic here — the
+    cron-style refresh in patches/v1_0/bom_list_polish.py covers the
+    full re-count if drift ever appears.
+    """
+    try:
+        bom_no = (doc.get("bom_no") if hasattr(doc, "get") else None) or \
+                 getattr(doc, "bom_no", None)
+        if bom_no:
+            refresh_bom_wo_count(bom_no)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"refresh_bom_wo_count_for_wo failed for {getattr(doc, 'name', '?')}",
+        )
+
+
 def refresh_wo_batch_fields(wo_name):
     """
     v0.0.15 (2026-05-27) — Mirror the produced Batch's identity + dates

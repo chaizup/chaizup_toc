@@ -140,12 +140,24 @@ doc_events = {
     # Work Order changes → WIP changes → FG buffer impact
     "Work Order": {
         "on_submit": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
-        "on_cancel": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
+        # v0.0.17 — on_cancel chained list: buffer recompute first, then
+        # BOM count refresh. Frappe iterates the list in order.
+        "on_cancel": [
+            "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
+            "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.refresh_bom_wo_count_for_wo",
+        ],
         "on_update_after_submit": "chaizup_toc.toc_engine.buffer_calculator.on_supply_change",
         # 2026-05-19 — bidirectional UOM sync: recompute custom_uom/CF/
         # custom_qty_in_uom from the standard `qty` field. Catches
         # programmatic writes that don't go through the JS controller.
         "validate":  "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.stamp_uom_fields_on_wo_validate",
+        # 2026-05-27 (v0.0.17) — sync BOM.custom_wo_count after WO state
+        # changes. Hooked on after_insert / on_cancel / on_trash.
+        # Idempotent — recomputes from a SELECT COUNT(*), never just +/-1.
+        # The on_cancel hook list below registers TWO handlers; Frappe
+        # accepts a list and calls each in order.
+        "after_insert": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.refresh_bom_wo_count_for_wo",
+        "on_trash":     "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.refresh_bom_wo_count_for_wo",
     },
     # Purchase Order → on_order changes → RM buffer impact
     # before_insert → copy TOC metadata from source Material Request (if TOC-generated)
