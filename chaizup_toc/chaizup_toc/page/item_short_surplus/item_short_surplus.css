@@ -1,0 +1,1680 @@
+/*
+============================================================================
+CONTEXT: Item Short / Surplus — page CSS.
+  Native Frappe Desk aesthetic — uses Frappe CSS variables (--bg-color,
+  --border-color, --text-color, etc.) so the page picks up theme changes
+  (dark mode, custom themes) automatically.
+
+  RESPONSIVE: filter bar wraps + collapses on narrow viewports; table
+  uses Tabulator's horizontal scroll for column overflow. Headers stay
+  sticky on vertical scroll (position: sticky on tabulator-header).
+
+  WORD WRAP: every cell wraps at the word boundary (white-space: normal
+  + word-break: break-word). Same for header cells — no truncation, no
+  ellipsis, every word is important per spec.
+
+RESTRICT:
+  - Don't pin column widths in pixels in this file. Tabulator's column
+    defs (in the JS) own width logic; CSS only handles padding + wrap.
+  - Don't hide the .iss-grid-host overflow — sticky header needs it
+    visible so Tabulator's inner scroll container behaves.
+============================================================================
+*/
+
+/* v0.0.36 r2 — explicit-height layout instead of flex (flex column
+   was clipping the filter bar to a sliver). The grid-host height
+   switches based on whether the filter bar is collapsed. */
+.iss-root {
+    padding: 12px 16px 16px 16px;
+    background: var(--bg-color, #f8fafc);
+    min-height: calc(100vh - 100px);
+    /* Material-3-style typography baseline */
+    font-family: var(--font-stack, "Inter", system-ui, sans-serif);
+    color: #0f172a;
+}
+
+/* ── Filter bar ────────────────────────────────────────────────────────── */
+.iss-filter-bar {
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: var(--border-radius-md, 8px);
+    padding: 12px;
+    margin-bottom: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* v0.0.36 r2 — instant hide. Flex max-height animations were clipping
+   the bar to a sliver in some browsers. display:none is bulletproof. */
+.iss-filter-bar.iss-filter-bar--collapsed { display: none !important; }
+
+/* Toggle row + button — now hosts the font-size picker (left) and the
+   filter-bar collapse toggle (right). */
+.iss-filter-toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+/* v0.0.36 — Font-size picker. Three "A" buttons in S / M / L sizes.
+   Click sets data-fs on .iss-root; the scale rule below resizes the
+   whole page accordingly. */
+.iss-fontsize {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1.5px solid #94a3b8;
+    border-radius: 14px;
+    background: #ffffff;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+.iss-fontsize-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-right: 2px;
+}
+.iss-fontsize-btn {
+    border: none;
+    background: transparent;
+    color: #0f172a;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 8px;
+    line-height: 1;
+    transition: background 100ms ease, color 100ms ease;
+    font-size: 12px;
+}
+.iss-fontsize-btn[data-fs="md"] { font-size: 14px; }
+.iss-fontsize-btn--big          { font-size: 17px !important; }
+.iss-fontsize-btn:hover  { background: #f1f5f9; }
+.iss-fontsize-btn--active {
+    background: #0f172a !important;
+    color: #ffffff !important;
+}
+
+/* v0.0.37 r3 — Yellow blink on the column header after a sort applies.
+   Operator can scan their eye to the flash and instantly see which
+   column the table just re-ordered by. Uses an inset glow + brief
+   bg/text color swap so it reads on the solid-black header.        */
+@keyframes iss-col-flash-pulse {
+    0%   { background-color: #0f172a; color: #ffffff; box-shadow: inset 0 0 0 0 rgba(250, 204, 21, 0); }
+    15%  { background-color: #fde047; color: #422006; box-shadow: inset 0 0 0 4px rgba(250, 204, 21, 0.95), 0 0 14px rgba(250, 204, 21, 0.55); }
+    45%  { background-color: #facc15; color: #422006; box-shadow: inset 0 0 0 4px rgba(250, 204, 21, 0.8), 0 0 14px rgba(250, 204, 21, 0.45); }
+    100% { background-color: #0f172a; color: #ffffff; box-shadow: inset 0 0 0 0 rgba(250, 204, 21, 0); }
+}
+.iss-root .tabulator-col.iss-col-flash {
+    animation: iss-col-flash-pulse 1.4s ease-in-out;
+    /* Higher z-index briefly so the glow renders above neighbouring
+       column borders and isn't clipped at the edges.               */
+    z-index: 12 !important;
+}
+/* Make sure the title text recolors with the flash (overrides the
+   default white-text rule scoped to .tabulator-col-title).         */
+.iss-root .tabulator-col.iss-col-flash .tabulator-col-title { color: inherit !important; }
+
+/* v0.0.36 r2 — Font-size scale. data-fs on .iss-root drives all text
+   sizes. Selectors below are deliberately specific so they beat the
+   existing `.iss-root .tabulator { font-size: 13px !important }` rule
+   without having to refactor it.
+
+   Three knobs per size: page text, table cells, table header text.
+   Card numerics + chip labels inherit from the page text rule.       */
+.iss-root[data-fs="sm"]                   { font-size: 11.5px; }
+.iss-root[data-fs="md"]                   { font-size: 13px;   }
+.iss-root[data-fs="lg"]                   { font-size: 15px;   }
+.iss-root[data-fs="sm"] .tabulator        { font-size: 11px !important;   }
+.iss-root[data-fs="md"] .tabulator        { font-size: 13px !important;   }
+.iss-root[data-fs="lg"] .tabulator        { font-size: 15px !important;   }
+.iss-root[data-fs="sm"] .tabulator-col,
+.iss-root[data-fs="sm"] .tabulator-cell   { font-size: 11px !important;   }
+.iss-root[data-fs="md"] .tabulator-col,
+.iss-root[data-fs="md"] .tabulator-cell   { font-size: 13px !important;   }
+.iss-root[data-fs="lg"] .tabulator-col,
+.iss-root[data-fs="lg"] .tabulator-cell   { font-size: 15px !important;   }
+.iss-root[data-fs="sm"] .iss-qty-card-num { font-size: 12px !important; }
+.iss-root[data-fs="md"] .iss-qty-card-num { font-size: 13px !important; }
+.iss-root[data-fs="lg"] .iss-qty-card-num { font-size: 15px !important; }
+.iss-root[data-fs="sm"] .iss-qty-card-uom { font-size: 9.5px !important; }
+.iss-root[data-fs="md"] .iss-qty-card-uom { font-size: 10.5px !important; }
+.iss-root[data-fs="lg"] .iss-qty-card-uom { font-size: 12px !important; }
+
+/* v0.0.36 — Small-laptop responsiveness. Reduces chrome on narrow
+   viewports so the table area doesn't get crowded out by paddings. */
+@media (max-width: 1280px) {
+    .iss-root { padding: 8px 10px 12px 10px; }
+    .iss-filter-bar { padding: 8px; gap: 6px; }
+    .iss-filter-group { padding: 5px 8px; gap: 4px; }
+    .iss-quickfilter-row { gap: 6px; }
+    .iss-qfchip { padding: 4px 10px; font-size: 11px; }
+    .iss-searchbar { padding: 4px 10px; }
+}
+@media (max-width: 980px) {
+    .iss-filter-group--xwide { min-width: 240px; flex: 1 1 280px; }
+    .iss-filter-group--wide  { min-width: 200px; flex: 1 1 240px; }
+}
+.iss-filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1.5px solid #94a3b8;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+.iss-filter-toggle:hover {
+    background: #f1f5f9;
+    border-color: #475569;
+    transform: translateY(-1px);
+}
+.iss-filter-toggle-icon { color: #475569; font-size: 11px; transition: transform 200ms ease; }
+.iss-filter-toggle-label { letter-spacing: 0.2px; }
+
+/* v0.0.37 — Toolbar row that hosts search bar + sort picker side-by-side. */
+.iss-toolbar {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.iss-toolbar .iss-searchbar {
+    flex: 1 1 auto;
+    margin-bottom: 0;
+}
+
+/* v0.0.37 — Sort picker (searchable dropdown + direction toggle) */
+.iss-sortbar {
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+.iss-sortpicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #ffffff;
+    border: 1.5px solid #94a3b8;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #0f172a;
+    min-width: 200px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.iss-sortpicker:hover, .iss-sortpicker:focus {
+    border-color: #2563eb;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+.iss-sortpicker-icon  { color: #64748b; font-size: 12px; }
+.iss-sortpicker-label { color: #64748b; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+.iss-sortpicker-value {
+    flex: 1 1 auto;
+    font-weight: 700;
+    color: #0f172a;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iss-sortpicker-caret { color: #94a3b8; font-size: 12px; }
+
+.iss-sortpicker-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    min-width: 320px;
+    max-width: 440px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    box-shadow: 0 12px 28px -8px rgba(15, 23, 42, 0.25),
+                0 4px 8px -2px rgba(15, 23, 42, 0.10);
+    z-index: 1050;
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+}
+.iss-sortpicker-dropdown.open { display: flex; }
+.iss-sortpicker-search-wrap {
+    position: relative;
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.iss-sortpicker-search-icon {
+    position: absolute;
+    left: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #94a3b8;
+    font-size: 12px;
+}
+.iss-sortpicker-search {
+    width: 100%;
+    padding: 6px 10px 6px 26px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #0f172a;
+    background: #f8fafc;
+    outline: none;
+    transition: border-color 120ms ease;
+}
+.iss-sortpicker-search:focus {
+    border-color: #2563eb;
+    background: #ffffff;
+}
+.iss-sortpicker-opts {
+    overflow-y: auto;
+    max-height: 320px;
+}
+.iss-sortpicker-opt {
+    padding: 8px 14px;
+    font-size: 13px;
+    color: #0f172a;
+    cursor: pointer;
+    border-bottom: 1px solid #f8fafc;
+    transition: background 80ms ease;
+}
+.iss-sortpicker-opt:last-child { border-bottom: none; }
+.iss-sortpicker-opt:hover { background: #f1f5f9; }
+.iss-sortpicker-opt--active {
+    background: #e0e7ff;
+    font-weight: 700;
+    color: #3730a3;
+}
+.iss-sortpicker-opt--active::after {
+    content: "✓";
+    float: right;
+    color: #3730a3;
+    font-weight: 700;
+}
+
+/* Direction toggle (↑ / ↓) */
+.iss-sortdir {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #0f172a;
+    color: #ffffff;
+    border: 1.5px solid #0f172a;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 12px;
+    transition: background 120ms ease, transform 120ms ease;
+}
+.iss-sortdir:hover {
+    background: #1e293b;
+    transform: translateY(-1px);
+}
+.iss-sortdir-icon { color: #fbbf24; }
+
+/* Clear sort button */
+.iss-sortclear {
+    width: 28px;
+    height: 100%;
+    min-height: 32px;
+    padding: 0;
+    border: 1.5px solid #94a3b8;
+    background: #ffffff;
+    color: #475569;
+    border-radius: 8px;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+.iss-sortclear:hover {
+    background: #fee2e2;
+    color: #b91c1c;
+    border-color: #fca5a5;
+}
+
+/* Smaller screens — stack sort under search */
+@media (max-width: 1100px) {
+    .iss-toolbar { flex-wrap: wrap; }
+    .iss-sortbar { flex-basis: 100%; }
+    .iss-sortpicker { flex: 1 1 auto; min-width: 0; }
+    .iss-sortpicker-dropdown { right: auto; left: 0; }
+}
+
+/* v0.0.35 — Universal search bar between filters and grid */
+.iss-searchbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #ffffff;
+    border: 1.5px solid #94a3b8;
+    border-radius: 8px;
+    padding: 6px 12px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.iss-searchbar:focus-within {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+.iss-searchbar-icon {
+    color: #64748b;
+    font-size: 14px;
+    flex: 0 0 auto;
+}
+.iss-searchbar-input {
+    flex: 1 1 auto;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 14px;
+    color: #0f172a;
+    padding: 4px 0;
+    min-width: 0;
+}
+.iss-searchbar-input::placeholder { color: #94a3b8; }
+.iss-searchbar-clear {
+    flex: 0 0 auto;
+    border: none;
+    background: #e2e8f0;
+    color: #475569;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    font-size: 16px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background 120ms ease, color 120ms ease;
+}
+.iss-searchbar-clear:hover { background: #cbd5e1; color: #0f172a; }
+.iss-searchbar-count {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: #64748b;
+    padding: 2px 10px;
+    background: #f1f5f9;
+    border-radius: 10px;
+    letter-spacing: 0.3px;
+}
+.iss-searchbar-count:empty { display: none; }
+
+/* Pending statuses banner (top of filter bar) */
+.iss-banner {
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(124, 58, 237, 0.06));
+    border: 1px solid rgba(37, 99, 235, 0.18);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text-color, #0f172a);
+}
+.iss-banner-title { margin-bottom: 6px; }
+.iss-banner-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 4px 16px;
+}
+.iss-banner-sep { color: var(--text-muted, #94a3b8); margin: 0 4px; }
+.iss-banner-foot {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-muted, #64748b);
+}
+.iss-banner-excluded { color: #c0392b; font-weight: 600; }
+
+/* Filter rows */
+.iss-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+/* Quick filter pill row */
+.iss-quickfilter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+.iss-quickfilter-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted, #64748b);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-right: 4px;
+}
+/* v0.0.35 — segmented control for the Calculation Mode toggle */
+.iss-segmented {
+    display: inline-flex;
+    border: 1.5px solid #94a3b8;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #ffffff;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+.iss-seg-btn {
+    border: none;
+    background: transparent;
+    color: #0f172a;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-right: 1px solid #cbd5e1;
+    transition: background 120ms ease, color 120ms ease;
+}
+.iss-seg-btn:last-child { border-right: none; }
+.iss-seg-btn:hover { background: #f1f5f9; }
+.iss-seg-btn--active {
+    background: #0f172a !important;
+    color: #ffffff !important;
+}
+.iss-seg-btn--active i { color: #fbbf24; }
+.iss-seg-btn i { color: #64748b; }
+
+.iss-qfchip {
+    border: 1.5px solid #94a3b8;
+    background: #ffffff;
+    color: var(--text-color, #0f172a);
+    padding: 5px 14px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 120ms ease;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+.iss-qfchip:hover { background: var(--bg-color, #f1f5f9); }
+.iss-qfchip--active {
+    color: #fff !important;
+    border-color: transparent !important;
+}
+.iss-qfchip--indigo.iss-qfchip--active  { background: #7c3aed !important; }
+.iss-qfchip--cyan.iss-qfchip--active    { background: #0891b2 !important; }
+.iss-qfchip--emerald.iss-qfchip--active { background: #059669 !important; }
+.iss-qfchip--amber.iss-qfchip--active   { background: #d97706 !important; }
+.iss-qfchip--rose.iss-qfchip--active    { background: #e11d48 !important; }
+.iss-qfchip--orange.iss-qfchip--active  { background: #ea580c !important; }
+.iss-qfchip--red.iss-qfchip--active     { background: #dc2626 !important; }
+.iss-qfchip--green.iss-qfchip--active   { background: #16a34a !important; }
+.iss-qfchip--gray.iss-qfchip--active    { background: #64748b !important; }
+
+/* Action row */
+.iss-action-row {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border-color, #e2e8f0);
+}
+.iss-action-row .btn { font-size: 12px; padding: 4px 12px; }
+
+/* Loading / empty / error states */
+.iss-loading, .iss-empty, .iss-error {
+    padding: 36px;
+    text-align: center;
+    color: var(--text-muted, #94a3b8);
+    font-size: 14px;
+}
+.iss-error { color: #c0392b; }
+
+/* v0.0.34 — each filter group is now a distinct CARD with its own
+   border + tinted background, so adjacent white widgets no longer
+   bleed into each other. Keeps the inline label + control vertical
+   stack from earlier versions. */
+.iss-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 200px;
+    flex: 1 1 220px;
+    max-width: 320px;
+    padding: 8px 10px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03);
+}
+.iss-filter-group:focus-within {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+.iss-filter-group--narrow { min-width: 140px; max-width: 200px; flex: 0 1 180px; }
+.iss-filter-group--wide   { min-width: 260px; max-width: 480px; flex: 1 1 360px; }
+/* v0.0.36 — xwide: for long item codes / multi-word names (Item, Company) */
+.iss-filter-group--xwide  { min-width: 360px; max-width: 640px; flex: 2 1 480px; }
+
+.iss-filter-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted, #64748b);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin: 0;
+}
+
+/* Native Frappe-styled input/select look — v0.0.34 darker border so
+   the control is clearly distinguishable from its filter-group card. */
+.iss-filter-group .iss-multiselect,
+.iss-filter-group input[type="text"],
+.iss-filter-group select {
+    width: 100%;
+    min-height: 32px;
+    padding: 5px 9px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-color, #0f172a);
+    background: #ffffff;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+}
+.iss-filter-group .iss-multiselect:focus-within,
+.iss-filter-group input:focus,
+.iss-filter-group select:focus {
+    outline: none;
+    border-color: var(--primary-color, #2563eb);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+/* ───────────────────── Professional multi-select widget (v0.0.24) ──────── */
+.iss-multiselect {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    cursor: pointer;
+    position: relative;
+    padding-right: 22px;     /* room for the caret */
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.iss-multiselect:hover {
+    border-color: var(--primary-color, #2563eb);
+}
+.iss-multiselect-caret {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted, #94a3b8);
+    font-size: 12px;
+    pointer-events: none;
+}
+.iss-multiselect.iss-multiselect-open,
+.iss-filter-group:has(.iss-multiselect-dropdown.open) .iss-multiselect {
+    border-color: var(--primary-color, #2563eb);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+.iss-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px 2px 8px;
+    background: var(--primary-color, #2563eb);
+    color: #fff;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    font-weight: 500;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iss-chip-x {
+    cursor: pointer;
+    padding: 0 2px 0 4px;
+    margin-left: 2px;
+    font-weight: 700;
+    opacity: 0.85;
+    font-size: 13px;
+    line-height: 1;
+}
+.iss-chip-x:hover { opacity: 1; }
+.iss-chip-more {
+    background: var(--text-muted, #64748b) !important;
+    cursor: help;
+}
+.iss-multiselect-placeholder {
+    color: var(--text-muted, #94a3b8);
+    font-size: 13px;
+}
+
+/* Dropdown panel — fixed-position so it escapes any ancestor with
+   `transform`, `overflow:hidden`, or `position:relative` that Frappe's
+   sidebar layout applies. Coordinates set programmatically on open
+   based on the trigger chip's getBoundingClientRect(). */
+.iss-multiselect-dropdown {
+    position: fixed;
+    min-width: 280px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow:
+        0 12px 28px -4px rgba(15, 23, 42, 0.16),
+        0 4px 12px -2px rgba(15, 23, 42, 0.08),
+        0 0 0 1px rgba(15, 23, 42, 0.04);
+    z-index: 1050;          /* above Frappe navbar (~1030) but below modals (~1055) */
+    display: none;
+    overflow: hidden;
+    flex-direction: column;
+    max-height: 420px;
+    animation: iss-drop-in 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes iss-drop-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.iss-multiselect-dropdown.open { display: flex; }
+
+/* Sticky header (search + bulk actions) */
+.iss-multiselect-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--card-bg, #fff);
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.iss-multiselect-search-wrap {
+    position: relative;
+}
+.iss-multiselect-search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted, #94a3b8);
+    font-size: 11px;
+    pointer-events: none;
+}
+.iss-multiselect-search {
+    width: 100%;
+    padding: 6px 8px 6px 26px !important;
+    border: 1px solid var(--border-color, #e2e8f0) !important;
+    border-radius: 4px !important;
+    font-size: 12px !important;
+    background: var(--input-bg, #fff) !important;
+}
+.iss-multiselect-search:focus {
+    outline: none !important;
+    border-color: var(--primary-color, #2563eb) !important;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15) !important;
+}
+.iss-multiselect-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+.iss-msa {
+    border: 1px solid var(--border-color, #e2e8f0);
+    background: var(--bg-color, #f8fafc);
+    color: var(--text-color, #0f172a);
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 100ms ease;
+}
+.iss-msa:hover {
+    background: var(--primary-color, #2563eb);
+    color: #fff;
+    border-color: var(--primary-color, #2563eb);
+}
+
+/* Scrollable option list */
+.iss-multiselect-opts {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+    max-height: 280px;
+}
+.iss-multiselect-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 80ms ease;
+    user-select: none;
+    margin: 0;
+}
+.iss-multiselect-option:hover { background: var(--bg-color, #f1f5f9); }
+.iss-multiselect-option.selected {
+    background: rgba(37, 99, 235, 0.06);
+    color: var(--primary-color, #1d4ed8);
+    font-weight: 500;
+}
+.iss-multiselect-option.disabled {
+    color: var(--text-muted, #94a3b8);
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+.iss-multiselect-option input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--primary-color, #2563eb);
+}
+.iss-multiselect-option-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iss-multiselect-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    background: #fee2e2;
+    color: #c0392b;
+    border-radius: 8px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.iss-multiselect-empty {
+    padding: 18px;
+    text-align: center;
+    color: var(--text-muted, #94a3b8);
+    font-size: 12px;
+}
+.iss-multiselect-empty.iss-error { color: #c0392b; }
+
+/* v0.0.30 — Item / Link picker "<code> : <name>" cell rendering.
+   Code is monospace + primary color (the canonical identifier the
+   filter actually stores); name is muted secondary text. */
+.iss-link-code {
+    font-family: var(--font-stack-monospace, ui-monospace, monospace);
+    font-size: 12px;
+    color: #1d4ed8;
+    font-weight: 600;
+}
+.iss-link-sep {
+    color: #cbd5e1;
+    font-weight: 600;
+    margin: 0 6px;
+}
+.iss-link-title {
+    color: #475569;
+    font-size: 12px;
+}
+
+/* ───────────────────── Combined pair multi-select (v0.0.26) ────────── */
+.iss-chip-pair {
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    max-width: 200px;
+}
+.iss-multiselect-option--pair {
+    padding: 8px 12px;
+}
+.iss-pair-cell {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+}
+.iss-pair-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.iss-pair-pill--status   { background: rgba(37, 99, 235, 0.1); color: #1d4ed8; }
+.iss-pair-pill--workflow { background: rgba(124, 58, 237, 0.1); color: #6d28d9; }
+.iss-pair-sep {
+    color: #cbd5e1;
+    font-weight: 700;
+    padding: 0 2px;
+}
+.iss-pair-empty {
+    color: #cbd5e1;
+    font-size: 12px;
+    padding: 0 4px;
+}
+.iss-multiselect-option--pair.selected .iss-pair-pill--status {
+    background: rgba(37, 99, 235, 0.18);
+}
+.iss-multiselect-option--pair.selected .iss-pair-pill--workflow {
+    background: rgba(124, 58, 237, 0.18);
+}
+
+/* Sticky footer (counter) */
+.iss-multiselect-foot {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-color, #f8fafc);
+    border-top: 1px solid var(--border-color, #e2e8f0);
+    padding: 5px 10px;
+    font-size: 11px;
+    color: var(--text-muted, #64748b);
+    text-align: right;
+}
+
+/* Boolean toggle row */
+.iss-toggle-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+    flex: 1 1 100%;
+}
+.iss-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-color, #0f172a);
+    cursor: pointer;
+}
+.iss-toggle input[type="checkbox"] { margin: 0; cursor: pointer; }
+
+.iss-actions {
+    display: flex;
+    gap: 8px;
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border-color, #e2e8f0);
+    margin-top: 4px;
+}
+.iss-actions .btn { font-size: 12px; padding: 4px 12px; }
+
+/* ── Grid host (Tabulator container) ───────────────────────────────────── */
+/* v0.0.36 r2 — explicit height that switches based on whether the
+   filter bar is collapsed. Bigger of the two so the table dominates
+   the viewport when filters are hidden. Tabulator uses height:100%
+   inside this container, so changes propagate automatically.        */
+.iss-grid-host {
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: var(--border-radius-md, 8px);
+    overflow: hidden;
+    height: calc(100vh - 460px);
+    min-height: 380px;
+}
+.iss-root.iss-filters-collapsed .iss-grid-host {
+    height: calc(100vh - 200px);
+}
+
+/* Tabulator overrides — match Frappe Desk look */
+.iss-root .tabulator {
+    border: 0 !important;
+    background: var(--card-bg, #fff) !important;
+    font-size: 13px !important;
+    font-family: inherit !important;
+}
+/* v0.0.34 — Table header restyled to solid BLACK with WHITE text per
+   spec. Sort arrows + dividers also recolored so they remain visible
+   against the dark background. Frozen-column header overrides below
+   are kept (z-index, sticky), and inherit the same black palette. */
+.iss-root .tabulator-header {
+    background: #0f172a !important;
+    border-bottom: 1px solid #0f172a !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 5 !important;
+}
+.iss-root .tabulator-col {
+    background: #0f172a !important;
+    border-right: 1px solid #334155 !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    padding: 10px 12px !important;
+    /* WORD WRAP on headers — every word matters per spec */
+    white-space: normal !important;
+    word-break: break-word !important;
+    line-height: 1.3 !important;
+}
+.iss-root .tabulator-col-title { color: #ffffff !important; }
+.iss-root .tabulator-col .tabulator-col-sorter,
+.iss-root .tabulator-col .tabulator-arrow {
+    color: #cbd5e1 !important;
+    border-top-color: #cbd5e1 !important;
+    border-bottom-color: #cbd5e1 !important;
+}
+.iss-root .tabulator-col.tabulator-sortable[aria-sort="ascending"] .tabulator-arrow,
+.iss-root .tabulator-col.tabulator-sortable[aria-sort="descending"] .tabulator-arrow {
+    border-top-color: #ffffff !important;
+    border-bottom-color: #ffffff !important;
+}
+.iss-root .tabulator-col.tabulator-sortable:hover {
+    background: #1e293b !important;
+}
+.iss-root .tabulator-col-title {
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+.iss-root .tabulator-row {
+    border-bottom: 1px solid var(--border-color, #f1f5f9) !important;
+    background: var(--card-bg, #fff) !important;
+}
+/* v0.0.35 — stronger zebra stripe so adjacent rows are easy to scan */
+.iss-root .tabulator-row.tabulator-row-even {
+    background: #f1f5f9 !important;
+}
+/* v0.0.34 — distinct hover tint so it visually stands out under
+   the frozen first column (which has its own opaque background). */
+.iss-root .tabulator-row:hover {
+    background: #eef2ff !important;
+}
+.iss-root .tabulator-cell {
+    padding: 8px 10px !important;
+    border-right: 1px solid var(--border-color, #f1f5f9) !important;
+    /* WORD WRAP on data — every word matters per spec */
+    white-space: normal !important;
+    word-break: break-word !important;
+    line-height: 1.45 !important;
+    min-height: 40px;
+    display: flex;
+    align-items: flex-start;
+}
+
+/* Right-aligned qty cells stay center-vertical for visual stack alignment */
+.iss-root .tabulator-cell.iss-qty,
+.iss-root .tabulator-cell.iss-qty-red,
+.iss-root .tabulator-cell.iss-qty-green,
+.iss-root .tabulator-cell.iss-qty-tone {
+    justify-content: flex-end;
+    text-align: right;
+    align-items: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* v0.0.35 — tone-coded shortage/surplus columns (both modes side-by-side).
+   The tints are subtle on the cell, slightly stronger on the header so
+   each column's purpose is immediately legible from the column band.   */
+.iss-root .tabulator-cell.iss-qty-tone--proj-short { background: #fee2e2 !important; }
+.iss-root .tabulator-cell.iss-qty-tone--proj-surp  { background: #dbeafe !important; }
+.iss-root .tabulator-cell.iss-qty-tone--cs-short   { background: #fed7aa !important; }
+.iss-root .tabulator-cell.iss-qty-tone--cs-surp    { background: #dcfce7 !important; }
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-qty-tone--proj-short { background: #fecaca !important; }
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-qty-tone--proj-surp  { background: #bfdbfe !important; }
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-qty-tone--cs-short   { background: #fdba74 !important; }
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-qty-tone--cs-surp    { background: #bbf7d0 !important; }
+
+/* Status columns — Projected vs Current Stock */
+.iss-root .tabulator-cell.iss-status-col--proj { background: #f1f5f9 !important; }
+.iss-root .tabulator-cell.iss-status-col--cs   { background: #e2e8f0 !important; }
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-status-col--proj { background: #e2e8f0 !important; }
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-status-col--cs   { background: #cbd5e1 !important; }
+
+/* v0.0.35 — Headers stay SOLID BLACK across the whole table (per spec);
+   the column tone shows only in the data cells. A thin colored top-border
+   on each tone-column header acts as an unobtrusive identifier band so
+   operators can still spot the column purpose without color-flooding the
+   header. */
+.iss-root .tabulator-col.iss-qty-tone--proj-short { background: #0f172a !important; border-top: 3px solid #ef4444 !important; }
+.iss-root .tabulator-col.iss-qty-tone--proj-surp  { background: #0f172a !important; border-top: 3px solid #3b82f6 !important; }
+.iss-root .tabulator-col.iss-qty-tone--cs-short   { background: #0f172a !important; border-top: 3px solid #f97316 !important; }
+.iss-root .tabulator-col.iss-qty-tone--cs-surp    { background: #0f172a !important; border-top: 3px solid #22c55e !important; }
+.iss-root .tabulator-col.iss-status-col--proj     { background: #0f172a !important; border-top: 3px solid #94a3b8 !important; }
+.iss-root .tabulator-col.iss-status-col--cs       { background: #0f172a !important; border-top: 3px solid #64748b !important; }
+
+/* v0.0.35 — Item-cell footer mini-badges: Stock vs Projected status */
+.iss-root .iss-item-cell-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+}
+.iss-root .iss-item-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+}
+.iss-root .iss-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.4;
+    border: 1px solid transparent;
+}
+.iss-root .iss-mini-label {
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    opacity: 0.75;
+    font-weight: 700;
+}
+.iss-root .iss-mini-val { font-weight: 700; }
+.iss-root .iss-mini--short   { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+.iss-root .iss-mini--surp    { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+.iss-root .iss-mini--neutral { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+
+/* Info icon next to the Quick Filters label */
+.iss-root .iss-info-icon {
+    margin-left: 4px;
+    color: #94a3b8;
+    font-size: 11px;
+    cursor: help;
+}
+
+/* Two-line stacked qty (stock unit on top, higher unit below) — matches
+   the user's "1000 gram / 1 kg" reference spec from good.png.
+   v0.0.31 — Color-differentiate the two UOMs so operators can scan
+   either row independently:
+     - Stock UOM (top, canonical) → slate-900 bold (default text color)
+     - Higher UOM (bottom, derived)  → indigo accent so the operator
+       can mentally "lock onto" higher-UOM totals across the table */
+.iss-qty-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    line-height: 1.25;
+    width: 100%;
+}
+.iss-qty-stock {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;          /* slate-900 — canonical stock UOM */
+}
+.iss-qty-higher {
+    font-size: 11px;
+    color: #4f46e5;          /* indigo-600 — derived higher UOM */
+    font-weight: 500;
+}
+.iss-qty-stack .iss-uom {
+    font-size: 10px;
+    margin-left: 2px;
+    font-weight: 400;
+    text-transform: uppercase;
+    opacity: 0.75;           /* slight tone-down so the number reads first */
+}
+.iss-qty-stock .iss-uom  { color: #64748b; }  /* slate-500 */
+.iss-qty-higher .iss-uom { color: #6366f1; }  /* indigo-500 */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   v0.0.32 — TWO-CARD cell layout for the merged qty columns.
+   Each cell renders stock UOM card + higher UOM card side by side.
+   Stock card = slate (canonical), Higher card = indigo (derived).
+   Both cards in the same cell share the same click target (drill-down)
+   when the column has a source.
+   ───────────────────────────────────────────────────────────────────────── */
+/* v0.0.33 — Stack cards VERTICALLY (column-aligned). Stock UOM card on
+   top, Higher UOM card below. Matches user spec: "uom wise qty card
+   make column align instead of side by side". */
+.iss-qty-twocards {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    align-items: stretch;
+    justify-content: flex-end;
+    cursor: inherit;
+}
+.iss-qty-twocards.iss-qty-clickable {
+    cursor: pointer;
+}
+.iss-qty-card {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.15;
+    transition: background 100ms ease, border-color 100ms ease;
+}
+.iss-qty-card-num {
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.iss-qty-card-uom {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-top: 1px;
+    opacity: 0.8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* v0.0.36 — SOLID (non-transparent) UOM cards per spec. Light but
+   fully opaque fills + solid borders so the cards always read clearly
+   regardless of the row's stripe or shortage/surplus tone. */
+
+/* Stock UOM card — slate (canonical) */
+.iss-qty-card--stock {
+    background: #e2e8f0;        /* slate-200, solid */
+    border-color: #94a3b8;      /* slate-400 */
+    color: #0f172a;             /* slate-900 */
+}
+.iss-qty-twocards.iss-qty-clickable:hover .iss-qty-card--stock {
+    background: #cbd5e1;
+    border-color: #64748b;
+}
+
+/* Higher UOM card — indigo (derived) */
+.iss-qty-card--higher {
+    background: #e0e7ff;        /* indigo-100, solid */
+    border-color: #818cf8;      /* indigo-400 */
+    color: #3730a3;             /* indigo-800 */
+}
+.iss-qty-twocards.iss-qty-clickable:hover .iss-qty-card--higher {
+    background: #c7d2fe;
+    border-color: #6366f1;
+}
+
+/* Override for the Short Fall (red) column — both cards red, solid */
+.iss-root .tabulator-cell.iss-qty-red .iss-qty-card--stock,
+.iss-root .tabulator-cell.iss-qty-red .iss-qty-card--higher {
+    background: #fecaca;        /* red-200 */
+    border-color: #ef4444;      /* red-500 */
+    color: #991b1b;             /* red-800 */
+    font-weight: 700;
+}
+/* Override for the Surplus (green) column — both cards green, solid */
+.iss-root .tabulator-cell.iss-qty-green .iss-qty-card--stock,
+.iss-root .tabulator-cell.iss-qty-green .iss-qty-card--higher {
+    background: #bbf7d0;        /* green-200 */
+    border-color: #22c55e;      /* green-500 */
+    color: #166534;             /* green-800 */
+    font-weight: 700;
+}
+
+/* v0.0.36 — solid card overrides for v0.0.35 tone columns
+   (Shortage/Surplus as per Projection / Current Stock). Cards on top
+   of the tinted column background stay solid + readable.            */
+.iss-root .tabulator-cell.iss-qty-tone--proj-short .iss-qty-card--stock,
+.iss-root .tabulator-cell.iss-qty-tone--proj-short .iss-qty-card--higher {
+    background: #fecaca; border-color: #ef4444; color: #991b1b; font-weight: 700;
+}
+.iss-root .tabulator-cell.iss-qty-tone--proj-surp .iss-qty-card--stock,
+.iss-root .tabulator-cell.iss-qty-tone--proj-surp .iss-qty-card--higher {
+    background: #bfdbfe; border-color: #3b82f6; color: #1e3a8a; font-weight: 700;
+}
+.iss-root .tabulator-cell.iss-qty-tone--cs-short .iss-qty-card--stock,
+.iss-root .tabulator-cell.iss-qty-tone--cs-short .iss-qty-card--higher {
+    background: #fed7aa; border-color: #f97316; color: #9a3412; font-weight: 700;
+}
+.iss-root .tabulator-cell.iss-qty-tone--cs-surp .iss-qty-card--stock,
+.iss-root .tabulator-cell.iss-qty-tone--cs-surp .iss-qty-card--higher {
+    background: #bbf7d0; border-color: #22c55e; color: #166534; font-weight: 700;
+}
+
+/* Cards stay column-stacked at all viewport widths (per user spec v0.0.33).
+   Narrow-viewport rule keeps padding tight to avoid extra row height. */
+@media (max-width: 1280px) {
+    .iss-qty-card { padding: 3px 6px; }
+    .iss-qty-card-num { font-size: 12px; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   v0.0.33 — Frozen column (Item). Tabulator handles the position; we
+   give it solid bg + right-edge shadow + HIGH z-index so right-side
+   rows don't bleed through during horizontal scroll.
+
+   z-index ladder:
+     - tabulator-header (sticky)   → 10 (existing)
+     - frozen body cell            → 5   (sits above scrolling siblings)
+     - frozen header cell          → 11  (above sticky header + body cells)
+     - dropdown menu               → 1050 (set elsewhere)
+   ───────────────────────────────────────────────────────────────────────── */
+.iss-root .tabulator-cell.iss-col-frozen {
+    background: var(--card-bg, #ffffff) !important;
+    border-right: 2px solid var(--border-color, #e2e8f0) !important;
+    box-shadow: 4px 0 10px -3px rgba(15, 23, 42, 0.14);
+    z-index: 5 !important;
+    position: sticky !important;
+    left: 0 !important;
+}
+/* v0.0.34 — frozen header inherits the same black palette as other cols */
+.iss-root .tabulator-col.iss-col-frozen {
+    background: #0f172a !important;
+    border-right: 2px solid #334155 !important;
+    box-shadow: 4px 0 10px -3px rgba(15, 23, 42, 0.14);
+    z-index: 11 !important;
+    position: sticky !important;
+    left: 0 !important;
+    color: #ffffff !important;
+}
+/* Match the v0.0.35 zebra stripe on the frozen Item cell */
+.iss-root .tabulator-row.tabulator-row-even .tabulator-cell.iss-col-frozen {
+    background: #f1f5f9 !important;
+}
+
+/* v0.0.35 — Items with open Sales Orders get a red row tint so planners
+   can spot sales commitments at a glance. Overrides even-row stripe but
+   not row hover (hover wins for direct feedback). */
+.iss-root .tabulator-row.iss-row-has-so {
+    background: #fef2f2 !important;
+}
+.iss-root .tabulator-row.iss-row-has-so .tabulator-cell.iss-col-frozen {
+    background: #fef2f2 !important;
+}
+.iss-root .tabulator-row.iss-row-has-so:hover,
+.iss-root .tabulator-row.iss-row-has-so:hover .tabulator-cell.iss-col-frozen {
+    background: #fee2e2 !important;
+}
+/* v0.0.34 — frozen Item column matches row hover tint exactly so the
+   sticky cell doesn't visually flash white against the highlighted row. */
+.iss-root .tabulator-row:hover .tabulator-cell.iss-col-frozen {
+    background: #eef2ff !important;
+}
+.iss-root .tabulator-row.tabulator-row-even:hover .tabulator-cell.iss-col-frozen {
+    background: #eef2ff !important;
+}
+
+/* Voucher Type pill in modal — colored chip per source type */
+.iss-drill-table .vt-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.iss-drill-table .vt-pill--so      { background: rgba(99, 102, 241, 0.12);  color: #4338ca; }
+.iss-drill-table .vt-pill--wo      { background: rgba(16, 185, 129, 0.12);  color: #047857; }
+.iss-drill-table .vt-pill--po      { background: rgba(245, 158, 11, 0.12);  color: #b45309; }
+.iss-drill-table .vt-pill--wocons  { background: rgba(168, 85, 247, 0.12);  color: #7e22ce; }
+.iss-drill-table .vt-pill--bin     { background: rgba(100, 116, 139, 0.12); color: #475569; }
+
+.iss-qty-clickable {
+    cursor: pointer;
+    border-bottom: 1px dotted var(--primary-color, #2563eb);
+}
+.iss-qty-clickable:hover .iss-qty-stock {
+    color: var(--primary-color-dark, #1d4ed8);
+}
+
+.iss-root .tabulator-cell.iss-qty-red .iss-qty-stock,
+.iss-root .tabulator-cell.iss-qty-red .iss-qty-higher { color: #c0392b !important; font-weight: 600; }
+.iss-root .tabulator-cell.iss-qty-green .iss-qty-stock,
+.iss-root .tabulator-cell.iss-qty-green .iss-qty-higher { color: #27ae60 !important; font-weight: 600; }
+.iss-qty-zero  { color: var(--text-muted, #94a3b8); }
+
+/* Item Group / generic text-wrap cell */
+.iss-text-wrap {
+    display: block;
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.4;
+}
+
+.iss-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.iss-pill--shortage { background: #fee2e2; color: #c0392b; }
+.iss-pill--surplus  { background: #dcfce7; color: #15803d; }
+
+.iss-item-cell { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
+.iss-item-cell .iss-item-code {
+    font-family: var(--font-stack-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-muted, #64748b);
+}
+.iss-item-cell .iss-item-name { font-size: 13px; color: var(--text-color, #0f172a); }
+.iss-item-cell a { color: inherit; text-decoration: none; }
+.iss-item-cell a:hover .iss-item-name { color: var(--primary-color, #2563eb); }
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+.iss-footer {
+    padding: 6px 4px 0 4px;
+    font-size: 11px;
+    color: var(--text-muted, #94a3b8);
+}
+
+/* ───────────────────── Drill-down modal — Material 3 redesign (v0.0.25) ─── */
+.iss-drill-root {
+    font-family: inherit;
+    color: #0f172a;
+}
+
+/* Item identity card */
+.iss-drill-itemcard {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 18px;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    margin-bottom: 16px;
+}
+.iss-drill-itemcard-left { flex: 1; min-width: 240px; }
+.iss-drill-itemcard-code {
+    font-family: var(--font-stack-monospace, ui-monospace, monospace);
+    font-size: 13px;
+    color: #64748b;
+    letter-spacing: 0.2px;
+    margin-bottom: 2px;
+}
+.iss-drill-itemcard-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: #0f172a;
+    line-height: 1.35;
+}
+.iss-drill-itemcard-right {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.iss-drill-uom-pair {
+    display: inline-flex;
+    flex-direction: column;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.65);
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    min-width: 100px;
+}
+.iss-drill-uom-label {
+    font-size: 10px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+.iss-drill-uom-value {
+    font-size: 12px;
+    color: #0f172a;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+}
+
+/* KPI tiles row */
+.iss-drill-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+}
+.iss-drill-tile {
+    --iss-tile-color: #64748b;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 14px 16px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.iss-drill-tile::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--iss-tile-color);
+    opacity: 0.06;
+    pointer-events: none;
+}
+.iss-drill-tile::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--iss-tile-color);
+}
+.iss-drill-tile:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.1);
+}
+.iss-drill-tile-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--iss-tile-color);
+    font-weight: 700;
+    margin-bottom: 6px;
+    position: relative;
+}
+/* v0.0.34 — main/sub rows are flex baseline-aligned so qty + UOM stay
+   paired on one line. .iss-drill-tile-num takes available space and
+   right-aligns numerics; UOM pill stays compact next to it.            */
+.iss-drill-tile-main {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 22px;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    position: relative;
+    margin-bottom: 4px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+.iss-drill-tile-sub {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 13px;
+    color: #64748b;
+    font-variant-numeric: tabular-nums;
+    position: relative;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+.iss-drill-tile-num {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iss-drill-tile-uom {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
+.iss-drill-tile-main .iss-drill-tile-uom { font-size: 12px; color: #64748b; }
+
+/* Section title above vouchers table */
+.iss-drill-section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;
+}
+.iss-drill-section-title-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.iss-drill-section-title i { color: #64748b; }
+.iss-drill-section-count {
+    margin-left: 6px;
+    padding: 2px 10px;
+    background: #e2e8f0;
+    color: #475569;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* v0.0.33 — Export Excel button in the drilldown header */
+.iss-drill-export-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, #047857 0%, #059669 100%);
+    color: #fff;
+    border: 1px solid #047857;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 12px;
+    box-shadow: 0 1px 2px rgba(4, 120, 87, 0.18);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.iss-drill-export-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #065f46 0%, #047857 100%);
+    color: #fff;
+    box-shadow: 0 4px 8px rgba(4, 120, 87, 0.25);
+    transform: translateY(-1px);
+}
+.iss-drill-export-btn:disabled {
+    opacity: 0.7;
+    cursor: progress;
+}
+.iss-drill-export-btn i { color: #fff; }
+
+/* Vouchers table */
+.iss-drill-tablewrap {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+.iss-drill-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.iss-drill-table thead th {
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
+.iss-drill-table thead th.num { text-align: right; }
+.iss-drill-table tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #0f172a;
+    vertical-align: middle;
+    word-break: break-word;
+}
+.iss-drill-table tbody tr:last-child td { border-bottom: 0; }
+.iss-drill-table tbody tr:hover { background: rgba(37, 99, 235, 0.04); }
+.iss-drill-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.iss-drill-table .bold { font-weight: 700; }
+.iss-drill-table .muted { opacity: 0.78; font-size: 12px; }
+.iss-drill-table .iss-qty-zero { color: #cbd5e1; opacity: 1; }
+
+/* v0.0.31 — Column kind color-coding so operators can scan one
+   semantic group (planned / actual / pending) without reading labels.
+   Header gets a tinted background; cells get the matching text color.
+   Stock-UOM cells use the strong color, higher-UOM cells (.muted)
+   get a softer tone of the same hue so they're visually grouped but
+   visually distinguishable within the kind. */
+.iss-drill-table thead th.kind-planned { background: rgba(99, 102, 241, 0.08); color: #4338ca; }
+.iss-drill-table thead th.kind-actual  { background: rgba(16, 185, 129, 0.08); color: #047857; }
+.iss-drill-table thead th.kind-pending { background: rgba(245, 158, 11, 0.10); color: #b45309; }
+
+.iss-drill-table tbody td.kind-planned          { color: #4338ca; }          /* indigo-700 */
+.iss-drill-table tbody td.kind-planned.muted    { color: #818cf8; opacity: 1; } /* indigo-400 */
+.iss-drill-table tbody td.kind-actual           { color: #047857; }          /* emerald-700 */
+.iss-drill-table tbody td.kind-actual.muted     { color: #34d399; opacity: 1; } /* emerald-400 */
+.iss-drill-table tbody td.kind-pending          { color: #b45309; font-weight: 600; } /* amber-700 */
+.iss-drill-table tbody td.kind-pending.muted    { color: #fbbf24; opacity: 1; font-weight: 600; } /* amber-400 */
+
+/* Bold "Pending" stock value gets emphasis without losing the hue */
+.iss-drill-table tbody td.kind-pending.bold     { font-weight: 700; }
+.iss-drill-link {
+    color: #2563eb;
+    text-decoration: none;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.iss-drill-link:hover { color: #1d4ed8; text-decoration: underline; }
+.iss-drill-link-icon { font-size: 10px; opacity: 0.7; }
+
+.iss-drill-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: #94a3b8;
+    background: #f8fafc;
+    border-radius: 12px;
+    border: 1px dashed #e2e8f0;
+}
+.iss-drill-empty i { color: #cbd5e1; }
+
+/* Mobile / narrow modal */
+@media (max-width: 640px) {
+    .iss-drill-itemcard { flex-direction: column; align-items: flex-start; }
+    .iss-drill-itemcard-right { width: 100%; }
+    .iss-drill-tiles { grid-template-columns: 1fr; }
+    .iss-drill-tile-main { font-size: 18px; }
+}
+
+/* ── Narrow viewport (mobile/tablet) ───────────────────────────────────── */
+@media (max-width: 768px) {
+    .iss-filter-group { min-width: 100%; max-width: 100%; flex: 1 1 100%; }
+    .iss-actions { justify-content: stretch; }
+    .iss-actions .btn { flex: 1; }
+}

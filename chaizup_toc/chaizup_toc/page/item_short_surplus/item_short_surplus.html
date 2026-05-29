@@ -1,0 +1,103 @@
+<!--
+============================================================================
+CONTEXT: Item Short / Surplus — HTML shell.
+  Loads Tabulator 6.x from CDN, defines the page layout slots that the JS
+  controller fills. Native Frappe Desk look (uses Frappe's CSS variables
+  in the scoped page CSS).
+
+RESTRICT:
+  - Do NOT remove the Tabulator CDN link / script — Frappe doesn't bundle
+    Tabulator. SRT Dashboard / Item Projection View / Kitting Planner all
+    use the same CDN; keeping the same version (6.3.1) avoids subtle
+    behavior diffs across pages.
+  - HTML comments only (no Jinja {# #}) — apostrophe gotcha that has bitten
+    other chaizup_toc pages before.
+============================================================================
+-->
+<link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator.min.css"
+      crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"
+        crossorigin="anonymous"></script>
+
+<div class="iss-root">
+    <!--
+      v0.0.36 — Top controls row:
+        - Font-size picker (S / M / L) on the LEFT — operators on
+          smaller laptops can shrink to fit more cols, or bump up on
+          big monitors. Multiplier applied via CSS var on .iss-root.
+        - Filter-bar collapse toggle on the RIGHT.
+      Both prefs persisted to localStorage per-user.
+    -->
+    <div class="iss-filter-toggle-row">
+        <div class="iss-fontsize" role="radiogroup" aria-label="Font size">
+            <span class="iss-fontsize-label">Font:</span>
+            <button class="iss-fontsize-btn iss-fontsize-btn--active" data-fs="sm" type="button" title="Small (default — fits more columns on small screens)">A</button>
+            <button class="iss-fontsize-btn" data-fs="md" type="button" title="Medium">A</button>
+            <button class="iss-fontsize-btn iss-fontsize-btn--big" data-fs="lg" type="button" title="Large (easier on the eyes / big monitors)">A</button>
+        </div>
+        <button class="iss-filter-toggle" type="button"
+                aria-expanded="true"
+                aria-controls="iss-filter-bar"
+                title="Show / hide the filter panel">
+            <i class="fa fa-chevron-up iss-filter-toggle-icon" aria-hidden="true"></i>
+            <span class="iss-filter-toggle-label">Hide Filters</span>
+        </button>
+    </div>
+
+    <!-- Filter bar — multi-select chips + boolean toggles + action buttons -->
+    <div class="iss-filter-bar" id="iss-filter-bar"></div>
+
+    <!--
+      v0.0.35 — Universal search bar. Sits between filters and the
+      Tabulator grid; debounced client-side search across every visible
+      text column (item code / item name / item group / UOM / status).
+      Live counter on the right reports "N matching / M loaded".
+
+      v0.0.37 — Inline sort control (replaces header-click sorting).
+      Operator picks a column from a searchable dropdown + ascending /
+      descending toggle. On apply, the table sorts AND auto-scrolls
+      horizontally so the chosen column is in the viewport without
+      manual scrolling.
+    -->
+    <div class="iss-toolbar">
+        <div class="iss-searchbar">
+            <i class="fa fa-search iss-searchbar-icon"></i>
+            <input type="text"
+                   class="iss-searchbar-input"
+                   placeholder="Search items, codes, groups, UOM, status…"
+                   aria-label="Universal search">
+            <button class="iss-searchbar-clear" type="button" aria-label="Clear search">×</button>
+            <span class="iss-searchbar-count"></span>
+        </div>
+        <div class="iss-sortbar">
+            <div class="iss-sortpicker" tabindex="0" role="combobox" aria-haspopup="listbox" aria-expanded="false"
+                 title="Pick a column to sort by">
+                <i class="fa fa-sort iss-sortpicker-icon"></i>
+                <span class="iss-sortpicker-label">Sort:</span>
+                <span class="iss-sortpicker-value">—</span>
+                <i class="fa fa-caret-down iss-sortpicker-caret"></i>
+            </div>
+            <div class="iss-sortpicker-dropdown" role="listbox">
+                <div class="iss-sortpicker-search-wrap">
+                    <i class="fa fa-search iss-sortpicker-search-icon"></i>
+                    <input type="search" class="iss-sortpicker-search" placeholder="Find column…">
+                </div>
+                <div class="iss-sortpicker-opts"></div>
+            </div>
+            <button class="iss-sortdir" type="button"
+                    aria-label="Toggle sort direction"
+                    title="Toggle ascending / descending">
+                <i class="fa fa-arrow-down iss-sortdir-icon"></i>
+                <span class="iss-sortdir-label">High → Low</span>
+            </button>
+            <button class="iss-sortclear" type="button" title="Clear sort">×</button>
+        </div>
+    </div>
+
+    <!-- Main table host -->
+    <div class="iss-grid-host"></div>
+
+    <!-- Status footer (row count + last refresh) -->
+    <div class="iss-footer text-muted small"></div>
+</div>

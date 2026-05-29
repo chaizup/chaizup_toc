@@ -179,3 +179,463 @@ function _wire_projection_run_button(frm) {
         );
     });
 }
+
+
+// =============================================================================
+// v0.0.27 (2026-05-27) — Pending pair multi-select widget for the 6 pending
+//   fields. Each field is stored as a Small Text where each line is a
+//   `<status>|<workflow_state>` key (either side may be blank). The widget
+//   below transforms the textarea control into:
+//
+//     - a chip strip showing each selected pair as a "Status : Workflow" pill
+//     - a fixed-position dropdown with the live (status, workflow_state)
+//       pairs found on the relevant voucher table
+//     - a search box, Select-all / Clear actions, "N of M selected" footer
+//
+//   Six wirings: pending_so_statuses + pending_so_workflow_states +
+//                pending_wo_statuses + pending_wo_workflow_states +
+//                pending_po_statuses + pending_po_workflow_states.
+//
+//   Each widget calls the SAME backend whitelisted method
+//   chaizup_toc.api.item_short_surplus_api.get_filter_options to fetch the
+//   per-voucher pair list; this is the single source of truth for
+//   "what pairs exist in the data right now". The pairs are then
+//   rendered using the same dual-pill design used in the Item Short / Surplus
+//   report (visual continuity across the app).
+//
+// RESTRICT (CRITICAL — read before changing):
+//   - The underlying field STAYS `Small Text` (newline-separated lines).
+//     This preserves backward compatibility with the engine's existing
+//     parsers — switching to a JSON column would break every site already
+//     running the v0.0.26 parser logic.
+//   - Each line MUST be exactly `<status>|<workflow_state>`. The `|`
+//     separator is safe because Frappe Status / Workflow State values
+//     never contain `|`. If a future ERPNext version changes this,
+//     update the backend `_extract_pair_side` AND this widget together.
+//   - The 4 "Pending …" fields show only docstatus=1 pairs; the 2
+//     "Draft … Workflow" fields show only docstatus=0 pairs. The
+//     dropdown's `docstatus_scope` arg routes which list the API serves.
+//   - DO NOT use frappe.ui.form.MultiSelect — it doesn't handle the
+//     status:workflow dual-pill rendering or the fixed-position
+//     overflow-safe panel that Frappe's transformed Desk layout requires.
+//     The custom widget below is intentional.
+//   - DO NOT remove the cleanup hook on form refresh — the dropdown is
+//     appended to <body> to escape transformed ancestors, so leaving the
+//     form un-cleaned would leave orphaned panels on screen.
+// =============================================================================
+
+(function () {
+    // Pair-widget state attached to the form so multiple refreshes don't
+    // double-mount. Each entry: { panel, btn, chips, optionsCache }.
+    const PAIR_FIELDS = [
+        // v0.0.28 — Sales Order pair field is the renamed
+        // `projection_pending_so_statuses` (the legacy
+        // `projection_confirmed_so_workflow_states` has been MERGED into
+        // this single field by the v0.0.28 patch). One unified SO field
+        // covering both submit-status pairs AND draft-workflow pairs.
+        { field: "projection_pending_so_statuses", dtype: "Sales Order",    docstatus_scope: "both" },
+        { field: "pending_wo_statuses",            dtype: "Work Order",     docstatus_scope: 1 },
+        { field: "pending_wo_workflow_states",     dtype: "Work Order",     docstatus_scope: 0 },
+        { field: "pending_po_statuses",            dtype: "Purchase Order", docstatus_scope: 1 },
+        { field: "pending_po_workflow_states",     dtype: "Purchase Order", docstatus_scope: 0 },
+    ];
+
+    // Once-only CSS — defines the chip strip, dropdown panel, dual-pill rows.
+    // Scoped via the `tocs-pair-` prefix so it doesn't collide with the
+    // Item Short / Surplus styles that use `iss-` prefixes.
+    function _ensureStyle() {
+        if (document.getElementById("tocs-pair-style")) return;
+        const css = `
+            .tocs-pair-host { margin-top: 4px; }
+            .tocs-pair-chips {
+                display: flex; flex-wrap: wrap; gap: 4px;
+                min-height: 32px; padding: 4px 28px 4px 6px; position: relative;
+                background: var(--input-bg, #fff);
+                border: 1px solid var(--border-color, #d1d5db);
+                border-radius: var(--border-radius-sm, 4px);
+                cursor: pointer; transition: border-color 120ms ease;
+            }
+            .tocs-pair-chips:hover { border-color: var(--primary, #2563eb); }
+            .tocs-pair-chips.tocs-open { border-color: var(--primary, #2563eb);
+                box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15); }
+            .tocs-pair-caret {
+                position: absolute; right: 8px; top: 50%;
+                transform: translateY(-50%);
+                color: var(--text-muted, #94a3b8); font-size: 11px; pointer-events: none;
+            }
+            .tocs-pair-placeholder {
+                color: var(--text-muted, #94a3b8); font-size: 12px;
+                padding: 4px 4px; font-style: italic;
+            }
+            .tocs-pair-chip {
+                display: inline-flex; align-items: center; gap: 4px;
+                padding: 2px 4px 2px 8px;
+                background: linear-gradient(135deg, #2563eb, #7c3aed);
+                color: #fff; border-radius: 10px;
+                font-size: 11px; line-height: 1.5; font-weight: 500;
+                max-width: 220px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
+            .tocs-pair-chip-x {
+                cursor: pointer; padding: 0 2px 0 4px;
+                margin-left: 2px; font-weight: 700; opacity: 0.85;
+                font-size: 13px; line-height: 1;
+            }
+            .tocs-pair-chip-x:hover { opacity: 1; }
+            .tocs-pair-panel {
+                position: fixed; min-width: 320px; max-width: 480px;
+                background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
+                box-shadow: 0 12px 28px -4px rgba(15, 23, 42, 0.16),
+                            0 4px 12px -2px rgba(15, 23, 42, 0.08);
+                z-index: 1050; display: none; overflow: hidden;
+                flex-direction: column; max-height: 420px;
+            }
+            .tocs-pair-panel.tocs-open { display: flex; }
+            .tocs-pair-head {
+                position: sticky; top: 0; z-index: 1;
+                background: #fff; border-bottom: 1px solid #e2e8f0;
+                padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+            }
+            .tocs-pair-search-wrap { position: relative; }
+            .tocs-pair-search-icon {
+                position: absolute; left: 8px; top: 50%;
+                transform: translateY(-50%);
+                color: #94a3b8; font-size: 11px; pointer-events: none;
+            }
+            .tocs-pair-search {
+                width: 100%; padding: 6px 8px 6px 26px;
+                border: 1px solid #e2e8f0; border-radius: 4px;
+                font-size: 12px; background: #fff;
+            }
+            .tocs-pair-search:focus {
+                outline: none; border-color: #2563eb;
+                box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+            }
+            .tocs-pair-actions { display: flex; gap: 6px; justify-content: flex-end; }
+            .tocs-pair-action {
+                border: 1px solid #e2e8f0; background: #f8fafc; color: #0f172a;
+                padding: 3px 10px; border-radius: 4px;
+                font-size: 11px; font-weight: 500; cursor: pointer;
+                transition: all 100ms ease;
+            }
+            .tocs-pair-action:hover {
+                background: #2563eb; color: #fff; border-color: #2563eb;
+            }
+            .tocs-pair-opts {
+                flex: 1; overflow-y: auto; padding: 4px 0; max-height: 280px;
+            }
+            .tocs-pair-opt {
+                display: flex; align-items: center; gap: 8px;
+                padding: 8px 12px; font-size: 13px; cursor: pointer;
+                transition: background 80ms ease; user-select: none;
+            }
+            .tocs-pair-opt:hover { background: #f1f5f9; }
+            .tocs-pair-opt.tocs-selected { background: rgba(37, 99, 235, 0.06); }
+            .tocs-pair-opt input[type=checkbox] {
+                margin: 0; cursor: pointer; accent-color: #2563eb;
+            }
+            .tocs-pair-cell {
+                flex: 1; display: flex; align-items: center; gap: 6px;
+                overflow: hidden;
+            }
+            .tocs-pair-pill {
+                display: inline-block; padding: 2px 8px; border-radius: 10px;
+                font-size: 11px; font-weight: 500; white-space: nowrap;
+                max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+            }
+            .tocs-pair-pill-status   { background: rgba(37, 99, 235, 0.1);  color: #1d4ed8; }
+            .tocs-pair-pill-workflow { background: rgba(124, 58, 237, 0.1); color: #6d28d9; }
+            .tocs-pair-sep { color: #cbd5e1; font-weight: 700; padding: 0 2px; }
+            .tocs-pair-empty-side { color: #cbd5e1; font-size: 12px; padding: 0 4px; }
+            .tocs-pair-empty {
+                padding: 18px; text-align: center; color: #94a3b8; font-size: 12px;
+            }
+            .tocs-pair-foot {
+                position: sticky; bottom: 0;
+                background: #f8fafc; border-top: 1px solid #e2e8f0;
+                padding: 5px 10px; font-size: 11px; color: #64748b;
+                text-align: right;
+            }
+            .tocs-pair-chip-more {
+                background: #64748b !important; cursor: help;
+            }
+        `;
+        const tag = document.createElement("style");
+        tag.id = "tocs-pair-style";
+        tag.textContent = css;
+        document.head.appendChild(tag);
+    }
+
+    // Position panel under trigger via getBoundingClientRect (escapes any
+    // transformed ancestor). Same logic as Item Short / Surplus widget.
+    function _positionPanel(triggerEl, panelEl) {
+        if (!triggerEl || !panelEl) return;
+        const rect = triggerEl.getBoundingClientRect();
+        const vpH = window.innerHeight, vpW = window.innerWidth;
+        const dropH = Math.min(420, panelEl.scrollHeight || 420);
+        const minW = Math.max(320, Math.min(480, rect.width));
+        let top = rect.bottom + 4, left = rect.left;
+        if (top + dropH > vpH - 8 && rect.top > dropH + 8) top = rect.top - dropH - 4;
+        if (left + minW > vpW - 8) left = Math.max(8, vpW - minW - 8);
+        if (left < 8) left = 8;
+        panelEl.style.top = `${top}px`;
+        panelEl.style.left = `${left}px`;
+        panelEl.style.width = `${minW}px`;
+    }
+
+    function _esc(v) {
+        return frappe.utils.escape_html(String(v == null ? "" : v));
+    }
+
+    // Read state from the textarea — array of pair-key strings.
+    function _readState(textareaVal) {
+        if (!textareaVal) return [];
+        return textareaVal.trim().split("\n")
+            .map(l => l.trim()).filter(l => l.length);
+    }
+    function _writeState(arr) {
+        return (arr || []).join("\n");
+    }
+
+    // Fetch the pair list for this voucher type. Uses the same backend
+    // method that powers the Item Short / Surplus filter chips so both
+    // surfaces stay in sync.
+    const _pairCache = {};
+    async function _fetchPairs(doctype) {
+        if (_pairCache[doctype]) return _pairCache[doctype];
+        const r = await frappe.call({
+            method: "chaizup_toc.api.item_short_surplus_api.get_filter_options",
+        });
+        const m = r.message || { options: {} };
+        const map = {
+            "Sales Order":    m.options.so_pairs || [],
+            "Work Order":     m.options.wo_pairs || [],
+            "Purchase Order": m.options.po_pairs || [],
+        };
+        Object.keys(map).forEach(k => { _pairCache[k] = map[k]; });
+        return _pairCache[doctype] || [];
+    }
+
+    // Build and mount the widget over the field. Called once per refresh.
+    async function _mountWidget(frm, cfg) {
+        const field = frm.fields_dict[cfg.field];
+        if (!field || !field.$wrapper) return;
+        // Idempotency guard — don't double-mount on every refresh.
+        if (field._tocsPairMounted) return;
+        field._tocsPairMounted = true;
+
+        // Hide the underlying textarea but keep it as the value source.
+        const $textarea = field.$input;
+        if ($textarea && $textarea.length) $textarea.hide();
+
+        const pairs = await _fetchPairs(cfg.dtype);
+        const byKey = {};
+        pairs.forEach(p => { byKey[p.key] = p; });
+
+        // ── Build trigger (chip strip) + panel
+        const $host = $(`<div class="tocs-pair-host"></div>`);
+        const $chips = $(`<div class="tocs-pair-chips" tabindex="0"></div>`);
+        const $caret = $(`<i class="fa fa-caret-down tocs-pair-caret"></i>`);
+        $chips.append($caret);
+        $host.append($chips);
+        const $panel = $(`<div class="tocs-pair-panel"></div>`);
+        const $head = $(`
+            <div class="tocs-pair-head">
+                <div class="tocs-pair-search-wrap">
+                    <i class="fa fa-search tocs-pair-search-icon"></i>
+                    <input type="search" class="tocs-pair-search"
+                           placeholder="${_esc(__("Search status or workflow…"))}">
+                </div>
+                <div class="tocs-pair-actions">
+                    <button class="tocs-pair-action tocs-all">${_esc(__("Select all"))}</button>
+                    <button class="tocs-pair-action tocs-clear">${_esc(__("Clear"))}</button>
+                </div>
+            </div>
+        `);
+        const $opts = $(`<div class="tocs-pair-opts"></div>`);
+        const $foot = $(`<div class="tocs-pair-foot"></div>`);
+        $panel.append($head).append($opts).append($foot);
+        field.$wrapper.append($host);
+
+        // ── Read current value from the textarea
+        let state = _readState(field.value || "");
+
+        const renderChips = () => {
+            $chips.find(".tocs-pair-chip, .tocs-pair-placeholder").remove();
+            if (!state.length) {
+                $chips.prepend(`<span class="tocs-pair-placeholder">${_esc(__("No pairs selected"))}</span>`);
+                return;
+            }
+            const visible = state.slice(0, 4);
+            visible.forEach(k => {
+                const opt = byKey[k] || { label: k };
+                const $c = $(`<span class="tocs-pair-chip" title="${_esc(opt.label)}">${_esc(opt.label)}<span class="tocs-pair-chip-x">&times;</span></span>`);
+                $c.find(".tocs-pair-chip-x").on("click", (e) => {
+                    e.stopPropagation();
+                    state = state.filter(z => z !== k);
+                    _commit();
+                    renderChips();
+                    renderFoot();
+                });
+                $chips.find(".tocs-pair-caret").before($c);
+            });
+            if (state.length > 4) {
+                const moreLabels = state.slice(4).map(k => (byKey[k] && byKey[k].label) || k).join(", ");
+                $chips.find(".tocs-pair-caret").before(
+                    `<span class="tocs-pair-chip tocs-pair-chip-more" title="${_esc(moreLabels)}">+${state.length - 4} ${_esc(__("more"))}</span>`
+                );
+            }
+        };
+
+        const renderFoot = () => {
+            $foot.text(__("{0} of {1} selected", [state.length, pairs.length]));
+        };
+
+        let currentList = pairs.slice();
+        const renderOpts = (filter = "") => {
+            $opts.empty();
+            currentList = pairs.slice();
+            if (filter) {
+                const f = filter.toLowerCase();
+                currentList = currentList.filter(o =>
+                    String(o.label).toLowerCase().includes(f) ||
+                    String(o.status).toLowerCase().includes(f) ||
+                    String(o.workflow_state).toLowerCase().includes(f));
+            }
+            if (!currentList.length) {
+                $opts.append(`<div class="tocs-pair-empty">
+                    <i class="fa fa-search-minus"></i> ${_esc(__("No matching pairs"))}
+                </div>`);
+                return;
+            }
+            currentList.forEach(opt => {
+                const sel = state.includes(opt.key);
+                const stHtml = opt.status
+                    ? `<span class="tocs-pair-pill tocs-pair-pill-status">${_esc(opt.status)}</span>`
+                    : `<span class="tocs-pair-empty-side">—</span>`;
+                const wfHtml = opt.workflow_state
+                    ? `<span class="tocs-pair-pill tocs-pair-pill-workflow">${_esc(opt.workflow_state)}</span>`
+                    : `<span class="tocs-pair-empty-side">—</span>`;
+                const $o = $(`
+                    <label class="tocs-pair-opt ${sel ? "tocs-selected" : ""}">
+                        <input type="checkbox" ${sel ? "checked" : ""}>
+                        <span class="tocs-pair-cell">
+                            ${stHtml}<span class="tocs-pair-sep">:</span>${wfHtml}
+                        </span>
+                    </label>
+                `);
+                $o.on("click", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (state.includes(opt.key)) {
+                        state = state.filter(z => z !== opt.key);
+                    } else {
+                        state = [...state, opt.key];
+                    }
+                    const nowSel = state.includes(opt.key);
+                    $o.toggleClass("tocs-selected", nowSel)
+                      .find("input").prop("checked", nowSel);
+                    _commit();
+                    renderChips();
+                    renderFoot();
+                });
+                $opts.append($o);
+            });
+        };
+
+        // Persist back to the textarea + mark dirty so the user's Save works.
+        const _commit = () => {
+            const newVal = _writeState(state);
+            if (field.value !== newVal) {
+                field.set_value(newVal);
+                frm.dirty();
+            }
+        };
+
+        // Open / close
+        const $search = $head.find(".tocs-pair-search");
+        const reposition = () => _positionPanel($chips[0], $panel[0]);
+        const closePanel = () => {
+            $panel.removeClass("tocs-open");
+            $chips.removeClass("tocs-open");
+            window.removeEventListener("scroll", reposition, true);
+            window.removeEventListener("resize", reposition);
+        };
+
+        $chips.on("click", (e) => {
+            if ($(e.target).hasClass("tocs-pair-chip-x")) return;
+            // Close any other panel
+            $(".tocs-pair-panel.tocs-open").not($panel).removeClass("tocs-open");
+            $(".tocs-pair-chips.tocs-open").not($chips).removeClass("tocs-open");
+            const wasOpen = $panel.hasClass("tocs-open");
+            if (wasOpen) { closePanel(); return; }
+            $search.val("");
+            renderOpts();
+            renderFoot();
+            if ($panel[0].parentNode !== document.body) {
+                document.body.appendChild($panel[0]);
+            }
+            $panel.addClass("tocs-open");
+            $chips.addClass("tocs-open");
+            requestAnimationFrame(reposition);
+            window.addEventListener("scroll", reposition, true);
+            window.addEventListener("resize", reposition);
+            setTimeout(() => $search.focus(), 0);
+        });
+
+        $search.on("input", (e) => renderOpts(e.target.value));
+        $search.on("keydown", (e) => { if (e.key === "Escape") closePanel(); });
+
+        $head.find(".tocs-all").on("click", (e) => {
+            e.stopPropagation();
+            const set = new Set([...state, ...currentList.map(o => o.key)]);
+            state = Array.from(set);
+            _commit();
+            renderChips();
+            renderFoot();
+            renderOpts($search.val());
+        });
+        $head.find(".tocs-clear").on("click", (e) => {
+            e.stopPropagation();
+            state = [];
+            _commit();
+            renderChips();
+            renderFoot();
+            renderOpts($search.val());
+        });
+
+        $(document).on("click.tocs-pair-" + cfg.field, (e) => {
+            if ($panel[0].contains(e.target)) return;
+            if (!$host[0].contains(e.target)) closePanel();
+        });
+
+        // Sync if backend updates the value (e.g., reload from server)
+        field.df.__tocs_resync = () => {
+            state = _readState(field.value || "");
+            renderChips();
+        };
+
+        renderChips();
+    }
+
+    frappe.ui.form.on("TOC Settings", {
+        refresh(frm) {
+            _ensureStyle();
+            // Mount widget on each of the 6 pair fields.
+            PAIR_FIELDS.forEach(cfg => _mountWidget(frm, cfg));
+        },
+        // When backend reload bumps the values, re-render chips from the new state.
+        after_save(frm) {
+            PAIR_FIELDS.forEach(cfg => {
+                const field = frm.fields_dict[cfg.field];
+                if (field && field.df.__tocs_resync) field.df.__tocs_resync();
+            });
+        },
+    });
+
+    // Clean up any orphaned panels on form re-route.
+    document.addEventListener("page-change", () => {
+        document.querySelectorAll(".tocs-pair-panel.tocs-open")
+            .forEach(p => p.classList.remove("tocs-open"));
+    });
+})();

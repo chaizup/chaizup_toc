@@ -20,3 +20,6 @@ chaizup_toc.patches.v1_0.bom_list_polish
 chaizup_toc.patches.v1_0.wo_uom_required_and_pp_column
 chaizup_toc.patches.v1_0.wo_pp_filter_chips
 chaizup_toc.patches.v1_0.wo_drop_stale_item_group
+chaizup_toc.patches.v1_0.migrate_pending_pairs_to_combined
+chaizup_toc.patches.v1_0.merge_confirmed_so_into_pending
+chaizup_toc.patches.v1_0.merge_draft_workflow_into_pending

@@ -35,33 +35,31 @@
   "custom_deepseek_api_key",
   "projection_section",
   "enable_projection_automation",
-  "default_so_warehouse",
   "projection_pending_so_statuses",
-  "projection_confirmed_so_workflow_states",
+  "column_break_fnpt",
+  "default_so_warehouse",
   "pending_section_break",
   "pending_wo_statuses",
-  "pending_wo_workflow_states",
-  "pending_po_col_break",
   "pending_po_statuses",
-  "pending_po_workflow_states",
-  "col_projection",
+  "pending_po_col_break",
   "run_projection_automation_now",
   "run_so_shortage_automation_now",
   "run_shortage_action_automation_now",
+  "section_break_oosi",
   "projection_notification_users",
   "demo_section",
   "demo_data_manifest"
  ],
  "fields": [
   {
-   "description": "F3: Buffer Penetration % boundaries for Green → Yellow → Red → Black zones.",
+   "description": "F3: Buffer Penetration % boundaries for Green \u2192 Yellow \u2192 Red \u2192 Black zones.",
    "fieldname": "zone_section",
    "fieldtype": "Section Break",
    "label": "Zone Thresholds"
   },
   {
    "default": "67",
-   "description": "F3: BP% ≥ this value = Red Zone (produce/order IMMEDIATELY). Default: 67%",
+   "description": "F3: BP% \u2265 this value = Red Zone (produce/order IMMEDIATELY). Default: 67%",
    "fieldname": "red_zone_threshold",
    "fieldtype": "Float",
    "in_list_view": 1,
@@ -70,7 +68,7 @@
   },
   {
    "default": "33",
-   "description": "F3: BP% ≥ this value = Yellow Zone (plan replenishment). Default: 33%",
+   "description": "F3: BP% \u2265 this value = Yellow Zone (plan replenishment). Default: 33%",
    "fieldname": "yellow_zone_threshold",
    "fieldtype": "Float",
    "in_list_view": 1,
@@ -145,7 +143,7 @@
   },
   {
    "default": "20",
-   "description": "F7 TMR Trigger: If stock in Red > this % of RLT in one cycle → increase buffer. Default: 20%",
+   "description": "F7 TMR Trigger: If stock in Red > this % of RLT in one cycle \u2192 increase buffer. Default: 20%",
    "fieldname": "tmr_red_pct_of_rlt",
    "fieldtype": "Float",
    "in_list_view": 1,
@@ -154,7 +152,7 @@
   },
   {
    "default": "3",
-   "description": "F8 TMG Trigger: Stock must be in Green for this many full RLT cycles → decrease buffer. Default: 3",
+   "description": "F8 TMG Trigger: Stock must be in Green for this many full RLT cycles \u2192 decrease buffer. Default: 3",
    "fieldname": "tmg_cycles_required",
    "fieldtype": "Int",
    "in_list_view": 1,
@@ -167,7 +165,7 @@
   },
   {
    "default": "33",
-   "description": "F7/F8: TMR increases by +this%, TMG decreases by −this%. Default: 33%",
+   "description": "F7/F8: TMR increases by +this%, TMG decreases by \u2212this%. Default: 33%",
    "fieldname": "dbm_adjustment_pct",
    "fieldtype": "Float",
    "label": "DBM Adjustment %",
@@ -255,58 +253,44 @@
    "label": "DeepSeek API Key"
   },
   {
-   "collapsible": 1,
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;color:#1f2937;font-family:sans-serif;line-height:1.5\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;border-bottom:2px solid #3b82f6;padding-bottom:8px\">\n        <span style=\"font-size:1.2rem;margin-right:8px\">📋</span>\n        <strong style=\"font-size:1.1rem;color:#1e40af\">Production Automation Guide</strong>\n    </div>\n\n    <p style=\"margin-bottom:16px;font-size:0.95rem\">\n        Each month your sales team submits a <b>Sales Projection</b>. This section allows the system to automatically generate <b>Work Orders</b> to fulfill those specific production targets.\n    </p>\n\n    <div style=\"background-color:#ffffff;border-left:4px solid #3b82f6;padding:12px;border-radius:4px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0, 0, 0, 0.05)\">\n        <h5 style=\"margin-top:0;color:#3b82f6;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em\">▶ How it Works</h5>\n        <ol style=\"margin:0;padding-left:20px;font-size:0.9rem\">\n            <li style=\"margin-bottom:8px\"><b>Schedule:</b> Every day at <b>06:00 AM</b>, the system checks for a SUBMITTED Sales Projection for the current month.</li>\n            <li style=\"margin-bottom:8px\">\n                <b>Calculation:</b> For each item, the system calculates demand using the following logic:\n                <div style=\"background-color:#f1f5f9;padding:10px;border-radius:6px;margin:8px 0;font-family:monospace;font-size:0.85rem;border:1px solid #cbd5e1\">\n                    Net Required = (Projected Qty + Carryover Pending SOs) − Current Month Pending SOs − (Current Stock + Open WO Qty)\n                </div>\n                <ul style=\"list-style-type:circle;padding-left:20px;font-size:0.85rem;color:#4b5563\">\n                    <li><b>Carryover Pending SOs:</b> Unfulfilled orders due <i>before</i> this month.</li>\n                    <li><b>Open WO Qty:</b> Quantity in open/draft orders (prevents double-ordering).</li>\n                </ul>\n            </li>\n            <li style=\"margin-bottom:8px\"><b>Execution:</b> If Net Required &gt; 0 and <b>Production Capacity</b> is set, a <b>Draft Work Order</b> is created.</li>\n            <li style=\"margin-bottom:8px\"><b>Recursive BOM:</b> Sub-assemblies are automatically triggered for the full BOM tree.</li>\n        </ol>\n    </div>\n\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;margin-bottom:16px\">\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">⚠️ Capacity Gate</strong><br>\n            If Capacity is 0 or blank, no Work Order is created. You will be notified via email.\n        </div>\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">⚠️ BOM Gate</strong><br>\n            If no active Default BOM is found, the system skips the item and sends an email alert.\n        </div>\n    </div>\n\n    <div style=\"font-size:0.85rem;border-top:1px dashed #cbd5e1;padding-top:10px;color:#64748b\">\n        <span><b>Manual Trigger:</b> Use the 'Run Projection Automation' button on any submitted Projection.</span><br>\n        <span style=\"color:#059669\"><b>✓ Safe by Design:</b> The system accounts for existing orders; running it twice will not create duplicates.</span>\n    </div>\n</div>",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;color:#1f2937;font-family:sans-serif;line-height:1.5\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;border-bottom:2px solid #3b82f6;padding-bottom:8px\">\n        <span style=\"font-size:1.2rem;margin-right:8px\">\ud83d\udccb</span>\n        <strong style=\"font-size:1.1rem;color:#1e40af\">Production Automation Guide</strong>\n    </div>\n\n    <p style=\"margin-bottom:16px;font-size:0.95rem\">\n        Each month your sales team submits a <b>Sales Projection</b>. This section allows the system to automatically generate <b>Work Orders</b> to fulfill those specific production targets.\n    </p>\n\n    <div style=\"background-color:#ffffff;border-left:4px solid #3b82f6;padding:12px;border-radius:4px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0, 0, 0, 0.05)\">\n        <h5 style=\"margin-top:0;color:#3b82f6;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em\">\u25b6 How it Works</h5>\n        <ol style=\"margin:0;padding-left:20px;font-size:0.9rem\">\n            <li style=\"margin-bottom:8px\"><b>Schedule:</b> Every day at <b>06:00 AM</b>, the system checks for a SUBMITTED Sales Projection for the current month.</li>\n            <li style=\"margin-bottom:8px\">\n                <b>Calculation:</b> For each item, the system calculates demand using the following logic:\n                <div style=\"background-color:#f1f5f9;padding:10px;border-radius:6px;margin:8px 0;font-family:monospace;font-size:0.85rem;border:1px solid #cbd5e1\">\n                    Net Required = (Projected Qty + Carryover Pending SOs) \u2212 Current Month Pending SOs \u2212 (Current Stock + Open WO Qty)\n                </div>\n                <ul style=\"list-style-type:circle;padding-left:20px;font-size:0.85rem;color:#4b5563\">\n                    <li><b>Carryover Pending SOs:</b> Unfulfilled orders due <i>before</i> this month.</li>\n                    <li><b>Open WO Qty:</b> Quantity in open/draft orders (prevents double-ordering).</li>\n                </ul>\n            </li>\n            <li style=\"margin-bottom:8px\"><b>Execution:</b> If Net Required &gt; 0 and <b>Production Capacity</b> is set, a <b>Draft Work Order</b> is created.</li>\n            <li style=\"margin-bottom:8px\"><b>Recursive BOM:</b> Sub-assemblies are automatically triggered for the full BOM tree.</li>\n        </ol>\n    </div>\n\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;margin-bottom:16px\">\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">\u26a0\ufe0f Capacity Gate</strong><br>\n            If Capacity is 0 or blank, no Work Order is created. You will be notified via email.\n        </div>\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">\u26a0\ufe0f BOM Gate</strong><br>\n            If no active Default BOM is found, the system skips the item and sends an email alert.\n        </div>\n    </div>\n\n    <div style=\"font-size:0.85rem;border-top:1px dashed #cbd5e1;padding-top:10px;color:#64748b\">\n        <span><b>Manual Trigger:</b> Use the 'Run Projection Automation' button on any submitted Projection.</span><br>\n        <span style=\"color:#059669\"><b>\u2713 Safe by Design:</b> The system accounts for existing orders; running it twice will not create duplicates.</span>\n    </div>\n</div>",
    "fieldname": "projection_section",
    "fieldtype": "Section Break",
    "label": "Sales Projection Automation"
   },
   {
    "default": "0",
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">⚙️</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Automation Switch</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Control how the system handles monthly Sales Projections. Toggle this setting to enable or disable background production triggers.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:60px\">ON</div>\n            <div style=\"font-size:12px;color:#444\">\n                System <b>auto-creates Draft Work Orders</b> daily at <b>06:00 AM</b> for the current month's submitted Sales Projection.\n            </div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#dc3545;font-weight:bold;margin-right:12px;font-size:12px;min-width:60px\">OFF</div>\n            <div style=\"font-size:12px;color:#444\">\n                Sales Projections are <b>reference-only</b>. No automatic Work Orders will be generated.\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#f1f5f9;border-radius:4px;border-left:3px solid #64748b\">\n        <div style=\"font-size:11px;color:#475569;line-height:1.4\">\n            <b>Manual Trigger:</b> The 'Run Projection Automation' button is restricted by this setting. If set to <b>OFF</b>, manual runs are also disabled.\n        </div>\n    </div>\n</div>",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">\u2699\ufe0f</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Automation Switch</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Control how the system handles monthly Sales Projections. Toggle this setting to enable or disable background production triggers.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:60px\">ON</div>\n            <div style=\"font-size:12px;color:#444\">\n                System <b>auto-creates Draft Work Orders</b> daily at <b>06:00 AM</b> for the current month's submitted Sales Projection.\n            </div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#dc3545;font-weight:bold;margin-right:12px;font-size:12px;min-width:60px\">OFF</div>\n            <div style=\"font-size:12px;color:#444\">\n                Sales Projections are <b>reference-only</b>. No automatic Work Orders will be generated.\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#f1f5f9;border-radius:4px;border-left:3px solid #64748b\">\n        <div style=\"font-size:11px;color:#475569;line-height:1.4\">\n            <b>Manual Trigger:</b> The 'Run Projection Automation' button is restricted by this setting. If set to <b>OFF</b>, manual runs are also disabled.\n        </div>\n    </div>\n</div>",
    "fieldname": "enable_projection_automation",
    "fieldtype": "Check",
    "label": "Enable Projection Automation"
   },
   {
-   "default": "To Deliver and Bill\nTo Deliver\nOn Hold",
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📊</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Demand Filter</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Define which <b>Submitted</b> ($docstatus=1$) Sales Order statuses should be treated as active demand in the production formula.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">INCLUDE</div>\n            <div style=\"font-size:12px;color:#444\">\n                Statuses that represent <b>unfulfilled</b> items. <br>\n                <i style=\"color:#64748b\">Typical: To Deliver and Bill, To Deliver, On Hold.</i>\n            </div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#dc3545;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">EXCLUDE</div>\n            <div style=\"font-size:12px;color:#444\">\n                Do <b>NOT</b> include: <i>Completed, Closed, or To Bill</i>. These represent items that have already been physically delivered.\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#fefce8;border-radius:4px;border-left:3px solid #eab308\">\n        <div style=\"font-size:11px;color:#854d0e;line-height:1.4\">\n            <b>Formula Impact:</b> These values are additive defaults used to calculate <i>Carryover Pending SOs</i> and <i>Current Month Pending SOs</i>.\n        </div>\n    </div>\n</div>",
+   "default": "To Deliver and Bill|\nTo Deliver|\nOn Hold|",
+   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">SO</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Sales Order Statuses</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        Sales Order <code>&lt;Status&gt; : &lt;Workflow State&gt;</code> pairs treated as <b>active demand</b> by the Sales Projection automation (Calc A / Calc B) and other pending-SO consumers. The pair widget surfaces every (status, workflow_state) combination defined on the Sales Order DocType + active Workflow.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>v0.0.28:</b> Merged with the legacy <code>Confirmed Draft SO Workflow States</code> field (removed). Both submit-status and draft-workflow predicates now read from this single field. Backward-compat: legacy plain-status lines continue to work (treated as <code>status|</code>).\n    </div>\n</div>",
    "fieldname": "projection_pending_so_statuses",
    "fieldtype": "Small Text",
-   "label": "Pending Sales Order Statuses — Submitted SOs (one per line)"
+   "label": "Pending Sales Order Statuses"
   },
   {
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📦</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Default Warehouse for Sales Orders</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        When a Sales Order line item has <b>no Warehouse</b> set, this fallback warehouse is used by the Production Plan automation to compute stock and route shortages. Leave blank to skip such SO lines silently.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Tip:</b> If your sales reps frequently leave Warehouse blank, set this to your primary distribution warehouse so the engine never silently drops their orders.\n    </div>\n</div>",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">\ud83d\udce6</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Default Warehouse for Sales Orders</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        When a Sales Order line item has <b>no Warehouse</b> set, this fallback warehouse is used by the Production Plan automation to compute stock and route shortages. Leave blank to skip such SO lines silently.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Tip:</b> If your sales reps frequently leave Warehouse blank, set this to your primary distribution warehouse so the engine never silently drops their orders.\n    </div>\n</div>",
    "fieldname": "default_so_warehouse",
    "fieldtype": "Link",
-   "options": "Warehouse",
-   "label": "Default Warehouse for Sales Orders"
+   "label": "Default Warehouse for Sales Orders",
+   "options": "Warehouse"
   },
   {
-   "default": "Confirmed",
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">🔗</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Draft Demand Logic</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Define specific <b>Workflow States</b> for Draft Sales Orders ($docstatus=0$) that should be treated as committed demand, bypassing the standard status list above.\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#6366f1;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">DRAFT ONLY</div>\n            <div style=\"font-size:12px;color:#444\">\n                Counted as <b>Committed Demand</b> regardless of the main statuses. \n                <br><i style=\"color:#64748b\">Standard Default: <b>Confirmed</b></i>\n            </div>\n        </div>\n    </div>\n\n    <div style=\"margin-top:12px;padding:8px 12px;background-color:#f1f5f9;border-radius:4px;border-left:3px solid #4f46e5\">\n        <div style=\"font-size:11px;color:#475569;line-height:1.4\">\n            <b>Custom Workflows:</b> If your internal Sales Order approval process uses different state names (e.g., \"Validated\", \"Pre-Approved\"), update this list to ensure accurate demand tracking.\n        </div>\n    </div>\n</div>",
-   "fieldname": "projection_confirmed_so_workflow_states",
-   "fieldtype": "Small Text",
-   "label": "Confirmed Draft SO Workflow States (one per line)"
-  },
-  {
-   "description": "Configure which Work Order and Purchase Order statuses are counted as <b>open / pending</b> by the engine. Same idea as the Sales Order block above &mdash; the engine reads these values when computing pending qty for Calc A, Calc B, Calc SO, Calc Action and all WO / PO summaries on the dashboards.",
+   "description": "Configure which Sales Order, Work Order, and Purchase Order pairs are counted as <b>open / pending</b> by the engine. Each field is a multi-select of <code>&lt;Status&gt; : &lt;Workflow State&gt;</code> pairs sourced from live data. Backend parses the pair list and routes the relevant side (status for the \"Pending \u2026\" fields, workflow_state for the \"Draft \u2026 Workflow\" fields).",
    "fieldname": "pending_section_break",
    "fieldtype": "Section Break",
-   "label": "Pending Work Order &amp; Purchase Order Statuses"
+   "label": "Pending Sales, Work &amp; Purchase Order Statuses"
   },
   {
    "default": "Not Started\nIn Process\nMaterial Transferred",
-   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system,sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">WO</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Work Order Statuses</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        Submitted ($docstatus=1$) Work Order statuses that the engine should count as <b>open WO output</b> (still producing). Typical: <i>Not Started, In Process, Material Transferred</i>. EXCLUDE <i>Completed, Stopped, Cancelled</i>. One status per line.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Impact:</b> Drives <code>open_wo</code> in Calc A / B / SO / Action and in the WO Kitting Planner stock-mode (Current + Expected).\n    </div>\n</div>",
+   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">WO</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Work Order Statuses</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        Submitted ($docstatus=1$) Work Order <code>&lt;Status&gt; : &lt;Workflow State&gt;</code> pairs the engine counts as <b>open WO output</b>. Typical: <i>Not Started, In Process, Material Transferred</i>. EXCLUDE <i>Completed, Stopped, Cancelled</i>.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Impact:</b> Drives <code>open_wo</code> in Calc A / B / SO / Action and in the WO Kitting Planner stock-mode (Current + Expected).\n    </div>\n</div>",
    "fieldname": "pending_wo_statuses",
    "fieldtype": "Small Text",
-   "label": "Pending Work Order Statuses (one per line)"
-  },
-  {
-   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system,sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">WF</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Draft WO Workflow States (optional)</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        If your site adds a Workflow on Work Order, list workflow states that should ALSO be counted as open (for Draft WOs, $docstatus=0$). Engine silently ignores this block when the Work Order DocType has no <code>workflow_state</code> column. One state per line.\n    </p>\n</div>",
-   "fieldname": "pending_wo_workflow_states",
-   "fieldtype": "Small Text",
-   "label": "Draft WO Workflow States (one per line)"
+   "label": "Pending Work Order Statuses"
   },
   {
    "fieldname": "pending_po_col_break",
@@ -314,23 +298,13 @@
   },
   {
    "default": "To Receive\nTo Receive and Bill",
-   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system,sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">PO</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Purchase Order Statuses</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        Submitted ($docstatus=1$) Purchase Order statuses to count as <b>incoming supply</b>. Typical: <i>To Receive, To Receive and Bill</i>. EXCLUDE <i>Completed, Closed, Cancelled</i>. One status per line.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Impact:</b> Drives <code>open_po</code> in Calc Action max-level mode, in WO Kitting Planner Purchase Priority, and in the Production Overview \"Incoming (Purchase)\" column.\n    </div>\n</div>",
+   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">PO</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Purchase Order Statuses</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        Submitted ($docstatus=1$) Purchase Order <code>&lt;Status&gt; : &lt;Workflow State&gt;</code> pairs to count as <b>incoming supply</b>. Typical: <i>To Receive, To Receive and Bill</i>. EXCLUDE <i>Completed, Closed, Cancelled</i>.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Impact:</b> Drives <code>open_po</code> in Calc Action max-level mode, in WO Kitting Planner Purchase Priority, and in the Production Overview \"Incoming (Purchase)\" column.\n    </div>\n</div>",
    "fieldname": "pending_po_statuses",
    "fieldtype": "Small Text",
-   "label": "Pending Purchase Order Statuses (one per line)"
+   "label": "Pending Purchase Order Statuses"
   },
   {
-   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system,sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">WF</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Draft PO Workflow States (optional)</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        If your site adds a Workflow on Purchase Order, list workflow states that should ALSO be counted as open. Silently ignored when PO has no <code>workflow_state</code> column. One state per line.\n    </p>\n</div>",
-   "fieldname": "pending_po_workflow_states",
-   "fieldtype": "Small Text",
-   "label": "Draft PO Workflow States (one per line)"
-  },
-  {
-   "fieldname": "col_projection",
-   "fieldtype": "Column Break"
-  },
-  {
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;font-family:sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:8px\">\n        <span style=\"font-size:15px;margin-right:8px\">▶</span>\n        <strong style=\"font-size:12px;text-transform:uppercase;letter-spacing:0.025em;color:#1e40af\">Manual Run Trigger</strong>\n    </div>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:0;line-height:1.5\">\n        Click <b>Run Now</b> to execute Calc A (forecast) and Calc B (SO-driven) for every submitted Sales Projection of the current month. Each per-item decision is recorded in the <b>TOC Production Plan Run Log</b>.\n    </p>\n</div>",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;font-family:sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:8px\">\n        <span style=\"font-size:15px;margin-right:8px\">\u25b6</span>\n        <strong style=\"font-size:12px;text-transform:uppercase;letter-spacing:0.025em;color:#1e40af\">Manual Run Trigger</strong>\n    </div>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:0;line-height:1.5\">\n        Click <b>Run Now</b> to execute Calc A (forecast) and Calc B (SO-driven) for every submitted Sales Projection of the current month. Each per-item decision is recorded in the <b>TOC Production Plan Run Log</b>.\n    </p>\n</div>",
    "fieldname": "run_projection_automation_now",
    "fieldtype": "Button",
    "label": "Run Now (Calc A + Calc B)"
@@ -348,7 +322,7 @@
    "label": "Run Shortage Action Now"
   },
   {
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">📧</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Email Notification Settings</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Add users to the table below to subscribe them to automated alerts. Each user can receive three types of updates:\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#2490ef;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON EDIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered every time a <b>Sales Projection</b> draft is saved.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON SUBMIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered when a Sales Projection is officially finalized/submitted.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#ff9800;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON WO RUN</div>\n            <div style=\"font-size:12px;color:#444\">\n                Full summary report (daily or manual) including:\n                <ul style=\"margin:4px 0 0 0;padding-left:18px;color:#666;font-size:11px\">\n                    <li>List of Work Orders created</li>\n                    <li>Items skipped and specific reasons (Capacity/BOM)</li>\n                </ul>\n            </div>\n        </div>\n    </div>\n</div>",
+   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">\ud83d\udce7</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Email Notification Settings</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Add users to the table below to subscribe them to automated alerts. Each user can receive three types of updates:\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#2490ef;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON EDIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered every time a <b>Sales Projection</b> draft is saved.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON SUBMIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered when a Sales Projection is officially finalized/submitted.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#ff9800;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON WO RUN</div>\n            <div style=\"font-size:12px;color:#444\">\n                Full summary report (daily or manual) including:\n                <ul style=\"margin:4px 0 0 0;padding-left:18px;color:#666;font-size:11px\">\n                    <li>List of Work Orders created</li>\n                    <li>Items skipped and specific reasons (Capacity/BOM)</li>\n                </ul>\n            </div>\n        </div>\n    </div>\n</div>",
    "fieldname": "projection_notification_users",
    "fieldtype": "Table",
    "label": "Notification Users",
@@ -368,11 +342,19 @@
    "hidden": 1,
    "label": "Demo Data Manifest",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_oosi",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_fnpt",
+   "fieldtype": "Column Break"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-04-27 12:00:00.000000",
+ "modified": "2026-05-27 22:31:58.833971",
  "modified_by": "it@chaizup.in",
  "module": "Chaizup Toc",
  "name": "TOC Settings",

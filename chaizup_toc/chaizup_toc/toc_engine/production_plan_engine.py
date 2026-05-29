@@ -1887,49 +1887,159 @@ def _warehouse_stock(item_code, warehouse):
 # =============================================================================
 
 def _parse_statuses(raw_text):
-    """Convert newline-separated SO statuses string from TOC Settings into a list."""
-    if not raw_text:
-        return ["To Deliver and Bill", "To Deliver", "On Hold"]
-    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+    """SO statuses parser.
+
+    v0.0.28 — Reads the renamed `projection_pending_so_statuses` field
+    which now stores `<status>|<workflow_state>` pair lines (the
+    `projection_confirmed_so_workflow_states` field was DROPPED in v0.0.28
+    and merged into this single field).
+
+    Returns the STATUS side (left of `|`) of each pair line, deduped.
+    Legacy plain-status lines (no `|`) are treated as the status itself.
+
+    Default fallback (when the field is blank) preserves the original
+    v0.0.27 engine behaviour: ["To Deliver and Bill", "To Deliver", "On Hold"].
+    """
+    out = _extract_pair_side(raw_text, "status") if raw_text else []
+    return out if out else ["To Deliver and Bill", "To Deliver", "On Hold"]
 
 
 def _parse_confirmed_states(raw_text):
-    """Convert newline-separated workflow state names from TOC Settings into a list."""
+    """SO workflow-state parser.
+
+    v0.0.28 — Reads from the SAME `projection_pending_so_statuses` field
+    as `_parse_statuses` (the legacy `projection_confirmed_so_workflow_states`
+    field was merged into it). Extracts the WORKFLOW side (right of `|`)
+    of each pair line, deduped.
+
+    Legacy plain-state lines (no `|`) from a freshly-renamed
+    `projection_confirmed_so_workflow_states` field stored separately would
+    be missed by this single-field read — but those old standalone lines
+    have already been merged into the pair field by the v0.0.28 migrate
+    patch (`merge_confirmed_so_into_pending`).
+    """
     if not raw_text:
         return ["Confirmed"]
-    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+    out = _extract_pair_side(raw_text, "workflow")
+    return out if out else ["Confirmed"]
 
 
 # BTP-001 (2026-05-14): WO + PO status parsers — read from TOC Settings.
 # Defaults match the legacy hardcoded engine clauses so behaviour is
 # unchanged when the new fields are left blank on existing sites.
+#
+# v0.0.27 (2026-05-27) — STORAGE FORMAT UPGRADE:
+#   The 4 legacy plain-status fields (pending_wo_statuses,
+#   pending_wo_workflow_states, pending_po_statuses,
+#   pending_po_workflow_states) PLUS 2 new SO fields (pending_so_statuses,
+#   pending_so_workflow_states) all switched their UI to a multi-select
+#   pair widget. Each line is now formatted as:
+#
+#       <status>|<workflow_state>
+#
+#   where either side may be empty. The 4 parsers below were updated to
+#   extract the relevant side of each pair, while preserving back-compat
+#   for sites still on the plain-status legacy format.
+#
+#   Routing rule (which side the parser returns):
+#     - parsers for the "Pending ... Statuses" fields → STATUS side (left)
+#     - parsers for the "Draft ... Workflow States" fields → WORKFLOW side (right)
+#
+#   This keeps the SQL predicates unchanged:
+#     - Pending fields → docstatus=1 AND status IN (...)
+#     - Workflow fields → docstatus=0 AND workflow_state IN (...)
+
+def _extract_pair_side(raw_text: str, side: str) -> list[str]:
+    """Extract `status` or `workflow_state` side from each pair line.
+
+    `side`: "status" → left side; "workflow" → right side.
+
+    Accepts BOTH new pair format (`status|workflow_state`) and the
+    legacy plain format (`status` or `workflow_state` on its own line).
+    For legacy lines on a "status" parser, the whole line is treated as
+    the status. For legacy lines on a "workflow" parser, the whole line
+    is treated as the workflow. This makes upgrade transparent — sites
+    that haven't migrated their stored values keep working.
+
+    Returns a deduped list in original order.
+    """
+    if not raw_text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in raw_text.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if "|" in line:
+            left, _, right = line.partition("|")
+            value = (left if side == "status" else right).strip()
+        else:
+            # Legacy single-value line — treat as the side we're parsing
+            value = line
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
 
 def _parse_wo_statuses(raw_text):
-    """Pending Work Order statuses (submitted, status IN this set)."""
-    if not raw_text:
-        return ["Not Started", "In Process", "Material Transferred"]
-    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+    """Pending Work Order statuses (submitted, status IN this set).
+
+    v0.0.27: extracts left side of `status|workflow_state` pairs.
+    Falls back to engine default when blank for backward compat with
+    fresh installs.
+    """
+    out = _extract_pair_side(raw_text, "status")
+    return out if out else ["Not Started", "In Process", "Material Transferred"]
 
 
 def _parse_wo_workflow_states(raw_text):
-    """Workflow states on Draft WOs to count as open (optional)."""
-    if not raw_text:
-        return []
-    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+    """Workflow states on Draft WOs to count as open (optional).
+
+    v0.0.27: extracts right side of `status|workflow_state` pairs.
+    Empty list when blank — workflow path is purely opt-in.
+    """
+    return _extract_pair_side(raw_text, "workflow")
 
 
 def _parse_po_statuses(raw_text):
-    """Pending Purchase Order statuses (submitted, status IN this set)."""
-    if not raw_text:
-        return ["To Receive", "To Receive and Bill"]
-    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+    """Pending Purchase Order statuses (submitted, status IN this set).
+
+    v0.0.27: extracts left side of `status|workflow_state` pairs.
+    """
+    out = _extract_pair_side(raw_text, "status")
+    return out if out else ["To Receive", "To Receive and Bill"]
 
 
 def _parse_po_workflow_states(raw_text):
-    """Workflow states on Draft POs to count as open (optional)."""
-    if not raw_text:
-        return []
-    return [s.strip() for s in raw_text.strip().split("\n") if s.strip()]
+    """Workflow states on Draft POs to count as open (optional).
+
+    v0.0.27: extracts right side of `status|workflow_state` pairs.
+    """
+    return _extract_pair_side(raw_text, "workflow")
+
+
+def _parse_so_statuses(raw_text):
+    """v0.0.28 — Pending SO statuses, reads pair-format same as _parse_statuses.
+
+    Sibling helper that some non-projection consumers (Item Short / Surplus
+    report's filter-options API) call to get the status side of the SO
+    pair field. The actual field is now `projection_pending_so_statuses`
+    (the v0.0.27 separate `pending_so_statuses` field was DROPPED in
+    v0.0.28 — merged into the projection field).
+    """
+    return _extract_pair_side(raw_text, "status")
+
+
+def _parse_so_workflow_states(raw_text):
+    """v0.0.28 — Draft SO workflow states.
+
+    Reads the workflow side of pair-format lines. Same field as
+    _parse_so_statuses (and _parse_statuses / _parse_confirmed_states):
+    `projection_pending_so_statuses`.
+    """
+    return _extract_pair_side(raw_text, "workflow")
 
 
 def _wo_has_workflow_column():
