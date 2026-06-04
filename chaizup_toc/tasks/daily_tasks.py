@@ -2,28 +2,87 @@
 Scheduled Tasks
 ================
 # =============================================================================
-# CONTEXT: Scheduled task runner for TOC daily operations.
-# MEMORY: app_chaizup_toc.md § Scheduled Tasks
+# CONTEXT: Scheduled task runner for Theory of Constraints (TOC) daily operations.
+# MEMORY: app_chaizup_toc.md § Scheduled Tasks | § ADU-PER-WAREHOUSE (2026-06-02)
 # INSTRUCTIONS:
-#   - ADU is universal: reads ALL stock outflows from Stock Ledger Entry
-#     (actual_qty < 0) for every item, regardless of item type/category.
-#   - No FG/SFG/RM/PM branching anywhere in this file.
-#   - Procurement run now filters by auto_purchase flag, not buffer_type.
+#   - Average Daily Usage (ADU) lives ONLY in the per-warehouse child table
+#     "Minimum Manufacture / Purchase Qty per Warehouse" (doctype
+#     `Item Minimum Manufacture`, parent field Item.custom_minimum_manufacture).
+#     The standalone item-level ADU fields (custom_toc_custom_adu /
+#     custom_toc_adu_period / custom_toc_adu_value / custom_toc_adu_last_updated)
+#     were REMOVED on 2026-06-02 — they duplicated the per-warehouse table.
+#   - `update_min_mfg_adu_levels` is now the SOLE ADU writer. It is UNIVERSAL
+#     and ITEM-GROUP-INDEPENDENT: per (item, warehouse) it reads ALL outward
+#     Stock Ledger Entry movements (actual_qty < 0) — Delivery Note (sales),
+#     Stock Entry (Work Order consumption / Material Issue / subcontracting),
+#     and any other voucher that removes stock. NO FG/SFG/RM/PM branching.
+#   - The old item-level `daily_adu_update` function + its 01:00 cron were
+#     DELETED (it only wrote the now-removed item-level field).
+#   - Procurement run filters by the auto_purchase flag, not buffer_type.
+# REQUIREMENT PROVENANCE:
+#   - 2026-06-02 (a): "ADU must NOT depend on item groups; always sum ALL
+#     outward movement." -> implemented via the universal SLE query.
+#   - 2026-06-02 (b): "Standalone item-level ADU fields not needed; use the
+#     Minimum Manufacture / Purchase Qty per Warehouse child table instead."
+#     -> item-level fields + item-level cron removed; per-warehouse table is
+#     the single source of ADU for every consumer (incl. Item Projection View
+#     'Days of Cover' and the Bulk Item Settings page).
+# CONSIDERATION (not a bug — flagged for ops policy):
+#   - The universal query also counts NEGATIVE Stock Reconciliation legs and
+#     inter-warehouse Material Transfer OUT legs (corrections / relocations,
+#     not true demand). Kept because the directive is literally "ALL outward".
+#     For demand-only ADU, exclude those two voucher types in
+#     update_min_mfg_adu_levels.
 # DANGER ZONE:
-#   - Do NOT re-add FG/SFG/RM/PM branching to daily_adu_update().
-#   - Universal SLE query captures: sales, production consumption, transfers,
-#     WO component draw-downs — all in one query per item.
+#   - Do NOT re-add Item-Group / buffer-type branching to ADU.
+#   - Do NOT re-introduce an item-level ADU field or cron — the per-warehouse
+#     table is the single source of truth (2026-06-02).
 # =============================================================================
 12:00 AM — Min Order Qty Sync (purchase from ERPNext field; manufacture from WO history) + missing alert
-06:30 AM — ADU Auto-Calculate (R1: skips items with Custom ADU checked)
+01:00 AM — Item Minimum Manufacture ADU + Max Level refresh (per warehouse; sole ADU job)
+02:00 AM — Sales Projection -> Production Plan automation
 07:00 AM — Production Priority Run
+07:00 AM — Sales Order Shortage Cover (Calc SO) — auto since 2026-06-04 (was opt-in)
 07:30 AM — Procurement Alert Run (Purchase-mode items only)
 08:00 AM — Buffer Snapshot Logging
-Sunday 08:00 AM — Weekly DBM
+Sunday 09:00 AM — Weekly DBM
 """
 
 import frappe
 from frappe.utils import today, add_days, flt, now_datetime
+
+
+# =============================================================================
+# PHASE 2 (2026-06-02) — D4: every scheduled job writes ONE audit row.
+# CONTEXT:
+#   Voucher-creating jobs (02:00 projection, 07:00 buffer MR, Calc SO/Action)
+#   already write a full TOC Production Plan Run Log with per-item Run Items.
+#   The MONITORING jobs (this file: ADU refresh, procurement scan, buffer
+#   snapshot, weekly DBM, min-order sync) do not create PP/WO/MR, so they write
+#   ONE header-only run-log row summarising "what action was taken" — giving a
+#   single auditable trail across the whole TOC app.
+# RESTRICT:
+#   - Keep this header-only (no Run Items) — these jobs are not per-item voucher
+#     creators; forcing item rows here would fight the mandatory item_code link.
+#   - The summary text goes in `pending_so_statuses_used` (a free Text field on
+#     the run log) prefixed "JOB SUMMARY"; do not repurpose calc counters.
+# =============================================================================
+def _write_job_log(triggered_by, summary):
+    """Write one header-only TOC Production Plan Run Log row for a monitoring job."""
+    try:
+        rl = frappe.new_doc("TOC Production Plan Run Log")
+        rl.run_started = now_datetime()
+        rl.run_completed = now_datetime()
+        rl.triggered_by = triggered_by
+        rl.company = frappe.defaults.get_global_default("company") or ""
+        rl.pending_so_statuses_used = f"JOB SUMMARY ({triggered_by}): {summary}"
+        rl.flags.ignore_mandatory = True
+        rl.insert(ignore_permissions=True)
+        frappe.db.commit()
+        return rl.name
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), f"TOC job-log write failed: {triggered_by}")
+        return None
 
 
 def daily_min_order_sync():
@@ -34,76 +93,21 @@ def daily_min_order_sync():
     try:
         from chaizup_toc.toc_engine.min_order_sync import daily_min_order_sync as _sync
         _sync()
+        _write_job_log("min_order_sync_cron", "Min Order Qty sync completed.")
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC Min Order Sync FAILED")
-
-
-def daily_adu_update():
-    """
-    06:30 AM — Universal ADU auto-calculate for all TOC items.
-
-    R1: Items with custom_toc_custom_adu checked are skipped entirely.
-    Universal: ADU = total stock outflows (SLE.actual_qty < 0) ÷ days.
-    Captures ALL outflow types: sales, production consumption, transfers, WO draw-down.
-    No item-type branching — same query for every item.
-    """
-    try:
-        frappe.logger("chaizup_toc").info(f"=== ADU Auto-Update: {today()} ===")
-
-        items = frappe.get_all("Item",
-            filters={"custom_toc_enabled": 1, "disabled": 0},
-            fields=["name", "custom_toc_adu_period", "custom_toc_custom_adu"])
-
-        period_map = {"Last 30 Days": 30, "Last 90 Days": 90, "Last 180 Days": 180, "Last 365 Days": 365}
-        updated = 0
-        skipped = 0
-
-        for item in items:
-            if item.custom_toc_custom_adu:
-                skipped += 1
-                continue
-
-            try:
-                days = period_map.get(item.custom_toc_adu_period or "Last 90 Days", 90)
-                from_date = add_days(today(), -days)
-
-                # Universal: sum ALL stock outflows from SLE (negative qty = item left stock)
-                result = frappe.db.sql("""
-                    SELECT COALESCE(ABS(SUM(actual_qty)), 0) AS total_out
-                    FROM `tabStock Ledger Entry`
-                    WHERE item_code = %s
-                      AND actual_qty < 0
-                      AND posting_date >= %s
-                      AND posting_date <= %s
-                      AND is_cancelled = 0
-                """, (item.name, from_date, today()), as_dict=True)
-
-                adu = round(flt(result[0].total_out) / days, 4) if result else 0.0
-
-                frappe.db.set_value("Item", item.name, {
-                    "custom_toc_adu_value": adu,
-                    "custom_toc_adu_last_updated": now_datetime(),
-                }, update_modified=False)
-                updated += 1
-
-            except Exception:
-                frappe.log_error(frappe.get_traceback(), f"TOC ADU Error: {item.name}")
-
-        frappe.db.commit()
-        frappe.logger("chaizup_toc").info(
-            f"ADU Done: {updated} updated, {skipped} skipped (Custom ADU), {len(items)} total")
-
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "TOC ADU FAILED")
+        _write_job_log("min_order_sync_cron", "FAILED — see Error Log.")
 
 
 def update_min_mfg_adu_levels():
     """
-    06:35 AM — Refresh per-warehouse ADU + Max Level for every row in
-    `Item Minimum Manufacture` (Item.custom_minimum_manufacture child table).
+    01:00 AM — Refresh per-warehouse ADU + Max Level for every row in
+    `Item Minimum Manufacture` (Item.custom_minimum_manufacture child table) —
+    the "Minimum Manufacture / Purchase Qty per Warehouse" table.
 
-    Runs 5 minutes after `daily_adu_update` so the daily ADU writer is
-    finished by the time we read SLE. The lookback window is taken from
+    This is the SOLE ADU writer in the app (2026-06-02). The standalone
+    item-level ADU fields + their cron were removed; ADU is per warehouse only.
+    The lookback window is taken from
     `TOC Settings.adu_lookback_days` (single source of truth). For each row:
 
       1. Skip if `auto_adu = 0` — that row is user-managed; the engine
@@ -258,9 +262,16 @@ def update_min_mfg_adu_levels():
             f"{errors} errors, "
             f"lookback={lookback}d"
         )
+        _write_job_log(
+            "adu_cron",
+            f"Per-warehouse ADU + Max Level: {updated} updated, "
+            f"{skipped_manual} manual, {skipped_warmup} warming up, "
+            f"{errors} errors, lookback={lookback}d.",
+        )
 
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC MinMfg ADU FAILED (outer)")
+        _write_job_log("adu_cron", "FAILED — see Error Log.")
 
 
 def daily_production_run():
@@ -271,6 +282,90 @@ def daily_production_run():
         frappe.logger("chaizup_toc").info(f"Production Run: {len(mrs)} MRs created")
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC Production Run FAILED")
+
+
+def daily_so_shortage_automation():
+    """07:00 AM — Sales Order shortage cover (Calc SO, feature reference §5.7).
+
+    # =========================================================================
+    # CONTEXT: Calc SO scans every pending Sales Order (eligibility = TOC
+    #   Settings pending statuses + workflow states), computes shortage per
+    #   (item, warehouse) in stock UOM, and creates a Production Plan + Work
+    #   Orders (Manufacture mode) or a Purchase Material Request (Purchase mode)
+    #   for each positive shortage — floored by the per-warehouse Minimum Qty.
+    # MEMORY: app_chaizup_toc.md § SPE-001 (Calc SO) | § replenishment-mode gate
+    # POLICY CHANGE (2026-06-04): Calc SO was previously OPT-IN ONLY — fired from
+    #   the "Run Sales Order Shortage Now" button on TOC Settings and explicitly
+    #   "not part of the nightly run". Per user request it now ALSO runs
+    #   automatically every day at 07:00, registered in hooks.py alongside the
+    #   buffer Production Priority run. This supersedes the old SPE-001 RESTRICT
+    #   note ("Do NOT call run_so_shortage_automation from a cron"); the cron
+    #   path uses triggered_by="so_shortage_cron" exactly as that note prescribed
+    #   for the eventual scheduled entry.
+    # INSTRUCTIONS:
+    #   - Delegate to run_so_shortage_automation so the cron and the TOC Settings
+    #     button share identical dedup ([Calc SO] marker) + logging. Do NOT
+    #     re-implement the per-pair loop here.
+    #   - The engine writes its OWN TOC Production Plan Run Log (header + per-item
+    #     Run Items), so this wrapper does NOT call _write_job_log — that helper
+    #     is only for monitoring jobs that create no voucher / run log.
+    # DANGER ZONE:
+    #   - frappe.set_user("Administrator") is required: run_so_shortage_automation
+    #     guards itself with frappe.only_for([...]); the scheduler user must hold
+    #     System Manager for the call to pass.
+    # =========================================================================
+    """
+    try:
+        from chaizup_toc.chaizup_toc.toc_engine.production_plan_engine import (
+            run_so_shortage_automation,
+        )
+        frappe.set_user("Administrator")
+        result = run_so_shortage_automation(triggered_by="so_shortage_cron") or {}
+        frappe.logger("chaizup_toc").info(
+            "Calc SO (cron): created=%s skipped=%s errors=%s pairs=%s"
+            % (
+                result.get("created"),
+                result.get("skipped"),
+                result.get("errors"),
+                result.get("pairs"),
+            )
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC Calc SO (cron) FAILED")
+
+
+def daily_shortage_action_automation():
+    """Scheduled wrapper for Shortage Action (Calc Action, feature ref §5.8).
+
+    # =========================================================================
+    # CONTEXT: Calc Action iterates Item Minimum Manufacture rows opted-in via
+    #   auto_on_shortage / auto_on_max_level and creates PP+WO (manufacture) or
+    #   MR (purchase). Previously button-only; this wrapper lets it run on the
+    #   cron registered in hooks.py and configured via the TOC Trigger
+    #   Configuration row (seeded DISABLED — opt-in).
+    # MEMORY: app_chaizup_toc.md § Configurable Automation Triggers (2026-06-04)
+    # INSTRUCTIONS:
+    #   - Delegate to run_shortage_action_automation; do NOT re-implement.
+    #   - Administrator user so the engine's frappe.only_for guard passes.
+    #   - The engine writes its own TOC Production Plan Run Log, so this wrapper
+    #     does not call _write_job_log.
+    # DANGER ZONE:
+    #   - triggered_by MUST be "shortage_action_cron" (a valid run-log Select
+    #     option); a new literal would roll back the run-log save.
+    # =========================================================================
+    """
+    try:
+        from chaizup_toc.chaizup_toc.toc_engine.production_plan_engine import (
+            run_shortage_action_automation,
+        )
+        frappe.set_user("Administrator")
+        result = run_shortage_action_automation(triggered_by="shortage_action_cron") or {}
+        frappe.logger("chaizup_toc").info(
+            "Calc Action (cron): %s"
+            % ({k: result.get(k) for k in ("created", "skipped", "errors")})
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC Calc Action (cron) FAILED")
 
 
 def daily_procurement_run():
@@ -284,12 +379,19 @@ def daily_procurement_run():
         red = [b for b in purchase_items if b["zone"] in ("Red", "Black")]
         if red:
             frappe.logger("chaizup_toc").warning(f"Procurement: {len(red)} purchase items in Red/Black")
+        _write_job_log(
+            "procurement_cron",
+            f"Procurement scan: {len(purchase_items)} purchase items, "
+            f"{len(red)} in Red/Black (monitoring only — no vouchers created).",
+        )
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC Procurement FAILED")
+        _write_job_log("procurement_cron", "FAILED — see Error Log.")
 
 
 def daily_buffer_snapshot():
     """08:00 AM — Log all buffer states for DBM analysis."""
+    snap_count = 0
     try:
         from chaizup_toc.toc_engine.buffer_calculator import calculate_all_buffers
         buffers = calculate_all_buffers()
@@ -310,17 +412,22 @@ def daily_buffer_snapshot():
                 log.stock_remaining_pct = b["sr_pct"]
                 log.zone = b["zone"]; log.order_qty_suggested = b["order_qty"]
                 log.flags.ignore_permissions = True; log.insert()
+                snap_count += 1
             except Exception:
                 frappe.log_error(frappe.get_traceback(), f"TOC Snapshot: {b['item_code']}")
         frappe.db.commit()
+        _write_job_log("snapshot_cron", f"Buffer snapshot: {snap_count} TOC Buffer Log rows written.")
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC Snapshot FAILED")
+        _write_job_log("snapshot_cron", "FAILED — see Error Log.")
 
 
 def weekly_dbm_check():
-    """Sunday 08:00 AM — DBM evaluation."""
+    """Sunday 09:00 AM — DBM evaluation."""
     try:
         from chaizup_toc.toc_engine.dbm_engine import evaluate_all_dbm
         evaluate_all_dbm()
+        _write_job_log("dbm_cron", "Weekly Dynamic Buffer Management evaluation completed.")
     except Exception:
         frappe.log_error(frappe.get_traceback(), "TOC DBM FAILED")
+        _write_job_log("dbm_cron", "FAILED — see Error Log.")

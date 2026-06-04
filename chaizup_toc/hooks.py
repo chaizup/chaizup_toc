@@ -44,7 +44,14 @@ add_to_apps_screen = [
 # On install: disables default ERPNext auto reorder
 # On uninstall: re-enables it (safety net)
 # ═══════════════════════════════════════════════════════
-after_install = "chaizup_toc.setup.install.after_install"
+# 2026-06-04 — list form so the Configurable Automation Triggers seeder runs
+# alongside the existing installer. seed_and_sync auto-populates the TOC
+# Trigger Configuration table (one row per engine) so ALL schedules + automation
+# appear on the table immediately after `bench install-app`.
+after_install = [
+    "chaizup_toc.setup.install.after_install",
+    "chaizup_toc.chaizup_toc.toc_engine.trigger_scheduler.seed_and_sync",
+]
 before_uninstall = "chaizup_toc.setup.install.before_uninstall"
 
 # 2026-05-19 — after_migrate runs on every `bench migrate`. We use it to
@@ -52,7 +59,14 @@ before_uninstall = "chaizup_toc.setup.install.before_uninstall"
 # Plans, and BOMs whenever the schema has been updated (the function is
 # idempotent — already-stamped rows are skipped). MRP is intentionally
 # left untouched.
-after_migrate = "chaizup_toc.setup.install.after_migrate"
+# 2026-06-04 — also seed_and_sync the Configurable Automation Triggers table.
+# It runs AFTER Frappe's sync_jobs (migrate.py order), so the table's schedules
+# re-overwrite the cron_format that sync_jobs reset from hooks.py — making the
+# TOC Trigger Configuration table the single source of truth for trigger times.
+after_migrate = [
+    "chaizup_toc.setup.install.after_migrate",
+    "chaizup_toc.chaizup_toc.toc_engine.trigger_scheduler.seed_and_sync",
+]
 
 # ═══════════════════════════════════════════════════════
 # SCHEDULED JOBS — Daily Operating Rhythm
@@ -69,30 +83,46 @@ scheduler_events = {
         # ── 02:00 AM Daily: Sales Projection → Production Plan Automation ──
         # Finds all submitted Sales Projections for the current month (one per warehouse).
         # Calculates warehouse-specific demand shortage per item and creates Draft
-        # Production Plans. Runs before ADU (06:30) so new PPs are visible in daily calcs.
+        # Production Plans. Independent of ADU (which now runs 01:00, before this);
+        # ADU sums historical Stock Ledger Entry outflows and does not read PPs.
         # Two scenarios: Calc 1 (forecast exists) and Calc 2 (0 forecast but SOs pending).
         "0 2 * * *": [
             "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.daily_production_plan_automation"
         ],
-        # ── 06:30 AM Daily: ADU Auto-Calculate (R1/R4) ──
-        # Calculates Average Daily Usage for all TOC items
-        # SKIPS items where "Custom ADU [TOC App]" is checked
-        # Reads Delivery Notes (FG) / Stock Entries (RM/PM/SFG)
-        "30 6 * * *": [
-            "chaizup_toc.tasks.daily_tasks.daily_adu_update"
-        ],
-        # ── 06:35 AM Daily: Item Minimum Manufacture ADU + Max Level refresh (IMM-002) ──
-        # Runs 5 minutes after daily_adu_update so the per-Item ADU writer
-        # is finished. Per-warehouse ADU read directly from SLE outflows.
+        # ── 01:00 AM Daily: Item Minimum Manufacture ADU + Max Level refresh (IMM-002) ──
+        # SOLE ADU writer (2026-06-02). The standalone item-level ADU fields +
+        # their separate cron (daily_adu_update) were removed; ADU now lives
+        # only in the per-warehouse "Minimum Manufacture / Purchase Qty per
+        # Warehouse" table. UNIVERSAL + item-group-independent: per (item,
+        # warehouse) reads ALL outward Stock Ledger Entry movements
+        # (actual_qty < 0) — Delivery Note, Stock Entry (Work Order consumption
+        # / issue / subcontracting), etc. No FG/SFG/RM/PM branching.
         # Updates adu, adu_lookback_days, max_level, last_updated_on on
         # every Item Minimum Manufacture row with a warehouse set.
-        "35 6 * * *": [
+        "0 1 * * *": [
             "chaizup_toc.tasks.daily_tasks.update_min_mfg_adu_levels"
         ],
         # ── 07:00 AM Daily: Production Priority Run ──
-        # Calculates all FG buffers, generates MRs for Red/Yellow
+        # Calculates all FG buffers, generates MRs for Red/Yellow.
+        # ── 07:00 AM Daily (2026-06-04): Sales Order Shortage Cover (Calc SO) ──
+        # daily_so_shortage_automation runs the Sales Order shortage cover
+        # (feature reference §5.7). Previously OPT-IN ONLY via the "Run Sales
+        # Order Shortage Now" button on TOC Settings; now also auto at 07:00.
+        # Listed AFTER daily_production_run so the established buffer-MR run is
+        # unchanged. Uses triggered_by="so_shortage_cron" and writes its own
+        # TOC Production Plan Run Log (per-item Run Items).
         "0 7 * * *": [
-            "chaizup_toc.tasks.daily_tasks.daily_production_run"
+            "chaizup_toc.tasks.daily_tasks.daily_production_run",
+            "chaizup_toc.tasks.daily_tasks.daily_so_shortage_automation",
+        ],
+        # ── 07:15 AM Daily: Shortage Action (Calc Action) — OPT-IN ──
+        # Declared so Frappe registers the method as a Scheduled Job Type. The
+        # seeder sets it STOPPED (the TOC Trigger Configuration row for
+        # `shortage_action` is seeded DISABLED). A planner enables it by ticking
+        # Enabled on that row, which sets the Scheduled Job Type stopped=0.
+        # Uses triggered_by="shortage_action_cron"; writes its own run log.
+        "15 7 * * *": [
+            "chaizup_toc.tasks.daily_tasks.daily_shortage_action_automation"
         ],
         # ── 07:30 AM Daily: Procurement Monitoring Run ──
         # Calculates all RM/PM buffers, logs warning for Red/Black items.

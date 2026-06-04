@@ -124,3 +124,86 @@ def sync_all(settings_doc):
     """Sync every schedulable trigger row on a TOC Settings doc."""
     for row in (settings_doc.get("trigger_configurations") or []):
         sync_one(row)
+
+
+# =============================================================================
+# SEEDING — auto-populate one row per engine, self-healing on every migrate.
+# =============================================================================
+# CONTEXT: The user must NOT add rows by hand (trigger identity is read-only) —
+#   all 9 engines appear automatically after install and stay reconciled to the
+#   registry. ensure_trigger_rows is idempotent: it APPENDS any registry engine
+#   missing from the table (seeding its schedule + considers flags + help text,
+#   and pre-filling pending cells from the GLOBAL TOC Settings fields for
+#   voucher-reading engines), and never duplicates or deletes an existing row.
+# WHY a hook, not a one-shot patch: after_migrate runs on EVERY `bench migrate`
+#   AND after `bench install-app` (install runs migrate). It also runs AFTER
+#   Frappe's sync_jobs (migrate.py), which resets cron_format from hooks.py — so
+#   re-syncing here makes the TOC Trigger Configuration table authoritative.
+# DANGER ZONE:
+#   - Must be defensive: never raise out of after_migrate (would abort migrate).
+#   - trigger_key is the immutable join key; match rows by it only.
+# =============================================================================
+
+def ensure_trigger_rows(settings_doc):
+    """Append a child row for any registry engine missing from the table.
+
+    Idempotent. Returns the number of rows added (0 if already complete).
+    Pending cells are pre-filled from the GLOBAL TOC Settings fields, but only
+    for engines that actually read that voucher type (considers flag).
+    """
+    from chaizup_toc.chaizup_toc.toc_engine import trigger_registry
+
+    existing = {r.trigger_key for r in (settings_doc.get("trigger_configurations") or [])}
+    global_so = settings_doc.get("projection_pending_so_statuses") or ""
+    global_wo = settings_doc.get("pending_wo_statuses") or ""
+    global_po = settings_doc.get("pending_po_statuses") or ""
+
+    added = 0
+    for trig in trigger_registry.all_triggers():
+        if trig["key"] in existing:
+            continue
+        c = trig["considers"]
+        settings_doc.append("trigger_configurations", {
+            "trigger_key": trig["key"],
+            "trigger_name": trig["name"],
+            "enabled": trig["seed_enabled"],
+            "frequency": trig["default_frequency"],
+            "schedule_time": trig["default_time"],
+            "weekday": trig["default_weekday"],
+            "considers_so": c["so"], "considers_wo": c["wo"], "considers_po": c["po"],
+            "engine_help": trigger_registry.help_for(trig["key"]),
+            "pending_so_statuses": global_so if c["so"] else "",
+            "pending_wo_statuses": global_wo if c["wo"] else "",
+            "pending_po_statuses": global_po if c["po"] else "",
+        })
+        added += 1
+    return added
+
+
+def seed_and_sync():
+    """after_install / after_migrate hook — ensure all engine rows exist, then
+    push every schedule onto its native Scheduled Job Type. Defensive: any
+    failure is logged, never raised (must not abort migrate)."""
+    import frappe
+    try:
+        settings = frappe.get_doc("TOC Settings")
+        added = ensure_trigger_rows(settings)
+        if added:
+            settings.flags.ignore_mandatory = True
+            settings.flags.ignore_permissions = True
+            settings.save(ignore_permissions=True)  # validate() also re-syncs
+        else:
+            sync_all(settings)
+        frappe.db.commit()
+        frappe.logger("chaizup_toc").info(
+            "TOC trigger seed_and_sync: %s rows added, schedules synced." % added
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC trigger seed_and_sync FAILED")
+
+
+# Backwards-friendly alias used by the after_migrate hook list.
+def resync_after_migrate():
+    """after_migrate entry — delegates to seed_and_sync (ensure rows + re-sync
+    schedules after Frappe's sync_jobs reset them)."""
+    seed_and_sync()
