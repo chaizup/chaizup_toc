@@ -13,6 +13,7 @@ On the TOC Settings page the user wants to:
 2. **Edit any trigger's time** at runtime (no code deploy / `bench migrate`).
 3. Add a **child table** where, per trigger, they configure which **PO / SO / WO statuses count as "pending"** — each entry expressing both a submitted **Status** and a draft **Workflow State** (`Status : Workflow State`).
 4. **Tie this into every existing trigger**: before an engine counts pending vouchers, it must resolve that trigger's pending condition (its own row's config), then act.
+5. **A manual "Run Now" button for *every* automation engine** on the TOC Settings page — not just the three that have one today (projection, SO shortage, shortage action). Each engine can be fired on demand regardless of its schedule.
 
 Today, pending statuses are **global** — three TOC Settings fields (`projection_pending_so_statuses`, `pending_wo_statuses`, `pending_po_statuses`) shared by all engines (the TS-001 "single source of truth" contract that the WO Kitting Planner and Production Overview reports read via `get_toc_pending_filters`). This feature moves pending config to **per-trigger**, while keeping the globals as the default so nothing breaks.
 
@@ -41,6 +42,7 @@ Note: `so_shortage` is now a daily 07:00 cron (added 2026-06-04 in the prior tas
 3. **Status entry = existing text format.** Each pending cell is a `Small Text`, one entry per line: bare word = submitted status (`docstatus=1 AND status=word`); `Status|WorkflowState` = also matches draft (`docstatus=0 AND workflow_state=...`). Reuses existing parsers/SQL builders. (Click-to-pick dialog deferred.)
 4. **All engines are rows**, including button-only ones; setting time+enabled on `shortage_action` turns it into a scheduled job. Pending cells inactive ("— N/A") where the engine reads no vouchers.
 5. **Per-trigger overrides; global = default.** Resolution: trigger-row cell (if non-empty) → global TOC Settings field → hardcoded engine default. Reports keep reading the global fields (TS-001 preserved). Seed rows on migrate from current globals + current hooks crons.
+6. **Every engine gets a manual "Run Now" button**, rendered from the registry — one dispatcher, no per-engine button proliferation. (Added 2026-06-04 after initial approval.)
 
 ## 4. Data Model
 
@@ -106,12 +108,36 @@ Rewire each engine helper to pass **its own** `trigger_key` and route through th
 
 **Reports unchanged:** `get_toc_pending_filters` keeps reading global fields (TS-001 contract preserved).
 
+## 6b. Manual Run Dispatcher (decision #6 — Run Now for every engine)
+
+Single whitelisted entry point so we add **one** dispatcher rather than nine buttons:
+
+```python
+# api/trigger_runner.py
+@frappe.whitelist()
+def run_trigger_now(trigger_key):
+    frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
+    trig = trigger_registry.get_trigger(trigger_key)   # validates key
+    frappe.set_user("Administrator")                    # engines self-guard via only_for
+    fn = frappe.get_attr(trig["job_method"])            # registry is the single source of the method path
+    result = fn() or {}
+    return {"ok": True, "trigger_key": trigger_key, "name": trig["name"], "result": _summarize(result)}
+```
+
+- The dotted method path comes **only** from the registry — the same map used for scheduling — so a button and its cron always invoke identical code.
+- Each engine method is already callable with no args (the daily wrappers + `daily_production_plan_automation` + the new `daily_shortage_action_automation`); the dispatcher just calls it. Monitoring engines (ADU, snapshot, DBM, min-order sync) are safe to run on demand.
+- `run_trigger_now` is **enqueue-able**: for the heavier engines the button enqueues (`frappe.enqueue`) to the long queue and toasts "queued"; light ones run inline. Decision deferred to plan; default = enqueue all for consistency, return the Run Log link where the engine writes one.
+- **Back-compat:** the three existing static Button fields (`run_projection_automation_now`, `run_so_shortage_automation_now`, `run_shortage_action_automation_now`) and their JS handlers are KEPT and simply call `run_trigger_now` under the hood (or are left untouched). No existing button breaks.
+
 ## 7. UI (TOC Settings form)
 
 - New Section Break **"Automation Engines & Triggers"**:
-  - A read-only HTML block listing every engine + resolved trigger time + enabled state (the "list down all engines + trigger time" ask), rendered from the registry + rows.
+  - A read-only HTML block listing every engine + resolved trigger time + enabled state (the "list down all engines + trigger time" ask), rendered from the registry + rows. **Each engine line carries its own "▶ Run Now" button** wired to `run_trigger_now(trigger_key)` (decision #6). Buttons show a spinner + disable while running, then toast the result (and Run Log link when present).
   - The editable `trigger_configurations` grid below it.
-- `toc_settings.js`: validate `schedule_time` is `HH:MM` on row change; disable/grey the three pending cells when the matching `considers_*` is false; keep existing Run-Now buttons.
+- `toc_settings.js`:
+  - Render the engine summary + per-engine Run buttons from a bootstrap call (`get_trigger_overview()` returning registry + resolved times + enabled).
+  - Validate `schedule_time` is `HH:MM` on row change; disable/grey the three pending cells when the matching `considers_*` is false.
+  - Keep existing Run-Now buttons working (they delegate to the same dispatcher).
 
 ## 8. Seeding / Migration
 
@@ -124,7 +150,7 @@ Register in `patches.txt`.
 
 ## 9. Documentation
 
-- Update `documentation/build_docs.py`: new subsection under §5/§6 describing the configurable trigger table + per-trigger pending resolution + the override→global→default order; note `shortage_action` is now schedulable (seeded disabled). Regenerate `Chaizup_TOC_Feature_Reference.docx`.
+- Update `documentation/build_docs.py`: new subsection under §5/§6 describing the configurable trigger table + per-trigger pending resolution + the override→global→default order; note `shortage_action` is now schedulable (seeded disabled); note every engine has a manual Run Now button on TOC Settings. Regenerate `Chaizup_TOC_Feature_Reference.docx`.
 - Append a session note to memory `app_chaizup_toc.md` after implementation.
 
 ## 10. Files Touched
@@ -134,12 +160,13 @@ Register in `patches.txt`.
 - `chaizup_toc/chaizup_toc/toc_engine/trigger_registry.py`
 - `chaizup_toc/chaizup_toc/toc_engine/trigger_scheduler.py`
 - `chaizup_toc/chaizup_toc/toc_engine/pending_status.py`
+- `chaizup_toc/chaizup_toc/api/trigger_runner.py` (`run_trigger_now`, `get_trigger_overview`)
 - `chaizup_toc/chaizup_toc/patches/v1_0/seed_trigger_configurations.py`
 
 **Modified**
 - `doctype/toc_settings/toc_settings.json` (add Table field + section)
 - `doctype/toc_settings/toc_settings.py` (validate → sync_all)
-- `doctype/toc_settings/toc_settings.js` (HH:MM validation, grid greying, engine summary)
+- `doctype/toc_settings/toc_settings.js` (HH:MM validation, grid greying, engine summary, per-engine Run Now buttons)
 - `hooks.py` (`after_migrate` sync; `shortage_action` cron seeded disabled)
 - `tasks/daily_tasks.py` (`daily_shortage_action_automation` wrapper)
 - `toc_engine/production_plan_engine.py` (resolver wiring for Calc A/B, SO, Action)
@@ -161,3 +188,4 @@ Register in `patches.txt`.
 - Unit: `compute_cron` (daily/weekly/override/invalid), `resolve_pending` (override / global fallback / hardcoded fallback / N/A voucher).
 - Integration: seed patch idempotency; editing a row time updates the matching `Scheduled Job Type.cron_format`; disabling a row sets `stopped=1`; an engine with a row override uses the override in its eligibility SQL while a blank row inherits the global.
 - Regression: `get_toc_pending_filters` output unchanged; existing Calc SO/A/B/Action dedup + run-log behavior unchanged when rows are blank (pure inherit).
+- Manual run: `run_trigger_now(key)` fires the correct engine for every registry key; rejects an unknown key; respects `frappe.only_for`; the three legacy buttons still work via the dispatcher.
