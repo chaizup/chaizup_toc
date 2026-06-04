@@ -109,11 +109,34 @@
 # Copyright (c) 2026, Chaizup and contributors
 # For license information, please see license.txt
 
+import contextlib
 import datetime
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime, today
+from frappe.utils import add_days, cint, flt, now_datetime, today
+
+
+# =============================================================================
+# CONFIGURABLE TRIGGERS (2026-06-04) — per-engine pending-status context.
+# Each engine entry point sets frappe.flags.toc_trigger_key so the deep WO/PO
+# helpers (_toc_wo_statuses_and_wf / _toc_po_statuses_and_wf) can resolve that
+# engine's per-trigger override from its TOC Trigger Configuration row. A blank
+# override falls through to the unchanged global TOC Settings read, so existing
+# behaviour is byte-for-byte preserved. The flag is ALWAYS restored in finally.
+# RESTRICT: do not read frappe.flags.toc_trigger_key directly in business logic —
+#   go through pending_status.row_override so the resolution order stays in one
+#   place.
+# =============================================================================
+@contextlib.contextmanager
+def _trigger_context(trigger_key):
+    prev = getattr(frappe.flags, "toc_trigger_key", None)
+    frappe.flags.toc_trigger_key = trigger_key
+    try:
+        yield
+    finally:
+        frappe.flags.toc_trigger_key = prev
+
 
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
@@ -2065,11 +2088,17 @@ def _po_has_workflow_column():
 
 
 def _toc_wo_statuses_and_wf():
-    """Return (statuses, workflow_states) for Work Orders from TOC Settings.
+    """Return (statuses, workflow_states) for Work Orders.
 
-    Reads from the cached TOC Settings doc. Both lists are guaranteed
-    non-None (default lists used when blank).
+    2026-06-04: if the active trigger (frappe.flags.toc_trigger_key) has a
+    non-blank per-row override, parse THAT (pair format yields both the status
+    list AND the workflow list from one cell). Otherwise fall back to the
+    UNCHANGED global two-field read so existing sites see no behaviour change.
     """
+    from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
+    ov = row_override("wo")
+    if ov:
+        return (_parse_wo_statuses(ov), _parse_wo_workflow_states(ov))
     s = frappe.get_cached_doc("TOC Settings")
     return (
         _parse_wo_statuses(s.get("pending_wo_statuses")),
@@ -2078,7 +2107,15 @@ def _toc_wo_statuses_and_wf():
 
 
 def _toc_po_statuses_and_wf():
-    """Return (statuses, workflow_states) for Purchase Orders from TOC Settings."""
+    """Return (statuses, workflow_states) for Purchase Orders.
+
+    2026-06-04: per-row override first (see _toc_wo_statuses_and_wf), else the
+    UNCHANGED global two-field read.
+    """
+    from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
+    ov = row_override("po")
+    if ov:
+        return (_parse_po_statuses(ov), _parse_po_workflow_states(ov))
     s = frappe.get_cached_doc("TOC Settings")
     return (
         _parse_po_statuses(s.get("pending_po_statuses")),
@@ -2484,6 +2521,110 @@ def _wo_names_for_pp(pp_name):
     return ", ".join(rows) if rows else ""
 
 
+# =============================================================================
+# PHASE 2 (2026-06-02) — Replenishment-mode gate + consolidated Purchase MR
+# CONTEXT:
+#   Every voucher creator (Calc A/B, Calc SO, Calc Action, buffer MR generator)
+#   must, BEFORE creating anything, confirm the Item master replenishment mode:
+#     - "Auto Manufacturing TOC" on  -> Manufacture (Production Plan + Work Orders)
+#     - "Auto Purchase TOC" on       -> Purchase (Material Request)
+#     - neither on                   -> SKIP + log "No Replenishment Mode"
+#   The check is ALWAYS item + warehouse scoped. Voucher TYPE is driven by the
+#   Item master flags (single source of truth), not by per-warehouse action_type.
+# RESTRICT:
+#   - Do NOT create a Production Plan / Work Order for a Purchase-mode item, nor
+#     a Material Request for a Manufacture-mode item.
+#   - Mutual exclusion of the two flags is enforced at Item validate; if both are
+#     somehow set, Manufacture wins here (defensive).
+# =============================================================================
+def _resolve_replenishment_mode(item_code):
+    """Return ('Manufacture'|'Purchase', None) from the Item master flags, or
+    (None, reason) when neither flag is set (monitor-only item — skip)."""
+    f = frappe.db.get_value(
+        "Item", item_code,
+        ["custom_toc_auto_manufacture", "custom_toc_auto_purchase"],
+        as_dict=True,
+    ) or {}
+    if int(f.get("custom_toc_auto_manufacture") or 0) == 1:
+        return "Manufacture", None
+    if int(f.get("custom_toc_auto_purchase") or 0) == 1:
+        return "Purchase", None
+    return None, (
+        "Neither 'Auto Manufacturing TOC' nor 'Auto Purchase TOC' is enabled on "
+        "the Item master — monitor-only item. No replenishment voucher created."
+    )
+
+
+def _calc_ab_purchase_mr_exists(item_code, warehouse):
+    """Dedup: a non-terminal Purchase MR line tagged [Calc A/B][Purchase] for
+    this (item, warehouse). Keeps Calc A/B purchase cover idempotent."""
+    from chaizup_toc.toc_engine.auto_remarks import MR_TERMINAL_STATUSES
+    ph = ", ".join(["%s"] * len(MR_TERMINAL_STATUSES))
+    rows = frappe.db.sql(
+        f"""
+        SELECT mr.name FROM `tabMaterial Request` mr
+        JOIN `tabMaterial Request Item` mri ON mri.parent = mr.name
+        WHERE mr.docstatus != 2
+          AND COALESCE(mr.status, '') NOT IN ({ph})
+          AND mr.material_request_type = 'Purchase'
+          AND mri.item_code = %s AND mri.warehouse = %s
+          AND mri.description LIKE %s
+        LIMIT 1
+        """,
+        MR_TERMINAL_STATUSES + [item_code, warehouse, "%[Calc A/B][Purchase]%"],
+    )
+    return rows[0][0] if rows else None
+
+
+def _create_consolidated_purchase_mr(intents, company):
+    """D2 (2026-06-02): build ONE Material Request (type=Purchase) with a line
+    per intent. intents: list of dicts with item_code, item_name,
+    qty_stock_uom, warehouse, reason, lead_time_days. Returns mr_name or None.
+
+    Each line is written in the item's purchase UOM (qty / conversion_factor),
+    mirroring `_create_purchase_mr_for_shortage` so suppliers see friendly units.
+    """
+    intents = [i for i in (intents or []) if flt(i.get("qty_stock_uom")) > 0]
+    if not intents:
+        return None
+    mr = frappe.new_doc("Material Request")
+    mr.material_request_type = "Purchase"
+    mr.transaction_date = today()
+    mr.company = company or frappe.db.get_value(
+        "Warehouse", intents[0]["warehouse"], "company")
+    max_lead = max([int(i.get("lead_time_days") or 0) for i in intents] + [3])
+    mr.schedule_date = add_days(today(), max(1, max_lead))
+    try:
+        mr.custom_toc_recorded_by = "By System"
+    except Exception:
+        pass
+    for it in intents:
+        ic = it["item_code"]; wh = it["warehouse"]
+        stock_uom = frappe.db.get_value("Item", ic, "stock_uom") or ""
+        purchase_uom = frappe.db.get_value("Item", ic, "purchase_uom") or stock_uom
+        cf = 1.0
+        if purchase_uom and purchase_uom != stock_uom:
+            v = frappe.db.get_value(
+                "UOM Conversion Detail", {"parent": ic, "uom": purchase_uom},
+                "conversion_factor")
+            cf = flt(v) if v else 1.0
+        if cf > 0 and cf != 1.0:
+            mr_qty = flt(it["qty_stock_uom"]) / cf
+        else:
+            mr_qty = flt(it["qty_stock_uom"]); purchase_uom = stock_uom
+        mr.append("items", {
+            "item_code": ic, "item_name": it.get("item_name") or ic,
+            "qty": mr_qty, "uom": purchase_uom, "stock_uom": stock_uom,
+            "conversion_factor": cf, "warehouse": wh,
+            "schedule_date": mr.schedule_date,
+            "description": it.get("reason") or "[Calc A/B][Purchase]",
+        })
+    mr.flags.ignore_mandatory = True
+    mr.flags.ignore_permissions = True
+    mr.insert()
+    return mr.name
+
+
 def _append_run_item(run_log_doc, payload):
     """Insert one TOC Production Plan Run Item row on the parent."""
     run_log_doc.append("items", {
@@ -2502,9 +2643,112 @@ def _append_run_item(run_log_doc, payload):
         "qty_of_shortage": flt(payload.get("qty_of_shortage")),
         "production_qty": flt(payload.get("production_qty")),
         "production_plan": payload.get("production_plan") or "",
+        "material_request": payload.get("material_request") or "",
         "work_orders": payload.get("work_orders") or "",
         "reason": payload.get("reason") or "",
     })
+
+
+def _process_item_v2_purchase(run_log_doc, item_code, item_name, warehouse,
+                              spow_qty, minmfg, pending_statuses, confirmed_states,
+                              month_start, next_month_start,
+                              default_so_warehouse, company):
+    """#4 (2026-06-02) — Purchase-mode item in Sales Projection automation.
+
+    For a purchased item, supply = stock + open Purchase Orders (no Work
+    Orders / Production Plans). We evaluate the Calc A and Calc B shortage
+    formulas and take the greater; floor by the per-warehouse Min Qty; then
+    QUEUE the qty as an intent so the orchestrator can raise ONE consolidated
+    Material Request for every purchase-mode item in the run (D2).
+
+    Records exactly one Run Item row. Returns summary counts (counted under
+    calc_a_* so the existing summary fields stay meaningful).
+    """
+    summary = {"calc_a_created": 0, "calc_a_skipped": 0,
+               "calc_b_created": 0, "calc_b_skipped": 0, "errors": 0}
+    try:
+        prvso    = _prev_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                                         month_start, warehouse, default_so_warehouse)
+        currso   = _curr_month_so_qty_v2(item_code, pending_statuses, confirmed_states,
+                                         month_start, next_month_start, warehouse,
+                                         default_so_warehouse)
+        currALso = _curr_month_all_so_qty(item_code, month_start, next_month_start,
+                                          warehouse, default_so_warehouse)
+        stock    = _warehouse_stock(item_code, warehouse)
+        open_po  = _open_po_qty(item_code, warehouse)
+
+        qty_a = (spow_qty + prvso) - (currALso + open_po + stock)
+        qty_b = (prvso + currso) - (stock + open_po)
+        shortage = max(qty_a, qty_b, 0.0)
+        breakdown = (
+            f"[Calc A/B][Purchase] supply = stock {stock:.2f} + open PO {open_po:.2f}. "
+            f"Calc A short {qty_a:.2f}; Calc B short {qty_b:.2f}; take max = {shortage:.2f}."
+        )
+
+        if shortage <= 0:
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc A — Purchase",
+                "status": "Skipped - No Shortage",
+                "spow": spow_qty, "prvso": prvso, "currso": currso,
+                "currALso": currALso, "itmwstk": stock, "minmfg": minmfg,
+                "qty_of_shortage": shortage,
+                "reason": breakdown + " Stock + incoming PO already cover demand.",
+            })
+            summary["calc_a_skipped"] += 1
+            return summary
+
+        if _calc_ab_purchase_mr_exists(item_code, warehouse):
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc A — Purchase",
+                "status": "Skipped - MR Exists",
+                "spow": spow_qty, "minmfg": minmfg, "qty_of_shortage": shortage,
+                "reason": breakdown + " A non-terminal [Calc A/B][Purchase] MR "
+                                      "already exists for this item × warehouse.",
+            })
+            summary["calc_a_skipped"] += 1
+            return summary
+
+        qty = max(shortage, minmfg)
+        reason = (
+            breakdown + f" MOQ floor = {minmfg:.2f}; MR qty = max(shortage, MOQ) = "
+            f"{qty:.2f}. Consolidated into one Purchase MR for this run. "
+            f"[Calc A/B][Purchase]"
+        )
+        # Queue intent; orchestrator builds ONE MR after the item loop and
+        # back-fills the MR name onto this row's work_orders field.
+        if not hasattr(run_log_doc, "_purchase_intents"):
+            run_log_doc._purchase_intents = []
+            run_log_doc._purchase_rows = []
+        run_log_doc._purchase_intents.append({
+            "item_code": item_code, "item_name": item_name, "warehouse": warehouse,
+            "qty_stock_uom": qty, "reason": reason, "lead_time_days": 3,
+        })
+        _append_run_item(run_log_doc, {
+            "item_code": item_code, "item_name": item_name,
+            "warehouse": warehouse, "calc_used": "Calc A — Purchase",
+            "status": "Created (MR Consolidated)",
+            "spow": spow_qty, "prvso": prvso, "currso": currso,
+            "currALso": currALso, "itmwstk": stock, "minmfg": minmfg,
+            "qty_of_shortage": shortage, "production_qty": qty,
+            "reason": reason,
+        })
+        run_log_doc._purchase_rows.append(run_log_doc.items[-1])
+        summary["calc_a_created"] += 1
+        return summary
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(),
+                         f"TOC PP Automation v2: Purchase branch error for {item_code}")
+        _append_run_item(run_log_doc, {
+            "item_code": item_code, "item_name": item_name,
+            "warehouse": warehouse, "calc_used": "Calc A — Purchase",
+            "status": "Error", "spow": spow_qty,
+            "reason": f"Purchase branch raised: {str(frappe.get_traceback()[:500])}",
+        })
+        summary["errors"] += 1
+        return summary
 
 
 def _process_item_v2(row, sp_doc, settings, run_log_doc,
@@ -2514,6 +2758,10 @@ def _process_item_v2(row, sp_doc, settings, run_log_doc,
     """
     Run Calc A then (after commit) Calc B for a single item.
     Writes one or two rows to run_log_doc.items and returns summary counts.
+
+    PHASE 2 (2026-06-02): a replenishment-mode gate runs first (see top of
+    body). Purchase-mode items are diverted to _process_item_v2_purchase;
+    only Manufacture-mode items reach the Production Plan path below.
     """
     item_code = row.item
     item_name = row.item_name or item_code
@@ -2546,7 +2794,47 @@ def _process_item_v2(row, sp_doc, settings, run_log_doc,
             })
             return summary
 
-    # ── BOM gate (applies to both calcs) ─────────────────────────────────────
+    # ── PHASE 2 gate (2026-06-02): Item-master replenishment mode + per-WH Min Qty ──
+    # Driven by Item master "Auto Manufacturing TOC" / "Auto Purchase TOC".
+    # Neither set -> skip; no per-warehouse Min Qty -> skip; Purchase -> MR branch.
+    mode, mode_reason = _resolve_replenishment_mode(item_code)
+    minmfg_gate = flt(min_mfg_map.get((item_code, warehouse), 0.0))
+    if mode is None:
+        for calc_label in ("Calc A — Forecast", "Calc B — SO-driven"):
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": calc_label,
+                "status": "Skipped - No Replenishment Mode",
+                "spow": spow_qty, "reason": mode_reason,
+            })
+        summary["calc_a_skipped"] += 1
+        summary["calc_b_skipped"] += 1
+        return summary
+    if minmfg_gate <= 0:
+        reason = (
+            f"No Minimum Purchase/Production Qty configured for "
+            f"({item_code} @ {warehouse}) in Item > TOC Setting tab > section 6 "
+            f"'Minimum Manufacture / Purchase Qty per Warehouse'. Add a row with "
+            f"Min Qty > 0 for this warehouse to enable auto-replenishment."
+        )
+        for calc_label in ("Calc A — Forecast", "Calc B — SO-driven"):
+            _append_run_item(run_log_doc, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": calc_label,
+                "status": "Skipped - Min Qty Not Set",
+                "spow": spow_qty, "minmfg": minmfg_gate, "reason": reason,
+            })
+        summary["calc_a_skipped"] += 1
+        summary["calc_b_skipped"] += 1
+        return summary
+    if mode == "Purchase":
+        # #4 — purchased item: consolidate into ONE Material Request per run.
+        return _process_item_v2_purchase(
+            run_log_doc, item_code, item_name, warehouse, spow_qty, minmfg_gate,
+            pending_statuses, confirmed_states, month_start, next_month_start,
+            default_so_warehouse, company)
+
+    # ── Manufacture mode → BOM gate + Calc A/B Production Plan path ───────────
     bom_no = frappe.db.get_value(
         "BOM",
         {"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
@@ -2754,8 +3042,23 @@ def _run_for_projection(sp_doc, triggered_by, settings):
     Drive one Sales Projection through Calc A + Calc B for every row.
     Creates ONE TOC Production Plan Run Log; returns the summary dict.
     """
-    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
-    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
+    # 2026-06-04 — Configurable Triggers: mark Sales Projection as the active
+    # trigger so the deep WO helpers resolve this row's per-trigger override.
+    frappe.flags.toc_trigger_key = "sales_projection"
+
+    from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
+
+    # Override (this row's Pending SO cell) wins; blank -> unchanged global read.
+    _so_raw = row_override("so", trigger_key="sales_projection") or settings.projection_pending_so_statuses
+    pending_statuses = _parse_statuses(_so_raw)
+    # 2026-06-02 FIX: read the workflow side from the combined
+    # `projection_pending_so_statuses` field. The standalone
+    # `projection_confirmed_so_workflow_states` field was dropped (v0.0.28,
+    # merged by patch merge_confirmed_so_into_pending) but three call sites
+    # still referenced it via attribute access -> AttributeError crashed
+    # Calc A/B, Calc SO and Calc Action. _parse_confirmed_states extracts the
+    # workflow side of the pair lines, so this restores intended behaviour.
+    confirmed_states = _parse_confirmed_states(_so_raw)
     month_start, next_month_start = _month_boundaries(sp_doc)
     company = _get_company()
     default_so_warehouse = settings.get("default_so_warehouse") or None
@@ -2780,6 +3083,11 @@ def _run_for_projection(sp_doc, triggered_by, settings):
     summary = {"calc_a_created": 0, "calc_a_skipped": 0,
                "calc_b_created": 0, "calc_b_skipped": 0, "errors": 0}
 
+    # PHASE 2 (2026-06-02): collect Purchase-mode shortages across the run so a
+    # single consolidated Material Request is raised after the loop (D2).
+    run_log._purchase_intents = []
+    run_log._purchase_rows = []
+
     for row in sp_doc.table_mibv:
         item_summary = _process_item_v2(
             row, sp_doc, settings, run_log,
@@ -2799,6 +3107,26 @@ def _run_for_projection(sp_doc, triggered_by, settings):
         run_log.errors = summary["errors"]
         run_log.save(ignore_permissions=True)
         frappe.db.commit()
+
+    # PHASE 2 (2026-06-02): raise ONE consolidated Purchase MR for all
+    # purchase-mode shortages collected during the loop, then stamp the MR name
+    # back onto each queued Run Item row.
+    if getattr(run_log, "_purchase_intents", None):
+        try:
+            mr_name = _create_consolidated_purchase_mr(run_log._purchase_intents, company)
+            if mr_name:
+                frappe.db.commit()
+                for r in getattr(run_log, "_purchase_rows", []):
+                    r.material_request = mr_name      # store the consolidated MR ref
+                    r.reason = (r.reason or "") + f"\nConsolidated Purchase MR: {mr_name}"
+                run_log.save(ignore_permissions=True)
+                frappe.db.commit()
+                frappe.logger("chaizup_toc").info(
+                    f"PP Automation: consolidated Purchase MR {mr_name} for "
+                    f"{len(run_log._purchase_intents)} item(s)")
+        except Exception:
+            frappe.log_error(frappe.get_traceback(),
+                             "TOC PP Automation: consolidated Purchase MR failed")
 
     run_log.run_completed = now_datetime()
     run_log.save(ignore_permissions=True)
@@ -2949,20 +3277,29 @@ def _discover_pending_so_pairs(pending_statuses, confirmed_states, default_so_wa
                 <default_so_warehouse if set>)
     Lines that resolve to NULL warehouse are dropped (cannot be planned).
     """
+    # 2026-06-02 FIX: build params in POSITIONAL order to match the query's
+    # placeholders. Previously `wh_expr` (which carries a %s when
+    # default_so_warehouse is set) was interpolated TWICE (SELECT + GROUP BY)
+    # while its param was supplied once and out of order, raising
+    # "not enough arguments for format string" whenever default_so_warehouse
+    # was configured. We now (a) put the SELECT wh param FIRST, (b) GROUP BY the
+    # SELECT alias `warehouse` so the expression — and its placeholder — appears
+    # exactly once.
     so_conditions = []
-    params = []
+    cond_params = []
     if confirmed_states and _so_has_workflow_column():
         states_ph = ", ".join(["%s"] * len(confirmed_states))
         so_conditions.append(f"(so.docstatus = 0 AND so.workflow_state IN ({states_ph}))")
-        params.extend(confirmed_states)
+        cond_params.extend(confirmed_states)
     if pending_statuses:
         ph = ", ".join(["%s"] * len(pending_statuses))
         so_conditions.append(f"(so.docstatus = 1 AND so.status IN ({ph}))")
-        params.extend(pending_statuses)
+        cond_params.extend(pending_statuses)
     if not so_conditions:
         return []
 
     # Per-line warehouse with the same precedence as the projection engine.
+    select_params = []
     if default_so_warehouse:
         wh_expr = (
             "COALESCE("
@@ -2971,9 +3308,12 @@ def _discover_pending_so_pairs(pending_statuses, confirmed_states, default_so_wa
             "  %s"
             ")"
         )
-        params.append(default_so_warehouse)
+        select_params.append(default_so_warehouse)
     else:
         wh_expr = "COALESCE(NULLIF(soi.warehouse, ''), NULLIF(so.set_warehouse, ''))"
+
+    # Positional order: SELECT wh placeholder first, then WHERE condition params.
+    params = select_params + cond_params
 
     rows = frappe.db.sql(
         f"""
@@ -2990,7 +3330,7 @@ def _discover_pending_so_pairs(pending_statuses, confirmed_states, default_so_wa
         WHERE ({" OR ".join(so_conditions)})
           AND soi.stock_qty
               > IFNULL(soi.delivered_qty, 0) * IFNULL(soi.conversion_factor, 1)
-        GROUP BY soi.item_code, {wh_expr}
+        GROUP BY soi.item_code, warehouse
         HAVING pending_qty > 0
         ORDER BY pending_qty DESC
         """,
@@ -3054,9 +3394,25 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
     """
     frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
 
+    # 2026-06-04 — Configurable Triggers: mark Calc SO as the active trigger so
+    # the deep WO/PO helpers resolve this row's per-trigger override. frappe.flags
+    # is reset per request/job, so no cross-job leak. See pending_status.row_override.
+    frappe.flags.toc_trigger_key = "so_shortage"
+
+    from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
+
     settings = frappe.get_cached_doc("TOC Settings")
-    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
-    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
+    # Override (this row's Pending SO cell) wins; blank -> unchanged global read.
+    _so_raw = row_override("so", trigger_key="so_shortage") or settings.projection_pending_so_statuses
+    pending_statuses = _parse_statuses(_so_raw)
+    # 2026-06-02 FIX: read the workflow side from the combined
+    # `projection_pending_so_statuses` field. The standalone
+    # `projection_confirmed_so_workflow_states` field was dropped (v0.0.28,
+    # merged by patch merge_confirmed_so_into_pending) but three call sites
+    # still referenced it via attribute access -> AttributeError crashed
+    # Calc A/B, Calc SO and Calc Action. _parse_confirmed_states extracts the
+    # workflow side of the pair lines, so this restores intended behaviour.
+    confirmed_states = _parse_confirmed_states(_so_raw)
     default_so_warehouse = settings.get("default_so_warehouse") or None
     company = _get_company()
 
@@ -3103,13 +3459,16 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
         try:
             stock = flt(_warehouse_stock(item_code, warehouse))
             wo    = flt(_pending_wo_qty(item_code, warehouse))
-            shortage = round(pending_so - stock - wo, 4)
+            po    = flt(_open_po_qty(item_code, warehouse))
+            # 2026-06-02: supply includes pending Purchase Orders for parity
+            # with Shortage Action and the Calc A/B purchase branch.
+            shortage = round(pending_so - stock - wo - po, 4)
             row_idx = idx.get((item_code, warehouse))
             minmfg = flt(row_idx.min_qty_stock_uom) if row_idx else 0.0
-            # SPA-001: Default action_type is Manufacture when the item has
-            # no min-mfg row configured for this warehouse (matches v1
-            # behaviour). Configured rows drive Manufacture vs Purchase.
-            action_type = (row_idx.action_type if row_idx else "Manufacture")
+            # PHASE 2 (2026-06-02): the voucher TYPE is driven by the Item
+            # master flags ("Auto Manufacturing TOC" / "Auto Purchase TOC"),
+            # NOT by the per-warehouse action_type. Neither flag -> skip.
+            action_type, mode_reason = _resolve_replenishment_mode(item_code)
 
             base_payload = {
                 "item_code": item_code,
@@ -3130,14 +3489,36 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
                     "status": "Skipped - No Shortage",
                     "production_qty": 0,
                     "reason": (
-                        f"[Calc SO][{action_type}] No shortage at {warehouse}: "
+                        f"[Calc SO][{action_type or 'No Mode'}] No shortage at {warehouse}: "
                         f"pending SO {pending_so:.3f} − stock {stock:.3f} − open WO {wo:.3f} "
-                        f"= {shortage:.3f} (stock UOM)."
+                        f"− open PO {po:.3f} = {shortage:.3f} (stock UOM)."
                     ),
                 })
                 continue
 
-            # SPA-001: action_type decides the artifact we create.
+            # PHASE 2 gate — replenishment mode (item master) + per-WH Min Qty.
+            if action_type is None:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload, "status": "Skipped - No Replenishment Mode",
+                    "production_qty": 0, "reason": f"[Calc SO] {mode_reason}",
+                })
+                continue
+            if minmfg <= 0:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload, "status": "Skipped - Min Qty Not Set",
+                    "production_qty": 0,
+                    "reason": (
+                        f"[Calc SO][{action_type}] No Minimum Purchase/Production Qty for "
+                        f"({item_code} @ {warehouse}) in Item > TOC Setting tab > section 6 "
+                        f"'Minimum Manufacture / Purchase Qty per Warehouse'. Add a row with "
+                        f"Min Qty > 0 for this warehouse to enable auto-replenishment."
+                    ),
+                })
+                continue
+
+            # Voucher type driven by Item-master mode (Purchase vs Manufacture).
             qty = max(shortage, minmfg)
 
             if action_type == "Purchase":
@@ -3148,7 +3529,7 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
                         **base_payload,
                         "status": "Skipped - MR Exists",
                         "production_qty": 0,
-                        "production_plan": existing,  # field reused for cross-link
+                        "material_request": existing,
                         "reason": (
                             f"[Calc SO][Purchase] Active Material Request {existing} "
                             f"already covers {item_code} at {warehouse}."
@@ -3175,12 +3556,12 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
                     **base_payload,
                     "status": "Created (MR)",
                     "production_qty": qty,
-                    "production_plan": mr_name,
+                    "material_request": mr_name,
                     "reason": reason,
                 })
                 continue
 
-            # action_type == "Manufacture"
+            # mode == "Manufacture"
             bom_no = frappe.db.get_value(
                 "BOM",
                 {"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1},
@@ -3310,7 +3691,7 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
 #   rows where `auto_on_shortage = 1` OR `auto_on_max_level = 1`. Two modes:
 #
 #     auto_on_shortage:
-#       supply = stock + open_wo_output
+#       supply = stock + open_wo_output + open_po   (open_po added 2026-06-02)
 #       demand = pending_so + wo_required_component_qty
 #       shortage = demand − supply
 #       trigger if shortage > 0 → create PP / MR for max(shortage, MOQ)
@@ -3608,9 +3989,23 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
     """
     frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
 
+    # 2026-06-04 — Configurable Triggers: mark Calc Action as the active trigger
+    # so the deep WO/PO helpers resolve this row's per-trigger override.
+    frappe.flags.toc_trigger_key = "shortage_action"
+
+    from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
+
     settings = frappe.get_cached_doc("TOC Settings")
-    pending_statuses = _parse_statuses(settings.projection_pending_so_statuses)
-    confirmed_states = _parse_confirmed_states(settings.projection_confirmed_so_workflow_states)
+    _so_raw = row_override("so", trigger_key="shortage_action") or settings.projection_pending_so_statuses
+    pending_statuses = _parse_statuses(_so_raw)
+    # 2026-06-02 FIX: read the workflow side from the combined
+    # `projection_pending_so_statuses` field. The standalone
+    # `projection_confirmed_so_workflow_states` field was dropped (v0.0.28,
+    # merged by patch merge_confirmed_so_into_pending) but three call sites
+    # still referenced it via attribute access -> AttributeError crashed
+    # Calc A/B, Calc SO and Calc Action. _parse_confirmed_states extracts the
+    # workflow side of the pair lines, so this restores intended behaviour.
+    confirmed_states = _parse_confirmed_states(_so_raw)
     default_so_warehouse = settings.get("default_so_warehouse") or None
     company = _get_company()
 
@@ -3679,7 +4074,19 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
         item_code = row.item_code
         warehouse = row.warehouse
         item_name = item_names.get(item_code) or item_code
-        action_type = (row.action_type or "Manufacture")
+        # PHASE 2 (2026-06-02): voucher TYPE is driven by the Item-master flags
+        # ("Auto Manufacturing TOC" / "Auto Purchase TOC"), NOT the per-row
+        # action_type. Neither flag set -> skip + log (no voucher).
+        action_type, mode_gate_reason = _resolve_replenishment_mode(item_code)
+        if action_type is None:
+            skipped += 1
+            _append_run_item(run_log, {
+                "item_code": item_code, "item_name": item_name,
+                "warehouse": warehouse, "calc_used": "Calc Action",
+                "status": "Skipped - No Replenishment Mode",
+                "production_qty": 0, "reason": f"[Calc Action] {mode_gate_reason}",
+            })
+            continue
         row_idx     = idx.get((item_code, warehouse))
         minmfg      = flt(row_idx.min_qty_stock_uom) if row_idx else 0.0
         threshold   = flt(row.max_level_threshold_pct or 0)
@@ -3720,7 +4127,11 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
             cover_pct_val = None
 
             if int(row.auto_on_shortage or 0) == 1:
-                supply = stock + open_wo
+                # 2026-06-02: Shortage-mode supply now INCLUDES pending Purchase
+                # Orders (open_po), matching Max-Level mode. Incoming POs are real
+                # supply that will land at this warehouse, so counting them
+                # prevents over-ordering when a PO already covers the gap.
+                supply = stock + open_wo + open_po
                 demand = pending_so + wo_req
                 short  = round(demand - supply, 4)
                 if short > 0:
@@ -3731,7 +4142,7 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                         f"  Demand = pending SO ({pending_so:.3f}) + WO component req ({wo_req:.3f}) "
                         f"= {demand:.3f}\n"
                         f"  Supply = stock ({stock:.3f}) + open WO output ({open_wo:.3f}) "
-                        f"= {supply:.3f}\n"
+                        f"+ open PO ({open_po:.3f}) = {supply:.3f}\n"
                         f"  Shortage = Demand − Supply = {short:.3f} (stock UOM)\n"
                         f"  MOQ floor = {minmfg:.3f}\n"
                         f"  Order Qty = max(shortage, MOQ) = {qty:.3f}"
@@ -3790,6 +4201,20 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                     )
                 continue
 
+            # PHASE 2 gate — per-warehouse Min Qty must be configured (> 0).
+            if minmfg <= 0:
+                skipped += 1
+                _append_run_item(run_log, {
+                    **base_payload, "status": "Skipped - Min Qty Not Set",
+                    "production_qty": 0,
+                    "reason": (
+                        f"[Calc Action][{action_type}] No Minimum Purchase/Production Qty for "
+                        f"({item_code} @ {warehouse}) in Item > TOC Setting tab > section 6 "
+                        f"'Minimum Manufacture / Purchase Qty per Warehouse'. Set Min Qty > 0."
+                    ),
+                })
+                continue
+
             # Dedup against any active Shortage Action artifact for this pair.
             existing = _shortage_action_artifact_exists(item_code, warehouse, action_type)
             if existing:
@@ -3801,7 +4226,7 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                         else "Skipped - PP Exists"
                     ),
                     "production_qty": 0,
-                    "production_plan": existing,
+                    ("material_request" if action_type == "Purchase" else "production_plan"): existing,
                     "reason": (
                         f"[Calc Action] Active {('Material Request' if action_type=='Purchase' else 'Production Plan')} "
                         f"{existing} already covers {item_code} at {warehouse} (mode={mode_used})."
@@ -3822,7 +4247,7 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                     **base_payload,
                     "status": "Created (MR)",
                     "production_qty": qty,
-                    "production_plan": mr_name,
+                    "material_request": mr_name,
                     "reason": reason,
                 })
             else:

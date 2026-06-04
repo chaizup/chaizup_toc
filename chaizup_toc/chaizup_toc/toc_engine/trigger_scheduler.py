@@ -154,15 +154,21 @@ def ensure_trigger_rows(settings_doc):
     from chaizup_toc.chaizup_toc.toc_engine import trigger_registry
 
     existing = {r.trigger_key for r in (settings_doc.get("trigger_configurations") or [])}
-    global_so = settings_doc.get("projection_pending_so_statuses") or ""
-    global_wo = settings_doc.get("pending_wo_statuses") or ""
-    global_po = settings_doc.get("pending_po_statuses") or ""
 
     added = 0
     for trig in trigger_registry.all_triggers():
         if trig["key"] in existing:
             continue
         c = trig["considers"]
+        # IMPORTANT (regression guard): pending cells are seeded BLANK, never
+        # pre-filled from the global fields. A blank cell means "inherit the
+        # global TOC Settings default" (engine falls back to the UNCHANGED
+        # global read), so a freshly-seeded row behaves byte-for-byte like the
+        # pre-feature engine. Pre-filling broke this because the global WO/PO
+        # status field stores Status|Workflow pairs whose workflow side the
+        # global path ignores (it reads workflow from a separate field), while
+        # the combined override cell parses BOTH sides. The Task-10 multiselect
+        # surfaces the inherited global pairs as the effective default instead.
         settings_doc.append("trigger_configurations", {
             "trigger_key": trig["key"],
             "trigger_name": trig["name"],
@@ -172,9 +178,9 @@ def ensure_trigger_rows(settings_doc):
             "weekday": trig["default_weekday"],
             "considers_so": c["so"], "considers_wo": c["wo"], "considers_po": c["po"],
             "engine_help": trigger_registry.help_for(trig["key"]),
-            "pending_so_statuses": global_so if c["so"] else "",
-            "pending_wo_statuses": global_wo if c["wo"] else "",
-            "pending_po_statuses": global_po if c["po"] else "",
+            "pending_so_statuses": "",
+            "pending_wo_statuses": "",
+            "pending_po_statuses": "",
         })
         added += 1
     return added
