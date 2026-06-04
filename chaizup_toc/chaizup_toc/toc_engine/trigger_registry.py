@@ -42,6 +42,13 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "00:00", "default_weekday": "",
         "considers": {"so": 0, "wo": 0, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Syncs each item's Minimum Order Qty (purchase, from the ERPNext "
+            "item field) and Minimum Manufacture (from Work Order history) into the "
+            "per-warehouse tables.\nEFFECT: Keeps the order/production floors current.\n"
+            "WHY: So replenishment never raises an order below the supplier/batch "
+            "minimum.\nPending statuses: not used (creates no demand/supply scan)."
+        ),
     },
     {
         "key": "adu_max_level",
@@ -50,6 +57,13 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "01:00", "default_weekday": "",
         "considers": {"so": 0, "wo": 0, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Recomputes Average Daily Usage (ADU) and Maximum Level per "
+            "item x warehouse from ALL outward stock movement (item-group "
+            "independent).\nEFFECT: Buffers and Days-of-Cover resize to real "
+            "consumption.\nWHY: A buffer is only as good as its demand rate; stale "
+            "ADU under/over-stocks.\nPending statuses: not used."
+        ),
     },
     {
         "key": "sales_projection",
@@ -58,6 +72,15 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "02:00", "default_weekday": "",
         "considers": {"so": 1, "wo": 1, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Calc A (forecast) + Calc B (Sales-Order safety net) turn the "
+            "current month's submitted Sales Projection into Production Plans "
+            "(manufacture) or one consolidated Material Request (purchase) for "
+            "shortfalls.\nEFFECT: Creates PP + Work Orders / MR.\nWHY: Produces ahead "
+            "of forecast demand so finished goods are ready on time.\nPending SO/WO "
+            "statuses below define which Sales Orders count as demand and which Work "
+            "Orders count as in-progress supply."
+        ),
     },
     {
         "key": "buffer_mr_run",
@@ -66,6 +89,14 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "07:00", "default_weekday": "",
         "considers": {"so": 0, "wo": 0, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Calculates every item's Buffer Penetration % and raises Draft "
+            "Material Requests / Production Plans for Yellow and Red zone items.\n"
+            "EFFECT: Creates MR/PP (left as Draft for a planner to submit).\nWHY: The "
+            "core demand-driven replenishment run that keeps stock inside its buffer.\n"
+            "Pending statuses: NOT used — this engine reads live Bin quantities "
+            "(on-hand, ordered, reserved), so its pending columns are not applicable."
+        ),
     },
     {
         "key": "so_shortage",
@@ -74,6 +105,14 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "07:00", "default_weekday": "",
         "considers": {"so": 1, "wo": 1, "po": 1},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Calc SO scans every pending Sales Order and covers real shortages "
+            "with a Production Plan (manufacture) or Purchase Material Request.\n"
+            "EFFECT: Creates PP + Work Orders / MR, floored by the per-warehouse "
+            "Minimum Qty.\nWHY: Guarantees confirmed customer orders are backed by "
+            "supply even when forecast missed them.\nPending SO/WO/PO statuses below "
+            "define what counts as pending demand (SO) and existing supply (WO, PO)."
+        ),
     },
     {
         "key": "procurement_monitor",
@@ -82,6 +121,13 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "07:30", "default_weekday": "",
         "considers": {"so": 0, "wo": 0, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Logs purchase-mode items sitting in the Red/Black zone for the "
+            "buying team and writes a one-line audit summary.\nEFFECT: No documents "
+            "created — monitoring only.\nWHY: Gives procurement an early heads-up "
+            "without auto-raising purchase requests.\nPending statuses: not used "
+            "(reads live buffer state)."
+        ),
     },
     {
         "key": "buffer_snapshot",
@@ -90,6 +136,12 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "08:00", "default_weekday": "",
         "considers": {"so": 0, "wo": 0, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Archives every item x warehouse buffer state into TOC Buffer Log.\n"
+            "EFFECT: Writes one history row per item x warehouse per run.\nWHY: Feeds "
+            "the weekly Dynamic Buffer Management evaluation and trend analysis.\n"
+            "Pending statuses: not used."
+        ),
     },
     {
         "key": "weekly_dbm",
@@ -98,6 +150,13 @@ TOC_TRIGGERS = [
         "default_frequency": "Weekly", "default_time": "09:00", "default_weekday": "Sunday",
         "considers": {"so": 0, "wo": 0, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
+        "help": (
+            "WHAT: Dynamic Buffer Management resizes target buffers UP (Too Much Red) "
+            "or DOWN (Too Much Green) based on the last week's zone behaviour.\n"
+            "EFFECT: Updates TOC Item Buffer target buffers + counters.\nWHY: Buffers "
+            "self-tune to changing demand without manual review.\nRuns weekly (default "
+            "Sunday). Pending statuses: not used."
+        ),
     },
     {
         "key": "shortage_action",
@@ -106,6 +165,14 @@ TOC_TRIGGERS = [
         "default_frequency": "Daily", "default_time": "07:15", "default_weekday": "",
         "considers": {"so": 1, "wo": 1, "po": 1},
         "schedulable": 1, "seed_enabled": 0,  # opt-in: seeded disabled
+        "help": (
+            "WHAT: Calc Action — for opted-in Item Minimum Manufacture rows, tops up "
+            "an item when it falls short (Mode 1) or drops below a max-level threshold "
+            "(Mode 2).\nEFFECT: Creates PP + Work Orders (manufacture) or MR "
+            "(purchase).\nWHY: Preventive, per-warehouse safety automation driven by "
+            "each row's opt-in checkboxes.\nSEEDED DISABLED — tick Enabled on this row "
+            "to schedule it. Pending SO/WO/PO statuses below define demand vs supply."
+        ),
     },
 ]
 
@@ -125,3 +192,12 @@ def get_trigger(key):
 def job_method_for(key):
     """Return the dotted job-method path for a trigger key."""
     return _BY_KEY[key]["job_method"]
+
+
+def help_for(key):
+    """Return the human 'what / effect / why' help text for a trigger key.
+
+    Surfaced as a per-trigger tooltip in the TOC Settings engine overview and
+    seeded into the read-only `engine_help` field on each child row.
+    """
+    return _BY_KEY[key].get("help", "")
