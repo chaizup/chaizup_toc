@@ -8,6 +8,16 @@ class TOCSettings(Document):
         self._validate_zone_thresholds()
         self._validate_dbm_params()
         self._validate_warehouse_rules()
+        self._sync_trigger_schedules()
+
+    def _sync_trigger_schedules(self):
+        """Push every trigger row's schedule onto its native Scheduled Job Type.
+
+        Runs on every save so editing a trigger time takes effect immediately.
+        Bad time/cron raises frappe.throw inside sync_one and aborts the save.
+        """
+        from chaizup_toc.chaizup_toc.toc_engine import trigger_scheduler
+        trigger_scheduler.sync_all(self)
 
     def _validate_zone_thresholds(self):
         if flt(self.red_zone_threshold) <= flt(self.yellow_zone_threshold):

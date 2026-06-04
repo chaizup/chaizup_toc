@@ -41,6 +41,8 @@
   "pending_section_break",
   "pending_wo_statuses",
   "pending_po_statuses",
+  "automation_triggers_section",
+  "trigger_configurations",
   "pending_po_col_break",
   "run_projection_automation_now",
   "run_so_shortage_automation_now",
@@ -342,6 +344,17 @@
    "hidden": 1,
    "label": "Demo Data Manifest",
    "read_only": 1
+  },
+  {
+   "fieldname": "automation_triggers_section",
+   "fieldtype": "Section Break",
+   "label": "Automation Engines & Triggers"
+  },
+  {
+   "fieldname": "trigger_configurations",
+   "fieldtype": "Table",
+   "label": "Trigger Configurations",
+   "options": "TOC Trigger Configuration"
   },
   {
    "fieldname": "section_break_oosi",

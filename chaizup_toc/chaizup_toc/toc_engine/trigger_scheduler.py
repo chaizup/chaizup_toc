@@ -72,3 +72,55 @@ def compute_cron(row):
         return f"{mm} {hh} * * {_WEEKDAY_TO_CRON[wd]}"
 
     return f"{mm} {hh} * * *"
+
+
+def _scheduled_job_name(method):
+    """Return the Scheduled Job Type docname for a method, or None."""
+    import frappe
+    rows = frappe.get_all(
+        "Scheduled Job Type", filters={"method": method}, pluck="name", limit=1
+    )
+    return rows[0] if rows else None
+
+
+def sync_one(row):
+    """Write one trigger row's schedule onto its native Scheduled Job Type.
+
+    Creates the Scheduled Job Type if it does not yet exist (e.g. a newly
+    schedulable engine). Converts CronValidationError into frappe.throw so a
+    bad time aborts the parent save.
+    """
+    import frappe
+    from chaizup_toc.chaizup_toc.toc_engine import trigger_registry
+
+    try:
+        trig = trigger_registry.get_trigger(row.trigger_key)
+    except KeyError:
+        return  # unknown key (stale row) — skip silently
+    if not trig.get("schedulable"):
+        return
+
+    method = trig["job_method"]
+    try:
+        cron = compute_cron(row)
+    except CronValidationError as e:
+        frappe.throw(f"{trig['name']}: {e}")
+
+    name = _scheduled_job_name(method)
+    if name:
+        sjt = frappe.get_doc("Scheduled Job Type", name)
+    else:
+        sjt = frappe.new_doc("Scheduled Job Type")
+        sjt.method = method
+
+    sjt.frequency = "Cron"
+    sjt.cron_format = cron
+    sjt.stopped = 0 if int(row.enabled or 0) else 1
+    sjt.flags.ignore_permissions = True
+    sjt.save(ignore_permissions=True)
+
+
+def sync_all(settings_doc):
+    """Sync every schedulable trigger row on a TOC Settings doc."""
+    for row in (settings_doc.get("trigger_configurations") or []):
+        sync_one(row)
