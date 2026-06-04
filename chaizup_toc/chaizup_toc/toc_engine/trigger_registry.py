@@ -13,9 +13,14 @@ TOC Trigger Registry — single source of truth for every automation engine.
 #   - `key` is an IMMUTABLE identity stored on each child row; never rename a key
 #     once shipped (it links row <-> registry <-> Scheduled Job Type).
 #   - `considers` reflects REALITY: only the three production_plan_engine engines
-#     read configurable pending SO/WO/PO statuses. buffer_mr_run /
-#     procurement_monitor use Bin.ordered_qty + a hardcoded WIP clause and do
-#     NOT consult the configurable lists, so all three flags are 0 for them.
+#     read configurable pending SO/WO/PO/Purchase-MR statuses (sales_projection,
+#     so_shortage, shortage_action). buffer_mr_run / procurement_monitor use
+#     Bin.ordered_qty + a hardcoded WIP clause and do NOT consult the configurable
+#     lists, so all four flags are 0 for them.
+#   - `mr` (2026-06-04) = pending Purchase Material Request. The purchase branch
+#     of the 3 engines nets out pending Purchase MR qty so it cannot loop-create
+#     MRs forever (a PO can't be auto-created — supplier is user-chosen — so the
+#     in-flight supply is the Material Request, not a PO).
 #   - `job_method` must be a no-arg callable (the daily wrappers all are).
 # DANGER ZONE:
 #   - Do NOT point two keys at the same job_method (the scheduler keys jobs by
@@ -30,7 +35,8 @@ TOC Trigger Registry — single source of truth for every automation engine.
 #   default_frequency  "Daily" | "Weekly"
 #   default_time   "HH:MM" (24h)
 #   default_weekday  "" for Daily, else "Sunday".."Saturday"
-#   considers      {"so":0/1, "wo":0/1, "po":0/1} — which pending lists apply
+#   considers      {"so":0/1, "wo":0/1, "po":0/1, "mr":0/1} — which pending lists apply
+#                  (mr = pending Purchase Material Request, netted in purchase branch)
 #   schedulable    1 if it can run on a cron
 #   seed_enabled   1 if the seeded row starts enabled (0 = opt-in, e.g. Calc Action)
 
@@ -40,7 +46,7 @@ TOC_TRIGGERS = [
         "name": "Min Order Qty Sync",
         "job_method": "chaizup_toc.tasks.daily_tasks.daily_min_order_sync",
         "default_frequency": "Daily", "default_time": "00:00", "default_weekday": "",
-        "considers": {"so": 0, "wo": 0, "po": 0},
+        "considers": {"so": 0, "wo": 0, "po": 0, "mr": 0},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Syncs each item's Minimum Order Qty (purchase, from the ERPNext "
@@ -55,7 +61,7 @@ TOC_TRIGGERS = [
         "name": "ADU + Max Level Refresh",
         "job_method": "chaizup_toc.tasks.daily_tasks.update_min_mfg_adu_levels",
         "default_frequency": "Daily", "default_time": "01:00", "default_weekday": "",
-        "considers": {"so": 0, "wo": 0, "po": 0},
+        "considers": {"so": 0, "wo": 0, "po": 0, "mr": 0},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Recomputes Average Daily Usage (ADU) and Maximum Level per "
@@ -75,16 +81,18 @@ TOC_TRIGGERS = [
         "run_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_projection_automation_for_all_warehouses",
         "run_triggered_by": "manual_button",
         "default_frequency": "Daily", "default_time": "02:00", "default_weekday": "",
-        "considers": {"so": 1, "wo": 1, "po": 0},
+        "considers": {"so": 1, "wo": 1, "po": 1, "mr": 1},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Calc A (forecast) + Calc B (Sales-Order safety net) turn the "
-            "current month's submitted Sales Projection into Production Plans "
-            "(manufacture) or one consolidated Material Request (purchase) for "
-            "shortfalls.\nEFFECT: Creates PP + Work Orders / MR.\nWHY: Produces ahead "
-            "of forecast demand so finished goods are ready on time.\nPending SO/WO "
-            "statuses below define which Sales Orders count as demand and which Work "
-            "Orders count as in-progress supply."
+            "current month's submitted Sales Projection into Production Plans + Work "
+            "Orders (manufacture items) or one consolidated Purchase Material Request "
+            "(purchase items) for shortfalls, per item x warehouse x mode.\n"
+            "EFFECT: Creates PP + Work Orders, or a Purchase Material Request.\n"
+            "WHY: Produces/orders ahead of forecast demand so goods are ready on time."
+            "\nPending statuses: SO + WO drive the manufacture calc; PO + Purchase MR "
+            "drive the purchase calc (open POs and pending Purchase MRs are counted as "
+            "incoming supply so the run never re-orders what is already on the way)."
         ),
     },
     {
@@ -92,7 +100,7 @@ TOC_TRIGGERS = [
         "name": "Buffer Material Request Run",
         "job_method": "chaizup_toc.tasks.daily_tasks.daily_production_run",
         "default_frequency": "Daily", "default_time": "07:00", "default_weekday": "",
-        "considers": {"so": 0, "wo": 0, "po": 0},
+        "considers": {"so": 0, "wo": 0, "po": 0, "mr": 0},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Calculates every item's Buffer Penetration % and raises Draft "
@@ -110,15 +118,16 @@ TOC_TRIGGERS = [
         "run_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_so_shortage_automation",
         "run_triggered_by": "so_shortage_manual",
         "default_frequency": "Daily", "default_time": "07:00", "default_weekday": "",
-        "considers": {"so": 1, "wo": 1, "po": 1},
+        "considers": {"so": 1, "wo": 1, "po": 1, "mr": 1},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Calc SO scans every pending Sales Order and covers real shortages "
             "with a Production Plan (manufacture) or Purchase Material Request.\n"
             "EFFECT: Creates PP + Work Orders / MR, floored by the per-warehouse "
             "Minimum Qty.\nWHY: Guarantees confirmed customer orders are backed by "
-            "supply even when forecast missed them.\nPending SO/WO/PO statuses below "
-            "define what counts as pending demand (SO) and existing supply (WO, PO)."
+            "supply even when forecast missed them.\nPending SO/WO/PO/Purchase-MR "
+            "statuses below define pending demand (SO) and existing supply (WO, PO, "
+            "and pending Purchase MRs so it never re-orders what is already requested)."
         ),
     },
     {
@@ -126,7 +135,7 @@ TOC_TRIGGERS = [
         "name": "Procurement Monitoring",
         "job_method": "chaizup_toc.tasks.daily_tasks.daily_procurement_run",
         "default_frequency": "Daily", "default_time": "07:30", "default_weekday": "",
-        "considers": {"so": 0, "wo": 0, "po": 0},
+        "considers": {"so": 0, "wo": 0, "po": 0, "mr": 0},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Logs purchase-mode items sitting in the Red/Black zone for the "
@@ -141,7 +150,7 @@ TOC_TRIGGERS = [
         "name": "Buffer Snapshot",
         "job_method": "chaizup_toc.tasks.daily_tasks.daily_buffer_snapshot",
         "default_frequency": "Daily", "default_time": "08:00", "default_weekday": "",
-        "considers": {"so": 0, "wo": 0, "po": 0},
+        "considers": {"so": 0, "wo": 0, "po": 0, "mr": 0},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Archives every item x warehouse buffer state into TOC Buffer Log.\n"
@@ -155,7 +164,7 @@ TOC_TRIGGERS = [
         "name": "Weekly Dynamic Buffer Management",
         "job_method": "chaizup_toc.tasks.daily_tasks.weekly_dbm_check",
         "default_frequency": "Weekly", "default_time": "09:00", "default_weekday": "Sunday",
-        "considers": {"so": 0, "wo": 0, "po": 0},
+        "considers": {"so": 0, "wo": 0, "po": 0, "mr": 0},
         "schedulable": 1, "seed_enabled": 1,
         "help": (
             "WHAT: Dynamic Buffer Management resizes target buffers UP (Too Much Red) "
@@ -172,7 +181,7 @@ TOC_TRIGGERS = [
         "run_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_shortage_action_automation",
         "run_triggered_by": "shortage_action_manual",
         "default_frequency": "Daily", "default_time": "07:15", "default_weekday": "",
-        "considers": {"so": 1, "wo": 1, "po": 1},
+        "considers": {"so": 1, "wo": 1, "po": 1, "mr": 1},
         "schedulable": 1, "seed_enabled": 0,  # opt-in: seeded disabled
         "help": (
             "WHAT: Calc Action — for opted-in Item Minimum Manufacture rows, tops up "
@@ -180,7 +189,9 @@ TOC_TRIGGERS = [
             "(Mode 2).\nEFFECT: Creates PP + Work Orders (manufacture) or MR "
             "(purchase).\nWHY: Preventive, per-warehouse safety automation driven by "
             "each row's opt-in checkboxes.\nSEEDED DISABLED — tick Enabled on this row "
-            "to schedule it. Pending SO/WO/PO statuses below define demand vs supply."
+            "to schedule it.\nPending SO/WO/PO/Purchase-MR statuses below define demand "
+            "vs supply; for purchase items the pending Purchase MR qty is netted out so "
+            "the engine never re-requests what is already on an open Material Request."
         ),
     },
 ]

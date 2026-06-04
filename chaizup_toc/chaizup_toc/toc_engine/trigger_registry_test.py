@@ -42,6 +42,22 @@ class TestTriggerRegistry(unittest.TestCase):
             sorted(["sales_projection", "so_shortage", "shortage_action"]),
         )
 
+    def test_considers_has_four_voucher_keys(self):
+        for t in reg.all_triggers():
+            self.assertEqual(set(t["considers"].keys()), {"so", "wo", "po", "mr"})
+
+    def test_purchase_engines_consider_po_and_mr(self):
+        # The 3 engines that create purchase Material Requests must read PO + MR.
+        for key in ("sales_projection", "so_shortage", "shortage_action"):
+            c = reg.get_trigger(key)["considers"]
+            self.assertEqual(c["po"], 1, f"{key} must consider PO")
+            self.assertEqual(c["mr"], 1, f"{key} must consider Purchase MR")
+
+    def test_non_voucher_engines_have_mr_zero(self):
+        for key in ("min_order_sync", "adu_max_level", "buffer_mr_run",
+                    "procurement_monitor", "buffer_snapshot", "weekly_dbm"):
+            self.assertEqual(reg.get_trigger(key)["considers"]["mr"], 0)
+
     def test_shortage_action_seed_disabled(self):
         self.assertEqual(reg.get_trigger("shortage_action")["seed_enabled"], 0)
 

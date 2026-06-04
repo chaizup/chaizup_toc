@@ -218,3 +218,38 @@ function _ipv_wo_apply_qty_lock(frm) {
         );
     }
 }
+
+// =============================================================================
+// Work Order — TOC "Recorded By" + "Creation Reason" read-only rules (2026-06-04)
+// CONTEXT: WO carries custom_toc_recorded_by (Select "By User"/"By System") and
+//   custom_creation_reason (Text Editor, formatted "why"). TOC-created WOs are
+//   stamped "By System" + a system reason.
+// RULES (mirror Material Request):
+//   - custom_recorded_by (Link, the renamed ex-"Created By") + custom_toc_recorded_by
+//     are read-only.
+//   - If custom_toc_recorded_by == "By System" -> creation reason is READ-ONLY.
+//   - Else the user may edit the reason BEFORE submit.
+// RESTRICT: do not make the recorded-by fields editable; TOC reports treat
+//   "By System" as the engine marker.
+// =============================================================================
+frappe.ui.form.on("Work Order", {
+    refresh(frm) {
+        _toc_wo_recorded_rules(frm);
+    },
+    custom_toc_recorded_by(frm) {
+        _toc_wo_recorded_rules(frm);
+    },
+});
+
+function _toc_wo_recorded_rules(frm) {
+    if (frm.fields_dict.custom_recorded_by) {
+        frm.set_df_property("custom_recorded_by", "read_only", 1);
+    }
+    if (frm.fields_dict.custom_toc_recorded_by) {
+        frm.set_df_property("custom_toc_recorded_by", "read_only", 1);
+    }
+    if (frm.fields_dict.custom_creation_reason) {
+        const is_system = frm.doc.custom_toc_recorded_by === "By System";
+        frm.set_df_property("custom_creation_reason", "read_only", is_system ? 1 : 0);
+    }
+}

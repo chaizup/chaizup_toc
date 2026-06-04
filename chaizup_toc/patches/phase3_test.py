@@ -34,7 +34,7 @@ def execute():
         """
         SELECT pp.name FROM `tabProduction Plan` pp
         WHERE pp.docstatus=1
-          AND pp.custom_created_by='System'
+          AND pp.custom_recorded_by='System'
           AND pp.modified > NOW() - INTERVAL 24 HOUR
         """
     )

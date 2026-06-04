@@ -2868,7 +2868,7 @@ def _get_pp_list(item_code, pp_statuses=None):
     as a Production Plan Item, plus all child Work Orders for the same plan.
     Used by `get_active_production_plans` modal.
 
-    NOTE: pp.custom_created_by and pp.custom_creation_reason are chaizup_toc
+    NOTE: pp.custom_recorded_by and pp.custom_creation_reason are chaizup_toc
     custom fields installed via fixtures/custom_field.json. We probe each
     column with frappe.db.has_column() so the query still works on bench
     sites where the fixtures haven't been synced yet.
@@ -2877,10 +2877,10 @@ def _get_pp_list(item_code, pp_statuses=None):
     pp_sql      = _sql_in(pp_statuses)
 
     # ── Probe optional custom columns (graceful when fixtures not synced) ──
-    has_created_by      = frappe.db.has_column("Production Plan", "custom_created_by")
+    has_created_by      = frappe.db.has_column("Production Plan", "custom_recorded_by")
     has_creation_reason = frappe.db.has_column("Production Plan", "custom_creation_reason")
     extra_cols = []
-    if has_created_by:      extra_cols.append("pp.custom_created_by")
+    if has_created_by:      extra_cols.append("pp.custom_recorded_by")
     if has_creation_reason: extra_cols.append("pp.custom_creation_reason")
     extra_select = ("," + ", ".join(extra_cols)) if extra_cols else ""
 
@@ -2926,7 +2926,7 @@ def _get_pp_list(item_code, pp_statuses=None):
             "pp_name":          pp.name,
             "status":           pp.status,
             "posting_date":     str(pp.posting_date or ""),
-            "created_by":       (pp.get("custom_created_by") if has_created_by else None) or "User",
+            "created_by":       (pp.get("custom_recorded_by") if has_created_by else None) or "User",
             "creation_reason":  (pp.get("custom_creation_reason") if has_creation_reason else "") or "",
             "work_orders":      by_pp.get(pp.name, []),
         })

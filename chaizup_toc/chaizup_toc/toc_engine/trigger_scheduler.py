@@ -176,13 +176,34 @@ def ensure_trigger_rows(settings_doc):
             "frequency": trig["default_frequency"],
             "schedule_time": trig["default_time"],
             "weekday": trig["default_weekday"],
-            "considers_so": c["so"], "considers_wo": c["wo"], "considers_po": c["po"],
+            "considers_so": c["so"], "considers_wo": c["wo"],
+            "considers_po": c["po"], "considers_mr": c.get("mr", 0),
             "engine_help": trigger_registry.help_for(trig["key"]),
             "pending_so_statuses": "",
             "pending_wo_statuses": "",
             "pending_po_statuses": "",
+            "pending_mr_statuses": "",
         })
         added += 1
+
+    # Reconcile registry-derived READ-ONLY fields on EXISTING rows so they stay
+    # in sync when the registry changes (e.g. a new considers flag / engine help
+    # / a renamed friendly name). These are not user-editable, so overwriting is
+    # safe. User-editable fields (schedule, enabled, pending cells) are NOT
+    # touched here. This is what backfills considers_mr onto already-seeded rows.
+    by_key = {t["key"]: t for t in trigger_registry.all_triggers()}
+    for row in (settings_doc.get("trigger_configurations") or []):
+        trig = by_key.get(row.trigger_key)
+        if not trig:
+            continue
+        c = trig["considers"]
+        row.trigger_name  = trig["name"]
+        row.considers_so  = c["so"]
+        row.considers_wo  = c["wo"]
+        row.considers_po  = c["po"]
+        row.considers_mr  = c.get("mr", 0)
+        row.engine_help   = trigger_registry.help_for(trig["key"])
+
     return added
 
 
@@ -194,12 +215,13 @@ def seed_and_sync():
     try:
         settings = frappe.get_doc("TOC Settings")
         added = ensure_trigger_rows(settings)
-        if added:
-            settings.flags.ignore_mandatory = True
-            settings.flags.ignore_permissions = True
-            settings.save(ignore_permissions=True)  # validate() also re-syncs
-        else:
-            sync_all(settings)
+        # Always save: ensure_trigger_rows also reconciles registry-derived
+        # read-only fields (considers_*, engine_help) on existing rows, so there
+        # may be changes to persist even when added == 0. validate() re-syncs the
+        # Scheduled Job Types on save.
+        settings.flags.ignore_mandatory = True
+        settings.flags.ignore_permissions = True
+        settings.save(ignore_permissions=True)
         frappe.db.commit()
         frappe.logger("chaizup_toc").info(
             "TOC trigger seed_and_sync: %s rows added, schedules synced." % added

@@ -51,7 +51,7 @@ _BOM_LIST_VIEW_FIELDS = (
     '[{"type": "Status", "fieldname": "status_field", "label": "Status"}, '
     '{"fieldname": "item", "label": "Item To Manufacture"}, '
     '{"fieldname": "custom_created_time", "label": "Created On"}, '
-    '{"fieldname": "custom_created_by", "label": "Created By"}, '
+    '{"fieldname": "custom_recorded_by", "label": "Created By"}, '
     '{"fieldname": "is_active", "label": "Is Active ?"}, '
     '{"fieldname": "is_default", "label": "Is Default ?"}]'
 )

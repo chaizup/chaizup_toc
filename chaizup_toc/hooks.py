@@ -218,7 +218,7 @@ doc_events = {
         "on_update": "chaizup_toc.chaizup_toc.toc_engine.projection_engine.on_sales_projection_update",
         "on_submit": "chaizup_toc.chaizup_toc.toc_engine.projection_engine.on_sales_projection_submit",
     },
-    # Production Plan — auto-set custom_created_by = "User" for manually created plans.
+    # Production Plan — auto-set custom_recorded_by = "User" for manually created plans.
     # The automation pre-sets "System" before insert; this hook only fires for blank field.
     #
     # before_cancel: severs `Sales Projected Items.wo_name` references to this PP

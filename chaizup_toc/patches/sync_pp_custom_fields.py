@@ -1,6 +1,6 @@
 # =============================================================================
 # CONTEXT: One-shot patch — sync Production Plan custom fields used by the
-#   PP automation engine (custom_created_by, custom_creation_reason,
+#   PP automation engine (custom_recorded_by, custom_creation_reason,
 #   custom_projection_reference). They were defined in custom_field.json but
 #   never imported on existing sites. Without them, _pp_exists_for_item()
 #   silently fails to dedup and every cron creates duplicate PPs.
@@ -16,7 +16,7 @@ import os
 import frappe
 
 FIELD_NAMES = (
-    "Production Plan-custom_created_by",
+    "Production Plan-custom_recorded_by",
     "Production Plan-custom_creation_reason",
     "Production Plan-custom_projection_reference",
 )

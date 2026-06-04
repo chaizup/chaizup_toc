@@ -55,7 +55,7 @@
 #     Default: ["To Deliver and Bill", "To Deliver", "On Hold"]
 #
 # ─── PRODUCTION PLAN CUSTOM FIELDS ───────────────────────────────────────────
-#   custom_created_by           = "System" (automation) or "User" (manual)
+#   custom_recorded_by           = "System" (automation) or "User" (manual)
 #   custom_creation_reason      = Full formula breakdown text
 #   custom_projection_reference = Link to Sales Projection (dedup key)
 #   These are defined in chaizup_toc fixtures/custom_field.json.
@@ -243,14 +243,14 @@ def daily_production_plan_automation():
 
 # =============================================================================
 # DOC EVENT — fires before every Production Plan insert (hooked in hooks.py)
-# CONTEXT: Auto-sets custom_created_by = "User" when the field is blank.
+# CONTEXT: Auto-sets custom_recorded_by = "User" when the field is blank.
 #   The automation always sets "System" before insert, so this only triggers
 #   for manually created Production Plans where the field is empty.
 # =============================================================================
 def on_production_plan_before_insert(doc, method):
-    """Auto-set custom_created_by = 'User' for manually created Production Plans."""
-    if not getattr(doc, "custom_created_by", None):
-        doc.custom_created_by = "User"
+    """Auto-set custom_recorded_by = 'User' for manually created Production Plans."""
+    if not getattr(doc, "custom_recorded_by", None):
+        doc.custom_recorded_by = "User"
 
 
 # =============================================================================
@@ -562,8 +562,20 @@ def _create_production_plan(item_code, bom_no, qty, warehouse, reason, company, 
     pp = frappe.new_doc("Production Plan")
     pp.company = company
     pp.planned_start_date = today()
-    pp.custom_created_by = "System"
-    pp.custom_creation_reason = enriched_reason
+    pp.custom_recorded_by = "System"
+    # 2026-06-04: store the reason as a well-structured HTML card (Text Editor).
+    # The [Calc X] markers survive html-escaping, so the dedup/classify LIKE
+    # '%[Calc A]%' queries still match. Source label derived from the marker.
+    _pp_src = "Sales Projection (Calc A + Calc B)"
+    if "[Calc SO]" in (enriched_reason or ""):
+        _pp_src = "Sales Order Shortage (Calc SO)"
+    elif "[Calc Action]" in (enriched_reason or ""):
+        _pp_src = "Shortage Action (Calc Action)"
+    try:
+        pp.custom_creation_reason = _format_reason_html(
+            enriched_reason, _pp_src, doc_label="Production Plan")
+    except Exception:
+        pp.custom_creation_reason = enriched_reason
     pp.custom_projection_reference = projection_ref or ""
 
     # Warehouse scope — used by get_sub_assembly_items and get_items_for_material_requests
@@ -1039,7 +1051,7 @@ def stamp_uom_fields_on_wo_validate(doc, method=None):
     into WO.custom_produced_qty_in_uom via the extra_mirrors arg.
 
     2026-05-19 (later) — Also mirrors the SYSTEM fields `creation` and
-    `owner` into custom_created_time + custom_created_by. Reason: Frappe's
+    `owner` into custom_created_time + custom_recorded_by. Reason: Frappe's
     standard List View only renders columns from `meta.fields`; system
     fields aren't there. The mirrors enter the pool as proper Custom
     Fields and render as ordinary columns.
@@ -1055,7 +1067,7 @@ def stamp_uom_fields_on_wo_validate(doc, method=None):
         if doc.get("creation"):
             doc.custom_created_time = doc.creation
         if doc.get("owner"):
-            doc.custom_created_by = doc.owner
+            doc.custom_recorded_by = doc.owner
     except Exception:
         frappe.log_error(
             frappe.get_traceback(),
@@ -1367,7 +1379,7 @@ def stamp_uom_fields_on_bom_validate(doc, method=None):
     standard `quantity` field.
 
     2026-05-19 (later) — Also mirrors the SYSTEM fields `creation` and
-    `owner` into custom_created_time + custom_created_by. Same reason as
+    `owner` into custom_created_time + custom_recorded_by. Same reason as
     Work Order: standard List View can't render system fields directly,
     so the mirrors enter meta.fields and become proper columns.
     """
@@ -1378,7 +1390,7 @@ def stamp_uom_fields_on_bom_validate(doc, method=None):
         if doc.get("creation"):
             doc.custom_created_time = doc.creation
         if doc.get("owner"):
-            doc.custom_created_by = doc.owner
+            doc.custom_recorded_by = doc.owner
     except Exception:
         frappe.log_error(
             frappe.get_traceback(),
@@ -1437,6 +1449,12 @@ def _stamp_toc_fields_on_work_orders(pp_name, toc_data=None, recorded_by="By Sys
 
     # Pull the PP's creation reason once — same string gets stamped on every WO.
     pp_reason = frappe.db.get_value("Production Plan", pp_name, "custom_creation_reason") or ""
+    # 2026-06-04: stamp the PP's formatted (HTML) reason into each WO's
+    # 'Creation Reason' (Text Editor) custom field too, so the Work Order shows
+    # the same well-structured card as its Production Plan. Guarded — the column
+    # may be missing on a not-yet-migrated site.
+    if pp_reason and frappe.db.has_column("Work Order", "custom_creation_reason"):
+        fields["custom_creation_reason"] = pp_reason
     auto_wo_description = ""
     if pp_reason:
         try:
@@ -1537,7 +1555,7 @@ def _pp_exists_for_item(projection_name, item_code):
         FROM `tabProduction Plan` pp
         JOIN `tabProduction Plan Item` ppi ON ppi.parent = pp.name
         WHERE pp.custom_projection_reference = %s
-          AND pp.custom_created_by = 'System'
+          AND pp.custom_recorded_by = 'System'
           AND pp.docstatus != 2
           AND ppi.item_code = %s
         LIMIT 1
@@ -2619,6 +2637,25 @@ def _create_consolidated_purchase_mr(intents, company):
             "schedule_date": mr.schedule_date,
             "description": it.get("reason") or "[Calc A/B][Purchase]",
         })
+
+    # 2026-06-04: layman-readable rich-text reason summarising every purchase
+    # item consolidated into this one MR (read-only because recorded_by=System).
+    try:
+        _lines = [
+            "This consolidated Purchase Material Request covers "
+            f"{len(intents)} purchase-mode item(s) the Sales Projection automation "
+            "(Calc A + Calc B) found short for the current month.\n"
+        ]
+        for it in intents:
+            _lines.append(
+                f"• {it.get('item_name') or it['item_code']} ({it['item_code']}) "
+                f"@ {it['warehouse']}:\n{it.get('reason') or '[Calc A/B][Purchase]'}\n"
+            )
+        mr.custom_toc_creation_reason = _format_mr_reason_html(
+            "\n".join(_lines), "Sales Projection (Calc A + Calc B)")
+    except Exception:
+        pass
+
     mr.flags.ignore_mandatory = True
     mr.flags.ignore_permissions = True
     mr.insert()
@@ -2676,12 +2713,18 @@ def _process_item_v2_purchase(run_log_doc, item_code, item_name, warehouse,
                                           warehouse, default_so_warehouse)
         stock    = _warehouse_stock(item_code, warehouse)
         open_po  = _open_po_qty(item_code, warehouse)
+        # 2026-06-04: pending Purchase MRs (incl. this engine's own Draft MRs
+        # from earlier runs) are incoming supply. Netting them out is what
+        # prevents an infinite re-order loop AND allows partial top-up. This
+        # REPLACES the old boolean `_calc_ab_purchase_mr_exists` dedup.
+        open_mr  = _open_purchase_mr_qty(item_code, warehouse)
 
-        qty_a = (spow_qty + prvso) - (currALso + open_po + stock)
-        qty_b = (prvso + currso) - (stock + open_po)
+        qty_a = (spow_qty + prvso) - (currALso + open_po + open_mr + stock)
+        qty_b = (prvso + currso) - (stock + open_po + open_mr)
         shortage = max(qty_a, qty_b, 0.0)
         breakdown = (
-            f"[Calc A/B][Purchase] supply = stock {stock:.2f} + open PO {open_po:.2f}. "
+            f"[Calc A/B][Purchase] supply = stock {stock:.2f} + open PO {open_po:.2f} "
+            f"+ pending Purchase MR {open_mr:.2f}. "
             f"Calc A short {qty_a:.2f}; Calc B short {qty_b:.2f}; take max = {shortage:.2f}."
         )
 
@@ -2693,19 +2736,7 @@ def _process_item_v2_purchase(run_log_doc, item_code, item_name, warehouse,
                 "spow": spow_qty, "prvso": prvso, "currso": currso,
                 "currALso": currALso, "itmwstk": stock, "minmfg": minmfg,
                 "qty_of_shortage": shortage,
-                "reason": breakdown + " Stock + incoming PO already cover demand.",
-            })
-            summary["calc_a_skipped"] += 1
-            return summary
-
-        if _calc_ab_purchase_mr_exists(item_code, warehouse):
-            _append_run_item(run_log_doc, {
-                "item_code": item_code, "item_name": item_name,
-                "warehouse": warehouse, "calc_used": "Calc A — Purchase",
-                "status": "Skipped - MR Exists",
-                "spow": spow_qty, "minmfg": minmfg, "qty_of_shortage": shortage,
-                "reason": breakdown + " A non-terminal [Calc A/B][Purchase] MR "
-                                      "already exists for this item × warehouse.",
+                "reason": breakdown + " Stock + incoming PO + pending MR already cover demand.",
             })
             summary["calc_a_skipped"] += 1
             return summary
@@ -3522,27 +3553,36 @@ def run_so_shortage_automation(triggered_by="so_shortage_manual"):
             qty = max(shortage, minmfg)
 
             if action_type == "Purchase":
-                existing = _shortage_cover_artifact_exists(item_code, warehouse, "Purchase")
-                if existing:
+                # 2026-06-04: net out pending Purchase MRs (incl. the engine's
+                # own Draft MRs from earlier runs). This REPLACES the old boolean
+                # "MR exists -> skip" dedup and enables partial top-up: if the
+                # pending MR does not fully cover the shortage we order only the
+                # residual; if it covers, we skip. Either way the loop is broken.
+                open_mr = _open_purchase_mr_qty(item_code, warehouse)
+                shortage_p = round(shortage - open_mr, 4)
+                if shortage_p <= 0:
                     skipped += 1
                     _append_run_item(run_log, {
                         **base_payload,
-                        "status": "Skipped - MR Exists",
+                        "status": "Skipped - No Shortage",
                         "production_qty": 0,
-                        "material_request": existing,
                         "reason": (
-                            f"[Calc SO][Purchase] Active Material Request {existing} "
-                            f"already covers {item_code} at {warehouse}."
+                            f"[Calc SO][Purchase] Covered after netting pending Purchase "
+                            f"MRs at {warehouse}: shortage {shortage:.3f} − pending MR "
+                            f"{open_mr:.3f} = {shortage_p:.3f} (stock UOM). No new MR."
                         ),
                     })
                     continue
+                qty = max(shortage_p, minmfg)
                 reason = (
                     f"[Calc SO][Purchase] Sales Order Shortage at {warehouse}\n"
-                    f"Cause: pending sales orders exceed stock + open work orders.\n"
+                    f"Cause: pending sales orders exceed available + incoming supply.\n"
                     f"  Pending SO (stock UOM): {pending_so:.3f}\n"
                     f"  Current Stock         : {stock:.3f}\n"
                     f"  Open WO Qty           : {wo:.3f}\n"
-                    f"  Shortage              : {shortage:.3f}\n"
+                    f"  Open PO Qty           : {po:.3f}\n"
+                    f"  Pending Purchase MR   : {open_mr:.3f}\n"
+                    f"  Net Shortage          : {shortage_p:.3f}\n"
                     f"  MINMFG floor          : {minmfg:.3f}\n"
                     f"  Order Qty (stock UOM) : {qty:.3f}"
                 )
@@ -3810,6 +3850,18 @@ def _create_purchase_mr_for_shortage(item_code, item_name, qty_in_stock_uom,
         except Exception:
             pass
 
+    # 2026-06-04: layman-readable rich-text reason on the MR (read-only because
+    # recorded_by = By System). Detect the source engine from the [Calc X] marker.
+    try:
+        _src = "TOC Calc SO / Calc Action"
+        if "[Calc SO]" in (reason or ""):
+            _src = "Sales Order Shortage (Calc SO)"
+        elif "[Calc Action]" in (reason or ""):
+            _src = "Shortage Action (Calc Action)"
+        mr.custom_toc_creation_reason = _format_mr_reason_html(reason or "", _src)
+    except Exception:
+        pass
+
     mr.append("items", {
         "item_code":        item_code,
         "item_name":        item_name,
@@ -3893,6 +3945,175 @@ def _open_po_qty(item_code, warehouse):
         [item_code, warehouse] + params,
     )
     return flt(result[0][0] if result else 0)
+
+
+# =============================================================================
+# PENDING PURCHASE MATERIAL REQUEST netting (2026-06-04)
+# =============================================================================
+# CONTEXT: For a purchase-mode item the engine creates a Material Request
+#   (type=Purchase) — it CANNOT create a Purchase Order directly because the
+#   supplier is mandatory and a human's choice. So the in-flight purchase supply
+#   is the pending Material Request, not a PO. If the shortage calc does not
+#   subtract that pending MR qty, every run re-sees the same shortage and creates
+#   another MR → infinite loop. These helpers net pending Purchase MRs out of the
+#   purchase shortage in Calc A/B, Calc SO and Calc Action.
+# MEMORY: chaizup_configurable_triggers.md § Pending Purchase MR netting
+# RESTRICT:
+#   - Default status set MUST include 'Draft' — the engine's own freshly-created
+#     MRs are Draft (docstatus=0); without 'Draft' the loop is NOT broken.
+#   - Remaining qty MUST be (qty - ordered_qty) * conversion_factor. The
+#     `- ordered_qty` makes an MR line stop counting here once it becomes a PO
+#     (which _open_po_qty then counts) — prevents double-counting MR + PO.
+#   - This is purchase-only. NEVER subtract MR qty in the manufacture branch.
+# =============================================================================
+
+def _parse_mr_statuses(raw_text):
+    """Pending Purchase MR statuses (status-only; MR has no workflow here).
+
+    Default when blank = Draft + Pending + Partially Ordered. 'Draft' is
+    load-bearing: the engine leaves its MRs as Draft, so counting Draft MRs is
+    what breaks the re-order loop.
+    """
+    out = _extract_pair_side(raw_text, "status")
+    return out if out else ["Draft", "Pending", "Partially Ordered"]
+
+
+def _toc_mr_statuses():
+    """Resolver-aware pending Purchase MR statuses for the active trigger.
+
+    Per-trigger override (frappe.flags.toc_trigger_key -> the row's
+    `pending_mr_statuses` cell) else the built-in default.
+    """
+    from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
+    return _parse_mr_statuses(row_override("mr"))
+
+
+def _open_purchase_mr_qty(item_code, warehouse):
+    """Sum remaining pending qty on open Purchase Material Requests for
+    item × warehouse, in STOCK UOM.
+
+    remaining = (qty - ordered_qty) * conversion_factor — so an MR line that has
+    been turned into a PO stops counting here (the PO is then counted by
+    _open_po_qty), avoiding double-counting. Statuses come from the per-trigger
+    pending Purchase MR list (resolver). docstatus < 2 excludes Cancelled.
+    """
+    statuses = _toc_mr_statuses()
+    if not statuses:
+        return 0.0
+    ph = ", ".join(["%s"] * len(statuses))
+    result = frappe.db.sql(
+        f"""
+        SELECT COALESCE(SUM(GREATEST(
+            (mri.qty - IFNULL(mri.ordered_qty, 0)) * IFNULL(mri.conversion_factor, 1),
+            0
+        )), 0) AS qty
+        FROM `tabMaterial Request Item` mri
+        JOIN `tabMaterial Request` mr ON mr.name = mri.parent
+        WHERE mri.item_code = %s
+          AND mri.warehouse = %s
+          AND mr.material_request_type = 'Purchase'
+          AND mr.docstatus < 2
+          AND mr.status IN ({ph})
+        """,
+        [item_code, warehouse] + list(statuses),
+    )
+    return flt(result[0][0] if result else 0)
+
+
+def _format_reason_html(reason_text, source_label="TOC Automation",
+                        doc_label="document"):
+    """Turn a plain-text engine reason into a well-structured HTML card for a
+    Text Editor 'Creation Reason' field (Material Request / Production Plan /
+    Work Order).
+
+    The engines build labelled multi-line reasons, e.g.:
+        [Calc SO][Purchase] Sales Order Shortage at WH-1
+        Cause: pending sales orders exceed available supply.
+          Pending SO (stock UOM): 19440.000
+          Current Stock         : 0.000
+          ...
+    We parse those into:
+      • a coloured header card (title + source engine),
+      • any `[..]` marker line as a tag banner,
+      • free-text lines as an explanation paragraph,
+      • every `Label : value` line as a two-column FACTS TABLE so a layman can
+        scan the numbers at a glance,
+      • a footer note.
+    Markers like `[Calc A]` survive intact (used by the dedup LIKE queries).
+    """
+    import html as _html
+    import re as _re
+
+    text = (reason_text or "").replace("\r", "")
+    marker = ""
+    table_rows = []
+    notes = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        m = _re.match(r"^(.{1,46}?)\s*[:：]\s*(.+)$", s)
+        if s.startswith("[") and "]" in s and not m:
+            marker = (marker + " " if marker else "") + s
+        elif m:
+            table_rows.append((m.group(1).strip(), m.group(2).strip()))
+        else:
+            notes.append(s)
+
+    e = _html.escape
+    parts = [
+        '<div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'
+        'font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;'
+        'color:#1e293b;max-width:680px">',
+        # Header card
+        '<div style="background:#4f46e5;color:#fff;padding:11px 16px;font-weight:600;'
+        'font-size:14px;display:flex;justify-content:space-between;align-items:center">'
+        f'<span>Why this {e(doc_label)} was created</span>'
+        f'<span style="font-weight:500;font-size:11px;opacity:.9">{e(source_label)}</span>'
+        '</div>',
+    ]
+    if marker:
+        parts.append(
+            '<div style="background:#eef2ff;border-bottom:1px solid #e2e8f0;'
+            'padding:8px 16px;font-family:ui-monospace,Menlo,monospace;font-size:11px;'
+            f'color:#3730a3">{e(marker)}</div>'
+        )
+    parts.append('<div style="padding:14px 16px">')
+    if notes:
+        parts.append(
+            '<p style="margin:0 0 12px 0;line-height:1.6;color:#334155">'
+            + "<br>".join(e(n) for n in notes) + "</p>"
+        )
+    if table_rows:
+        parts.append(
+            '<table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+            '<tbody>'
+        )
+        for i, (k, v) in enumerate(table_rows):
+            bg = "#f8fafc" if i % 2 else "#ffffff"
+            parts.append(
+                f'<tr style="background:{bg}">'
+                f'<td style="padding:6px 10px;border:1px solid #e9eef5;color:#475569;'
+                f'white-space:nowrap;width:55%">{e(k)}</td>'
+                f'<td style="padding:6px 10px;border:1px solid #e9eef5;font-weight:600;'
+                f'text-align:right;font-family:ui-monospace,Menlo,monospace">{e(v)}</td>'
+                f'</tr>'
+            )
+        parts.append('</tbody></table>')
+    parts.append('</div>')
+    parts.append(
+        '<div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:8px 16px;'
+        'font-size:11px;color:#64748b">Generated automatically by Chaizup TOC. '
+        'System rows are read-only; the numbers above are the live figures the engine '
+        'used at creation time.</div>'
+    )
+    parts.append('</div>')
+    return "".join(parts)
+
+
+# Backwards-compatible alias (older call sites used the MR-specific name).
+def _format_mr_reason_html(reason_text, source_label="TOC Automation"):
+    return _format_reason_html(reason_text, source_label, doc_label="Material Request")
 
 
 def _wo_required_component_qty(item_code, warehouse):
@@ -4119,6 +4340,11 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
             stock      = flt(_warehouse_stock(item_code, warehouse))
             open_wo    = flt(_pending_wo_qty(item_code, warehouse))
             open_po    = flt(_open_po_qty(item_code, warehouse))
+            # 2026-06-04: PURCHASE items net pending Purchase MRs (incl. this
+            # engine's own Draft MRs) as incoming supply, so Calc Action never
+            # re-requests what is already on an open Material Request (a PO can't
+            # be auto-created — supplier is user-chosen). Manufacture items get 0.
+            open_mr    = flt(_open_purchase_mr_qty(item_code, warehouse)) if action_type == "Purchase" else 0.0
             wo_req     = flt(_wo_required_component_qty(item_code, warehouse))
 
             mode_used = None      # "Shortage" | "Max Level"
@@ -4131,7 +4357,7 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                 # Orders (open_po), matching Max-Level mode. Incoming POs are real
                 # supply that will land at this warehouse, so counting them
                 # prevents over-ordering when a PO already covers the gap.
-                supply = stock + open_wo + open_po
+                supply = stock + open_wo + open_po + open_mr
                 demand = pending_so + wo_req
                 short  = round(demand - supply, 4)
                 if short > 0:
@@ -4142,14 +4368,15 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                         f"  Demand = pending SO ({pending_so:.3f}) + WO component req ({wo_req:.3f}) "
                         f"= {demand:.3f}\n"
                         f"  Supply = stock ({stock:.3f}) + open WO output ({open_wo:.3f}) "
-                        f"+ open PO ({open_po:.3f}) = {supply:.3f}\n"
+                        f"+ open PO ({open_po:.3f}) + pending Purchase MR ({open_mr:.3f}) "
+                        f"= {supply:.3f}\n"
                         f"  Shortage = Demand − Supply = {short:.3f} (stock UOM)\n"
                         f"  MOQ floor = {minmfg:.3f}\n"
                         f"  Order Qty = max(shortage, MOQ) = {qty:.3f}"
                     )
 
             if mode_used is None and int(row.auto_on_max_level or 0) == 1 and max_level > 0:
-                cover = (stock + open_wo + open_po) - (pending_so + wo_req)
+                cover = (stock + open_wo + open_po + open_mr) - (pending_so + wo_req)
                 cover_pct_val = round((cover / max_level) * 100.0, 2) if max_level else 0
                 if cover_pct_val < threshold:
                     mode_used = "Max Level"
@@ -4158,7 +4385,8 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                     reason = (
                         f"[Calc Action][Max Level Mode] {action_type} action at {warehouse}\n"
                         f"  Supply = stock ({stock:.3f}) + open WO ({open_wo:.3f}) "
-                        f"+ open PO ({open_po:.3f}) = {(stock+open_wo+open_po):.3f}\n"
+                        f"+ open PO ({open_po:.3f}) + pending Purchase MR ({open_mr:.3f}) "
+                        f"= {(stock+open_wo+open_po+open_mr):.3f}\n"
                         f"  Demand = pending SO ({pending_so:.3f}) + WO component req ({wo_req:.3f}) "
                         f"= {(pending_so+wo_req):.3f}\n"
                         f"  Cover  = Supply − Demand = {cover:.3f}\n"
@@ -4216,23 +4444,26 @@ def run_shortage_action_automation(triggered_by="shortage_action_manual"):
                 continue
 
             # Dedup against any active Shortage Action artifact for this pair.
-            existing = _shortage_action_artifact_exists(item_code, warehouse, action_type)
-            if existing:
-                skipped += 1
-                _append_run_item(run_log, {
-                    **base_payload,
-                    "status": (
-                        "Skipped - MR Exists" if action_type == "Purchase"
-                        else "Skipped - PP Exists"
-                    ),
-                    "production_qty": 0,
-                    ("material_request" if action_type == "Purchase" else "production_plan"): existing,
-                    "reason": (
-                        f"[Calc Action] Active {('Material Request' if action_type=='Purchase' else 'Production Plan')} "
-                        f"{existing} already covers {item_code} at {warehouse} (mode={mode_used})."
-                    ),
-                })
-                continue
+            # 2026-06-04: PURCHASE is loop-broken + top-up-enabled by the
+            # quantitative pending-Purchase-MR netting (open_mr in the supply
+            # above), so the boolean "artifact exists -> skip" dedup is applied
+            # to MANUFACTURE (Production Plan) ONLY. For purchase, the residual
+            # net shortage (after subtracting pending MRs) is what gets ordered.
+            if action_type != "Purchase":
+                existing = _shortage_action_artifact_exists(item_code, warehouse, action_type)
+                if existing:
+                    skipped += 1
+                    _append_run_item(run_log, {
+                        **base_payload,
+                        "status": "Skipped - PP Exists",
+                        "production_qty": 0,
+                        "production_plan": existing,
+                        "reason": (
+                            f"[Calc Action] Active Production Plan {existing} already "
+                            f"covers {item_code} at {warehouse} (mode={mode_used})."
+                        ),
+                    })
+                    continue
 
             if action_type == "Purchase":
                 mr_name = _create_purchase_mr_for_shortage(

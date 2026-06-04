@@ -52,7 +52,7 @@ def _cancel_test_pp_and_so():
         SELECT DISTINCT pp.name FROM `tabProduction Plan` pp
         JOIN `tabProduction Plan Item` ppi ON ppi.parent=pp.name
         WHERE pp.docstatus=1
-          AND pp.custom_created_by='System'
+          AND pp.custom_recorded_by='System'
           AND ppi.item_code IN %s
         """,
         (item_tuple,),

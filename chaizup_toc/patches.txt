@@ -23,3 +23,7 @@ chaizup_toc.patches.v1_0.wo_drop_stale_item_group
 chaizup_toc.patches.v1_0.migrate_pending_pairs_to_combined
 chaizup_toc.patches.v1_0.merge_confirmed_so_into_pending
 chaizup_toc.patches.v1_0.merge_draft_workflow_into_pending
+
+chaizup_toc.patches.v1_0.remove_item_level_adu_fields
+
+chaizup_toc.patches.v1_0.rename_custom_created_by_to_recorded_by

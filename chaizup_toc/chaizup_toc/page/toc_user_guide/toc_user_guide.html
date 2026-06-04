@@ -978,7 +978,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
 
   <div class="tug-callout tug-callout-info">
     <span class="tug-callout-icon">⚙️</span>
-    <div><strong>For both:</strong> if shortage &gt; 0, <code class="tug-code">production_qty = max(shortage, MINMFG)</code> where <code class="tug-code">MINMFG</code> comes from <em>Item → TOC Setting → 6. Minimum Purchase / Production Qty per Warehouse</em>. Then a Production Plan is inserted (with <code class="tug-code">custom_created_by = "System"</code>) and submitted, which triggers the ERPNext standard PP-submit pipeline to create main + sub-assembly Work Orders. Direct WO creation is forbidden.</div>
+    <div><strong>For both:</strong> if shortage &gt; 0, <code class="tug-code">production_qty = max(shortage, MINMFG)</code> where <code class="tug-code">MINMFG</code> comes from <em>Item → TOC Setting → 6. Minimum Purchase / Production Qty per Warehouse</em>. Then a Production Plan is inserted (with <code class="tug-code">custom_recorded_by = "System"</code>) and submitted, which triggers the ERPNext standard PP-submit pipeline to create main + sub-assembly Work Orders. Direct WO creation is forbidden.</div>
   </div>
 
   <h4 style="font-weight:700;margin:16px 0 10px;color:var(--tug-navy)">Variables</h4>
@@ -1469,9 +1469,7 @@ code.tug-code{font-family: var(--font-mono); font-size:12px;background: var(--tu
       <div class="tug-table-wrap" style="margin:0">
         <table class="tug-table">
           <tr><th>Field</th><th>Default</th><th>What it does</th></tr>
-          <tr><td>custom_toc_custom_adu</td><td>0 (auto)</td><td>If checked, ADU auto-calculation skips this item. Use custom_adu_value instead.</td></tr>
-          <tr><td>custom_toc_adu_period</td><td>30 days</td><td>Rolling window for auto-ADU calculation. Options: 30/90/180/365 days.</td></tr>
-          <tr><td>custom_toc_adu_value</td><td>0</td><td>Auto-populated by 06:30 job, or manually entered if custom_adu is checked. Units/day.</td></tr>
+          <tr><td>Item Minimum Manufacture.adu (per warehouse)</td><td>0 (auto)</td><td>Average Daily Usage is maintained per warehouse in the "Minimum Manufacture / Purchase Qty per Warehouse" table. Auto-refreshed nightly by the 01:00 AM per-warehouse ADU cron from all outward Stock Ledger movement; editable per row when auto_adu is off. (Item-level ADU fields were removed 2026-06-02.)</td></tr>
         </table>
       </div>
     </div>

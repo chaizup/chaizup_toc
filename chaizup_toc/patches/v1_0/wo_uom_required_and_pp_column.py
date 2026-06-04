@@ -77,7 +77,7 @@ _WO_LIST_VIEW_FIELDS = (
     '{"fieldname": "custom_uom", "label": "UOM [TOC]"}, '
     '{"fieldname": "custom_produced_qty_in_uom", "label": "Manufactured Qty in UOM [TOC]"}, '
     '{"fieldname": "custom_created_time", "label": "Created On"}, '
-    '{"fieldname": "custom_created_by", "label": "Created By"}, '
+    '{"fieldname": "custom_recorded_by", "label": "Created By"}, '
     '{"fieldname": "custom_batch_no", "label": "Batch No"}, '
     '{"fieldname": "custom_manufacturing_date", "label": "Manufacture Date"}, '
     '{"fieldname": "custom_batch_date", "label": "Batch Date"}, '

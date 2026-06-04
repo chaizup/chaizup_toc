@@ -21,7 +21,7 @@
 #     7.  UOM [TOC]                          (custom_uom)
 #     8.  Manufactured Qty in UOM [TOC]      (custom_produced_qty_in_uom)
 #     9.  Created On                         (custom_created_time)
-#     10. Created By                         (custom_created_by)
+#     10. Created By                         (custom_recorded_by)
 #
 #   Column 3 is the SYNTHETIC {"type": "Status"} entry that renders the
 #   row indicator pill into a column. The pill itself is computed by
@@ -72,7 +72,7 @@ _WO_LIST_VIEW_FIELDS = (
     '{"fieldname": "custom_uom", "label": "UOM [TOC]"}, '
     '{"fieldname": "custom_produced_qty_in_uom", "label": "Manufactured Qty in UOM [TOC]"}, '
     '{"fieldname": "custom_created_time", "label": "Created On"}, '
-    '{"fieldname": "custom_created_by", "label": "Created By"}]'
+    '{"fieldname": "custom_recorded_by", "label": "Created By"}]'
 )
 
 

@@ -27,10 +27,13 @@ TOC Pending-Status Resolver — per-trigger OVERRIDE lookup.
 import frappe
 
 # Per-row override field on TOC Trigger Configuration, by voucher type.
+# `mr` (2026-06-04) = pending Purchase Material Request statuses (status-only;
+# MR has no workflow_state here, so the cell holds plain status lines).
 _ROW_FIELD = {
     "so": "pending_so_statuses",
     "wo": "pending_wo_statuses",
     "po": "pending_po_statuses",
+    "mr": "pending_mr_statuses",
 }
 
 

@@ -157,6 +157,14 @@ def update_min_mfg_adu_levels():
         ADU and an artificially low max_level cap; the buffer logic then
         sizes safety stock at ~5% of what it should be. Leaving the row
         empty for a few weeks until coverage arrives is the safer signal.
+      - 2026-06-04: BOTH the history-gate and the outflow sum EXCLUDE
+        `voucher_type = 'Stock Reconciliation'`. SR negative legs are stock
+        corrections, not demand. Keep the two queries in lock-step — if one
+        excludes SR and the other does not, the gate and the rate disagree
+        (e.g. an item whose only history is SR would pass the gate but sum
+        to 0). If a future requirement also excludes inter-warehouse
+        transfers, add `voucher_type != 'Stock Entry'`-with-purpose filter to
+        BOTH, not just one.
     """
     try:
         frappe.logger("chaizup_toc").info(
@@ -206,6 +214,7 @@ def update_min_mfg_adu_levels():
                       AND  warehouse     = %s
                       AND  actual_qty    < 0
                       AND  is_cancelled  = 0
+                      AND  voucher_type != 'Stock Reconciliation'
                     """,
                     (r["parent"], r["warehouse"]),
                 )
@@ -214,6 +223,11 @@ def update_min_mfg_adu_levels():
                     skipped_warmup += 1
                     continue
 
+                # 2026-06-04: EXCLUDE Stock Reconciliation outward legs. A negative
+                # SR leg is an inventory CORRECTION (count adjustment), not true
+                # consumption/demand — counting it inflates ADU and oversizes the
+                # buffer. Delivery Notes (SO), Stock Entry consumption (WO), issues
+                # and transfers are still counted. See module .md "ADU exclusions".
                 outflow = frappe.db.sql(
                     """
                     SELECT COALESCE(ABS(SUM(actual_qty)), 0) AS total_out
@@ -224,6 +238,7 @@ def update_min_mfg_adu_levels():
                       AND  posting_date >= %s
                       AND  posting_date <= %s
                       AND  is_cancelled  = 0
+                      AND  voucher_type != 'Stock Reconciliation'
                     """,
                     (r["parent"], r["warehouse"], from_date, today()),
                 )

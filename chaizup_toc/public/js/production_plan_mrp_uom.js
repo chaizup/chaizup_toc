@@ -419,3 +419,25 @@ function _ipv_sub_back_fill(row, std_field, qiu_field) {
         frappe.model.set_value(row.doctype, row.name, qiu_field, v);
     }
 }
+
+// =============================================================================
+// Production Plan — TOC "Recorded By" + "Creation Reason" read-only rules
+// (2026-06-04). custom_recorded_by (Select User/System, renamed from the old
+// "Created By") + custom_creation_reason (Text Editor, formatted "why").
+//   - recorded_by is read-only.
+//   - System rows -> reason read-only; User rows -> editable before submit.
+// =============================================================================
+frappe.ui.form.on("Production Plan", {
+    refresh(frm) { _toc_pp_recorded_rules(frm); },
+    custom_recorded_by(frm) { _toc_pp_recorded_rules(frm); },
+});
+
+function _toc_pp_recorded_rules(frm) {
+    if (frm.fields_dict.custom_recorded_by) {
+        frm.set_df_property("custom_recorded_by", "read_only", 1);
+    }
+    if (frm.fields_dict.custom_creation_reason) {
+        const is_system = frm.doc.custom_recorded_by === "System";
+        frm.set_df_property("custom_creation_reason", "read_only", is_system ? 1 : 0);
+    }
+}

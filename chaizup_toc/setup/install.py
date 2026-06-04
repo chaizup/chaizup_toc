@@ -115,60 +115,21 @@ def _install_custom_fields():
                  description="CHECK if this item is MANUFACTURED in-house. System creates a Production Plan → Work Order when buffer falls below threshold. Mutually exclusive with Auto Purchase.",
                  module=M),
 
-            # ══ SECTION 2: ADU — Average Daily Usage (R1, R4) ══
-            dict(fieldname="custom_toc_sec_adu", fieldtype="Section Break",
-                 label="2. Average Daily Usage (ADU) — Formula F1 Component",
-                 insert_after="custom_toc_auto_manufacture",
-                 depends_on="eval:doc.custom_toc_enabled",
-                 description=(
-                     "ADU = Average Daily Usage. It is the FIRST input to Formula F1: Target Buffer = ADU × RLT × VF.\n\n"
-                     "HOW IT WORKS: Every day at 6:30 AM, the TOC scheduler automatically calculates ADU by reading ALL stock "
-                     "outflows from the Stock Ledger for this item (actual_qty < 0) over the selected period, then dividing by "
-                     "the number of days. This captures sales, production consumption, transfers — every way the item leaves stock.\n\n"
-                     "OR: Check 'Custom ADU' below to enter your own value manually — the scheduler will SKIP this item."
-                 ),
-                 module=M),
-
-            # R1: Custom ADU checkbox
-            dict(fieldname="custom_toc_custom_adu", fieldtype="Check",
-                 label="Custom ADU (Manual Entry) [TOC App]",
-                 insert_after="custom_toc_sec_adu",
-                 depends_on="eval:doc.custom_toc_enabled",
-                 default="0",
-                 description="CHECK this if you want to enter ADU MANUALLY instead of using the auto-calculated value. When checked, the daily 6:30 AM scheduler will SKIP this item and will NOT overwrite your manual ADU value. Useful when you know the correct demand but there's no history in the system yet.",
-                 module=M),
-
-            dict(fieldname="custom_toc_adu_period", fieldtype="Select",
-                 label="ADU Calculation Period [TOC App]",
-                 options="\nLast 30 Days\nLast 90 Days\nLast 180 Days\nLast 365 Days",
-                 insert_after="custom_toc_custom_adu",
-                 default="Last 90 Days",
-                 depends_on="eval:doc.custom_toc_enabled && !doc.custom_toc_custom_adu",
-                 description="How far back should the scheduler look when auto-calculating ADU? Last 30 Days = responsive to recent trends. Last 90 Days = recommended default. Last 180/365 Days = for stable/seasonal items.",
-                 module=M),
-
-            dict(fieldname="custom_toc_col_adu", fieldtype="Column Break",
-                 insert_after="custom_toc_adu_period", module=M),
-
-            dict(fieldname="custom_toc_adu_value", fieldtype="Float",
-                 label="ADU Value (units/day) [TOC App]",
-                 insert_after="custom_toc_col_adu",
-                 depends_on="eval:doc.custom_toc_enabled",
-                 description="Average Daily Usage in units per day. If 'Custom ADU' is checked, enter your value here manually. Otherwise, this is auto-calculated daily at 6:30 AM from actual shipment/consumption data. This feeds into F1: Target = ADU × RLT × VF.",
-                 module=M),
-
-            dict(fieldname="custom_toc_adu_last_updated", fieldtype="Datetime",
-                 label="ADU Last Calculated [TOC App]",
-                 insert_after="custom_toc_adu_value",
-                 read_only=1,
-                 depends_on="eval:doc.custom_toc_enabled && !doc.custom_toc_custom_adu",
-                 description="When was ADU last auto-calculated by the scheduler? If this timestamp is old, check Scheduled Job Log for errors. Shows 'Manual' if Custom ADU is checked.",
-                 module=M),
+            # ══ SECTION 2 (ADU) REMOVED 2026-06-02 ══
+            # The standalone item-level ADU fields (custom_toc_sec_adu,
+            # custom_toc_custom_adu, custom_toc_adu_period, custom_toc_col_adu,
+            # custom_toc_adu_value, custom_toc_adu_last_updated) were removed.
+            # Average Daily Usage is maintained PER WAREHOUSE in the
+            # "Minimum Manufacture / Purchase Qty per Warehouse" table
+            # (Item.custom_minimum_manufacture -> Item Minimum Manufacture.adu),
+            # refreshed nightly by the 01:00 AM per-warehouse ADU cron.
+            # A delete patch (v1_0/remove_item_level_adu_fields) drops the old
+            # columns on existing sites. DO NOT re-introduce item-level ADU.
 
             # ══ SECTION 3: T/CU — Tie-Breaker (manufactured items) ══
             dict(fieldname="custom_toc_sec_tcu", fieldtype="Section Break",
                  label="3. Throughput per Constraint Unit — T/CU (Formula F5)",
-                 insert_after="custom_toc_adu_last_updated",
+                 insert_after="custom_toc_auto_manufacture",
                  depends_on="eval:doc.custom_toc_enabled && doc.custom_toc_auto_manufacture",
                  collapsible=1,
                  description="F5 tie-breaker: When two manufactured items have EQUAL Buffer Penetration %, which should the bottleneck run first? The one with higher T/CU earns more per constraint minute. T = Price − TVC. T/CU = T × Speed.",
@@ -540,7 +501,7 @@ def backfill_toc_uom_on_existing_records():
                        custom_qty_in_uom = %(qiu)s,
                        custom_produced_qty_in_uom = %(piu)s,
                        custom_created_time = IFNULL(custom_created_time, %(creation)s),
-                       custom_created_by   = IFNULL(NULLIF(custom_created_by, ''), %(owner)s)
+                       custom_recorded_by   = IFNULL(NULLIF(custom_recorded_by, ''), %(owner)s)
                    WHERE name = %(name)s""",
                 {"uom": uom, "cf": cf,
                  "qiu": (qty / cf) if cf else 0,
@@ -618,7 +579,7 @@ def backfill_toc_uom_on_existing_records():
         f"Sub Assembly back-fill: {sub_done}/{len(sub_rows)} rows stamped")
 
     # ── 5. BOM back-fill ───────────────────────────────────────────────────
-    # 2026-05-19 — Also back-fills custom_created_time + custom_created_by
+    # 2026-05-19 — Also back-fills custom_created_time + custom_recorded_by
     # so the BOM list view's Created On / Created By columns work on
     # legacy records without waiting for next save.
     bom_rows = frappe.db.sql(
@@ -626,8 +587,8 @@ def backfill_toc_uom_on_existing_records():
            FROM `tabBOM`
            WHERE (custom_uom IS NULL OR custom_uom = ''
                   OR custom_created_time IS NULL
-                  OR custom_created_by IS NULL
-                  OR custom_created_by = '')
+                  OR custom_recorded_by IS NULL
+                  OR custom_recorded_by = '')
              AND item IS NOT NULL""",
         as_dict=True)
     bom_done = 0
@@ -641,7 +602,7 @@ def backfill_toc_uom_on_existing_records():
                        custom_uom_conversion_factor = COALESCE(NULLIF(custom_uom_conversion_factor, 0), %(cf)s),
                        custom_qty_in_uom = COALESCE(NULLIF(custom_qty_in_uom, 0), %(qiu)s),
                        custom_created_time = IFNULL(custom_created_time, %(creation)s),
-                       custom_created_by   = IFNULL(NULLIF(custom_created_by, ''), %(owner)s)
+                       custom_recorded_by   = IFNULL(NULLIF(custom_recorded_by, ''), %(owner)s)
                    WHERE name = %(name)s""",
                 {"uom": uom, "cf": cf,
                  "qiu": (q / cf) if cf else 0,
