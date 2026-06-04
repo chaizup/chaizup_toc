@@ -861,6 +861,11 @@ function _wire_projection_run_button(frm) {
             }
             #toc-engine-overview .toc-eo-badge.on  { background: rgba(22,163,74,0.12); color: #15803d; }
             #toc-engine-overview .toc-eo-badge.off { background: rgba(100,116,139,0.12); color: #64748b; }
+            #toc-engine-overview .toc-eo-runlock {
+                font-size: 11px; color: #94a3b8; font-style: italic;
+                display: inline-flex; align-items: center; gap: 4px;
+                white-space: nowrap; cursor: help;
+            }
             #toc-engine-overview .toc-eo-considers {
                 display: inline-flex; gap: 4px; margin-left: 4px;
             }
@@ -1202,6 +1207,10 @@ function _wire_projection_run_button(frm) {
                     $body.append(`<div style="padding:12px;color:#94a3b8;font-size:12px">${_esc(__("No engines configured."))}</div>`);
                     return;
                 }
+                // Manual "Run Now" is System Manager only (matches the server-side
+                // frappe.only_for("System Manager") gate on run_trigger_now). Non
+                // admins still SEE the engine list but get no run button.
+                const canRun = (frappe.user_roles || []).includes("System Manager");
                 engines.forEach((eng) => {
                     const enabled = !!eng.enabled;
                     const considers = eng.considers || {};
@@ -1221,11 +1230,12 @@ function _wire_projection_run_button(frm) {
                                 <div class="toc-eo-sched">${_esc(_formatSchedule(eng))}</div>
                             </div>
                             <span class="toc-eo-badge ${enabled ? "on" : "off"}">${enabled ? _esc(__("Enabled")) : _esc(__("Disabled"))}</span>
-                            <button class="btn btn-xs btn-default toc-eo-run" type="button">
-                                <i class="fa fa-play"></i> ${_esc(__("Run Now"))}
-                            </button>
+                            ${canRun
+                                ? `<button class="btn btn-xs btn-default toc-eo-run" type="button"><i class="fa fa-play"></i> ${_esc(__("Run Now"))}</button>`
+                                : `<span class="toc-eo-runlock" title="${_esc(__("Only System Managers can run engines manually."))}"><i class="fa fa-lock"></i> ${_esc(__("Admin only"))}</span>`}
                         </div>
                     `);
+                    if (!canRun) { $body.append($row); return; }
                     const $btn = $row.find(".toc-eo-run");
                     $btn.on("click", () => {
                         frappe.confirm(

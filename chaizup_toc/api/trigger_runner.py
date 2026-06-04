@@ -57,8 +57,13 @@ def run_trigger_now(trigger_key):
 
     Returns a small handle the UI toasts. The engine itself writes its own
     TOC Production Plan Run Log where applicable.
+
+    SECURITY (2026-06-04, per requirement): manual runs are restricted to
+    **System Manager only** — they can trigger heavy voucher-creating engines
+    on demand, so the privilege bar is the highest. The scheduled (cron) path
+    is unaffected; only this whitelisted on-demand entry is gated.
     """
-    frappe.only_for(["Manufacturing Manager", "TOC Manager", "System Manager"])
+    frappe.only_for("System Manager")
     try:
         trig = trigger_registry.get_trigger(trigger_key)
     except KeyError:
