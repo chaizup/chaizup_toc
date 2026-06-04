@@ -146,6 +146,28 @@ RESTRICT:
 .iss-root[data-fs="md"] .iss-qty-card-uom { font-size: 10.5px !important; }
 .iss-root[data-fs="lg"] .iss-qty-card-uom { font-size: 12px !important; }
 
+/* 2026-06-05 FIX — the font picker only scaled the HEADER + qty-cards; the
+   inner text elements of the body cells (item name/code, status pill, and the
+   stock/higher qty numbers) carried their OWN fixed px sizes and so never
+   changed. A child element's font-size overrides the parent `.tabulator-cell`
+   scale, so each of these needs its own data-fs-scoped rule. Now the WHOLE
+   table scales with the S/M/L picker, not just the heading. */
+.iss-root[data-fs="sm"] .iss-item-cell .iss-item-name { font-size: 11.5px !important; }
+.iss-root[data-fs="md"] .iss-item-cell .iss-item-name { font-size: 13px   !important; }
+.iss-root[data-fs="lg"] .iss-item-cell .iss-item-name { font-size: 15px   !important; }
+.iss-root[data-fs="sm"] .iss-item-cell .iss-item-code { font-size: 10px   !important; }
+.iss-root[data-fs="md"] .iss-item-cell .iss-item-code { font-size: 11px   !important; }
+.iss-root[data-fs="lg"] .iss-item-cell .iss-item-code { font-size: 12.5px !important; }
+.iss-root[data-fs="sm"] .iss-pill         { font-size: 10px   !important; }
+.iss-root[data-fs="md"] .iss-pill         { font-size: 11px   !important; }
+.iss-root[data-fs="lg"] .iss-pill         { font-size: 12.5px !important; }
+.iss-root[data-fs="sm"] .iss-qty-stock    { font-size: 11.5px !important; }
+.iss-root[data-fs="md"] .iss-qty-stock    { font-size: 13px   !important; }
+.iss-root[data-fs="lg"] .iss-qty-stock    { font-size: 15px   !important; }
+.iss-root[data-fs="sm"] .iss-qty-higher   { font-size: 10px   !important; }
+.iss-root[data-fs="md"] .iss-qty-higher   { font-size: 11px   !important; }
+.iss-root[data-fs="lg"] .iss-qty-higher   { font-size: 12.5px !important; }
+
 /* v0.0.36 — Small-laptop responsiveness. Reduces chrome on narrow
    viewports so the table area doesn't get crowded out by paddings. */
 @media (max-width: 1280px) {
@@ -759,6 +781,21 @@ RESTRICT:
     overflow-y: auto;
     padding: 4px 0;
     max-height: 280px;
+}
+/* 2026-06-05 — section header inside a link multiselect dropdown ("Selected"
+   vs "More results"), so the currently-chosen items are visually grouped at
+   the top and the operator can untick any of them. */
+.iss-ms-section {
+    padding: 5px 10px 3px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted, #94a3b8);
+    background: var(--control-bg, #f8fafc);
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 .iss-multiselect-option {
     display: flex;

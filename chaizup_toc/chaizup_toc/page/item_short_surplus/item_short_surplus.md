@@ -116,3 +116,32 @@ DRILLDOWN:   per-cell click → modal with per-voucher rows in both UOMs
 EXPORT:      4-sheet XLSX (Main, Filters & Run Info, Shortage sorted, Surplus sorted)
 RESTRICTED:  see § "Restricted areas"
 ```
+
+## 2026-06-05 fixes (font scale + multiselect UX)
+
+1. **Font picker scaled only the heading.** The S/M/L picker scaled
+   `.tabulator-col` (header) + the qty-card numbers, but the body cells' inner
+   text elements (`.iss-item-name`, `.iss-item-code`, `.iss-pill`,
+   `.iss-qty-stock`, `.iss-qty-higher`) carried their OWN fixed px sizes — a
+   child's font-size overrides the parent `.tabulator-cell` scale. Added
+   `[data-fs]`-scoped `!important` rules for each so the WHOLE table scales.
+   **RESTRICT:** any NEW cell-content text class with a fixed px size needs a
+   matching `[data-fs="sm|md|lg"]` rule or it won't scale.
+
+2. **SO/WO/PO Pending (Status:Workflow) checkbox didn't tick on click** — only
+   after reopening. Cause: the option was a `<label>` wrapping a checkbox with a
+   `click` handler + `preventDefault()` + manual `.prop("checked")`. A click on
+   a label that wraps a checkbox double-fires (label + synthetic input click),
+   so the tick never settled. **Fix:** drive selection off the checkbox `change`
+   event (fires once, native tick is instant); the label `click` only
+   `stopPropagation()` so the dropdown stays open. Same pattern now used by both
+   `_mkPairMulti` and `_mkLinkMulti`. **RESTRICT:** do NOT go back to a label
+   `click` + `preventDefault` for checkbox options.
+
+3. **Item filter: couldn't remove selected items + selected not shown first.**
+   The chip strip only made the first 3 selections removable (rest collapsed
+   into "+N more" with no ×), and the dropdown ordered by name with no pinning,
+   so a chosen item might not even appear. **Fix:** `_mkLinkMulti.fetchAndRender`
+   now renders a **"Selected (n)"** section FIRST (every chosen item, untick to
+   remove — works for ANY count, not just the first 3), then a "More results"
+   section. New `.iss-ms-section` sticky header CSS.

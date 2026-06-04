@@ -731,22 +731,28 @@ class ItemShortSurplusPage {
                             ${wfHtml}
                         </span>
                     </label>`);
-                $o.on("click", (e) => {
-                    e.preventDefault();
+                // 2026-06-05 FIX — drive selection off the checkbox `change`
+                // event, not a label `click`. A click on a <label> that wraps a
+                // checkbox double-fires (label click + synthetic input click),
+                // which made the tick not settle until the dropdown was reopened.
+                // `change` fires exactly once and the native tick is instant, so
+                // the box checks the moment you click. The label click handler
+                // only stops the dropdown from closing.
+                $o.find("input").on("change", (e) => {
                     e.stopPropagation();
+                    const checked = e.target.checked;
                     const current = this.state[key] || [];
-                    if (current.includes(opt.key)) {
-                        this.state[key] = current.filter(z => z !== opt.key);
-                    } else {
+                    if (checked && !current.includes(opt.key)) {
                         this.state[key] = [...current, opt.key];
+                    } else if (!checked) {
+                        this.state[key] = current.filter(z => z !== opt.key);
                     }
+                    $o.toggleClass("selected", checked);
                     renderChips();
                     renderFoot();
-                    const nowSel = (this.state[key] || []).includes(opt.key);
-                    $o.toggleClass("selected", nowSel)
-                      .find("input").prop("checked", nowSel);
                     this._refresh();
                 });
+                $o.on("click", (e) => { e.stopPropagation(); });
                 $opts.append($o);
             });
         };
@@ -904,59 +910,79 @@ class ItemShortSurplusPage {
             }).catch(() => { /* non-fatal — chip falls back to plain code */ });
         };
 
+        // 2026-06-05 — Build ONE option row. Selection is driven by the
+        // checkbox `change` event (instant native tick + no <label> double-fire),
+        // and an unchecked row removes the item from state. This is what makes
+        // EVERY selected item removable from the dropdown — even ones hidden
+        // behind the "+N more" chip — so the operator is never stuck with an
+        // item they can't take off.
+        const renderRow = (name, title) => {
+            if (titleField && title != null) {
+                titleCache[name] = title || titleCache[name] || "";
+            }
+            const isSel = (this.state[key] || []).includes(name);
+            const t = titleField ? (title != null ? title : titleCache[name]) : null;
+            const display = (titleField && t)
+                ? `<span class="iss-link-code">${_esc(name)}</span><span class="iss-link-sep">:</span><span class="iss-link-title">${_esc(t)}</span>`
+                : _esc(name);
+            const $o = $(`
+                <label class="iss-multiselect-option ${isSel ? "selected" : ""}">
+                    <input type="checkbox" ${isSel ? "checked" : ""}>
+                    <span class="iss-multiselect-option-text">${display}</span>
+                </label>`);
+            $o.find("input").on("change", (e) => {
+                e.stopPropagation();
+                const checked = e.target.checked;
+                const current = this.state[key] || [];
+                if (checked && !current.includes(name)) {
+                    this.state[key] = [...current, name];
+                } else if (!checked) {
+                    this.state[key] = current.filter(z => z !== name);
+                }
+                $o.toggleClass("selected", checked);
+                renderChips();
+                renderFoot();
+                this._refresh();
+            });
+            $o.on("click", (e) => { e.stopPropagation(); });
+            return $o;
+        };
+
         const fetchAndRender = (term = "") => {
             $opts.html(`<div class="iss-multiselect-empty">
                 <i class="fa fa-spinner fa-spin"></i> ${__("Searching {0}…", [doctype])}
             </div>`);
             const fields = titleField ? ["name", titleField] : ["name"];
             frappe.db.get_list(doctype, {
-                filters: term
-                    ? (titleField
-                        // Search both `name` (code) and `item_name`-style title
-                        ? [["name", "like", `%${term}%`]]
-                        : [["name", "like", `%${term}%`]])
-                    : {},
+                filters: term ? [["name", "like", `%${term}%`]] : {},
                 fields,
                 limit: 50,
                 order_by: "name asc",
             }).then(rows => {
                 $opts.empty();
-                if (!rows.length) {
+                const termL = (term || "").toLowerCase();
+                const selAll = this.state[key] || [];
+                // Selected items go FIRST (filtered by the search term, or all
+                // of them when the search box is empty) so the operator always
+                // sees — and can untick — what is currently chosen.
+                const selMatch = selAll.filter(n => !termL || fmtLabel(n).toLowerCase().includes(termL));
+                const selSet = new Set(selAll);
+                const others = (rows || []).filter(r => !selSet.has(r.name));
+
+                if (!selMatch.length && !others.length) {
                     $opts.append(`<div class="iss-multiselect-empty">
                         <i class="fa fa-search-minus"></i> ${__("No {0} found", [doctype])}
                     </div>`);
                     return;
                 }
-                rows.forEach(r => {
-                    // Cache the title so chips can render the enriched label
-                    if (titleField) titleCache[r.name] = r[titleField] || "";
-                    const isSel = (this.state[key] || []).includes(r.name);
-                    const display = titleField && r[titleField]
-                        ? `<span class="iss-link-code">${_esc(r.name)}</span><span class="iss-link-sep">:</span><span class="iss-link-title">${_esc(r[titleField])}</span>`
-                        : _esc(r.name);
-                    const $o = $(`
-                        <label class="iss-multiselect-option ${isSel ? "selected" : ""}">
-                            <input type="checkbox" ${isSel ? "checked" : ""}>
-                            <span class="iss-multiselect-option-text">${display}</span>
-                        </label>`);
-                    $o.on("click", (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const current = this.state[key] || [];
-                        if (current.includes(r.name)) {
-                            this.state[key] = current.filter(z => z !== r.name);
-                        } else {
-                            this.state[key] = [...current, r.name];
-                        }
-                        renderChips();
-                        renderFoot();
-                        const nowSel = (this.state[key] || []).includes(r.name);
-                        $o.toggleClass("selected", nowSel)
-                          .find("input").prop("checked", nowSel);
-                        this._refresh();
-                    });
-                    $opts.append($o);
-                });
+                if (selMatch.length) {
+                    $opts.append(`<div class="iss-ms-section">${__("Selected")} (${selMatch.length})</div>`);
+                    selMatch.forEach(n => $opts.append(renderRow(n, titleCache[n])));
+                    if (others.length) {
+                        $opts.append(`<div class="iss-ms-section">${__("More results")}</div>`);
+                    }
+                }
+                others.forEach(r => $opts.append(renderRow(r.name, titleField ? r[titleField] : null)));
             }).catch(() => {
                 $opts.html(`<div class="iss-multiselect-empty iss-error">
                     <i class="fa fa-exclamation-triangle"></i> ${__("Search failed")}
