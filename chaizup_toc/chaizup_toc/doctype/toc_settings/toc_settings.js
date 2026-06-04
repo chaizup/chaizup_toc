@@ -75,6 +75,10 @@
         { field: "pending_wo_workflow_states",     dtype: "Work Order",     docstatus_scope: 0 },
         { field: "pending_po_statuses",            dtype: "Purchase Order", docstatus_scope: 1 },
         { field: "pending_po_workflow_states",     dtype: "Purchase Order", docstatus_scope: 0 },
+        // 2026-06-04 — global pending Purchase MR statuses (status-only; MR has
+        // no workflow here). The per-trigger "Pending Purchase MR" column
+        // overrides this. Status multiselect fed by get_filter_options.mr_pairs.
+        { field: "pending_mr_statuses",            dtype: "Material Request", docstatus_scope: "both" },
     ];
 
     // Once-only CSS — defines the chip strip, dropdown panel, dual-pill rows.
@@ -245,9 +249,10 @@
         });
         const m = r.message || { options: {} };
         const map = {
-            "Sales Order":    m.options.so_pairs || [],
-            "Work Order":     m.options.wo_pairs || [],
-            "Purchase Order": m.options.po_pairs || [],
+            "Sales Order":      m.options.so_pairs || [],
+            "Work Order":       m.options.wo_pairs || [],
+            "Purchase Order":   m.options.po_pairs || [],
+            "Material Request": m.options.mr_pairs || [],
         };
         Object.keys(map).forEach(k => { _pairCache[k] = map[k]; });
         return _pairCache[doctype] || [];
@@ -522,9 +527,10 @@
     "use strict";
 
     const PENDING_VOUCHER = {
-        pending_so_statuses: { dtype: "Sales Order",    considers: "considers_so" },
-        pending_wo_statuses: { dtype: "Work Order",     considers: "considers_wo" },
-        pending_po_statuses: { dtype: "Purchase Order", considers: "considers_po" },
+        pending_so_statuses: { dtype: "Sales Order",      considers: "considers_so" },
+        pending_wo_statuses: { dtype: "Work Order",       considers: "considers_wo" },
+        pending_po_statuses: { dtype: "Purchase Order",   considers: "considers_po" },
+        pending_mr_statuses: { dtype: "Material Request", considers: "considers_mr" },
     };
     const PENDING_FIELDS = Object.keys(PENDING_VOUCHER);
 
@@ -740,9 +746,10 @@
         const m = (r && r.message) || { options: {} };
         const opt = m.options || {};
         const map = {
-            "Sales Order":    opt.so_pairs || [],
-            "Work Order":     opt.wo_pairs || [],
-            "Purchase Order": opt.po_pairs || [],
+            "Sales Order":      opt.so_pairs || [],
+            "Work Order":       opt.wo_pairs || [],
+            "Purchase Order":   opt.po_pairs || [],
+            "Material Request": opt.mr_pairs || [],
         };
         Object.keys(map).forEach(k => { _pairCache[k] = map[k]; });
         return _pairCache[doctype] || [];
@@ -1085,8 +1092,8 @@
                 engines.forEach((eng) => {
                     const enabled = !!eng.enabled;
                     const considers = eng.considers || {};
-                    const tag = (on, label) =>
-                        `<span class="toc-eo-tag ${on ? "" : "muted"}">${_esc(label)}</span>`;
+                    const tag = (on, label, title) =>
+                        `<span class="toc-eo-tag ${on ? "" : "muted"}"${title ? ` title="${_esc(title)}"` : ""}>${_esc(label)}</span>`;
                     const helpTitle = eng.help ? _esc(eng.help) : "";
                     const $row = $(`
                         <div class="toc-eo-row">
@@ -1095,7 +1102,7 @@
                                     <span>${_esc(eng.name || eng.key)}</span>
                                     ${helpTitle ? `<i class="fa fa-info-circle toc-eo-help" title="${helpTitle}"></i>` : ""}
                                     <span class="toc-eo-considers">
-                                        ${tag(considers.so, "SO")}${tag(considers.wo, "WO")}${tag(considers.po, "PO")}
+                                        ${tag(considers.so, "SO", "Reads pending Sales Orders")}${tag(considers.wo, "WO", "Reads pending Work Orders")}${tag(considers.po, "PO", "Reads pending Purchase Orders")}${tag(considers.mr, "MR", "Creates & nets pending Purchase Material Requests")}
                                     </span>
                                 </div>
                                 <div class="toc-eo-sched">${_esc(_formatSchedule(eng))}</div>

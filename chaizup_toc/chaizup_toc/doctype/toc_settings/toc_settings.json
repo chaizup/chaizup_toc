@@ -48,7 +48,8 @@
   "pending_section_break",
   "projection_pending_so_statuses",
   "pending_wo_statuses",
-  "pending_po_statuses"
+  "pending_po_statuses",
+  "pending_mr_statuses"
  ],
  "fields": [
   {
@@ -349,6 +350,13 @@
    "fieldname": "global_defaults_tab",
    "fieldtype": "Tab Break",
    "label": "Rules and Automation Engine"
+  },
+  {
+   "fieldname": "pending_mr_statuses",
+   "fieldtype": "Small Text",
+   "label": "Pending Purchase Material Request Statuses",
+   "default": "Draft\nPending\nPartially Ordered",
+   "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , sans-serif\"><div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\"><span style=\"font-size:16px;margin-right:8px\">MR</span><strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Purchase Material Request Statuses</strong></div><p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">Material Request (purpose Purchase) statuses to count as <b>in-flight purchase supply</b>. The automation creates Draft Purchase MRs for purchase-mode items and nets their pending qty out of the shortage so it never re-requests forever. <b>Include Draft</b> (the engine's own MRs are Draft). Typical: <i>Draft, Pending, Partially Ordered</i>.</p><div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\"><b>Impact:</b> Drives <code>open_purchase_mr</code> netting in Calc A/B, Calc SO and Calc Action. The per-trigger 'Pending Purchase MR' column overrides this global default.</div></div>"
   }
  ],
  "issingle": 1,

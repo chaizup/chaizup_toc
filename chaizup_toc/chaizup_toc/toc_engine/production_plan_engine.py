@@ -3981,11 +3981,17 @@ def _parse_mr_statuses(raw_text):
 def _toc_mr_statuses():
     """Resolver-aware pending Purchase MR statuses for the active trigger.
 
-    Per-trigger override (frappe.flags.toc_trigger_key -> the row's
-    `pending_mr_statuses` cell) else the built-in default.
+    Resolution order (mirrors SO/WO/PO):
+      1. per-trigger override (frappe.flags.toc_trigger_key -> the row's
+         `pending_mr_statuses` cell), else
+      2. the GLOBAL TOC Settings field `pending_mr_statuses`, else
+      3. the built-in default (Draft / Pending / Partially Ordered).
     """
     from chaizup_toc.chaizup_toc.toc_engine.pending_status import row_override
-    return _parse_mr_statuses(row_override("mr"))
+    raw = row_override("mr")
+    if not raw:
+        raw = frappe.get_cached_doc("TOC Settings").get("pending_mr_statuses") or ""
+    return _parse_mr_statuses(raw)
 
 
 def _open_purchase_mr_qty(item_code, warehouse):

@@ -28,26 +28,141 @@
   "considers_mr"
  ],
  "fields": [
-  {"fieldname": "trigger_name", "fieldtype": "Data", "label": "Automation Trigger", "in_list_view": 1, "columns": 3, "read_only": 1, "description": "The automation engine this row configures. Read-only. Open the row (click the arrow) to see exactly what it does, how it affects your data, and why it exists."},
-  {"fieldname": "trigger_key", "fieldtype": "Data", "label": "Key", "read_only": 1, "reqd": 1, "description": "Internal immutable identity that links this row to the engine and its Frappe Scheduled Job Type. Never edit."},
-  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "in_list_view": 1, "columns": 1, "default": "1", "description": "ON = the engine runs automatically on its schedule (and the matching Scheduled Job Type is active). OFF = it never fires on a timer (you can still use its Run Now button). Saving applies this immediately."},
-  {"fieldname": "col_break_sched", "fieldtype": "Column Break"},
-  {"fieldname": "frequency", "fieldtype": "Select", "label": "Frequency", "options": "Daily\nWeekly\nCron", "default": "Daily", "in_list_view": 1, "columns": 2, "description": "How often the engine runs. Daily = every day at the Time below. Weekly = once a week on the Weekday below, at the Time. Cron = use the advanced Cron Override field instead."},
-  {"fieldname": "schedule_time", "fieldtype": "Data", "label": "Time (HH:MM)", "in_list_view": 1, "columns": 2, "description": "24-hour HH:MM, e.g. 07:30. This is exactly when the engine fires (server timezone). Editing it rewrites the underlying Frappe Scheduled Job Type immediately - no restart or migrate needed. (Also shown in the engine overview panel above the table.)"},
-  {"fieldname": "weekday", "fieldtype": "Select", "label": "Weekday", "options": "\nSunday\nMonday\nTuesday\nWednesday\nThursday\nFriday\nSaturday", "description": "Used only when Frequency = Weekly. The day of the week the engine runs (e.g. Weekly Dynamic Buffer Management runs Sunday)."},
-  {"fieldname": "cron_override", "fieldtype": "Data", "label": "Cron Override (advanced)", "description": "Advanced: a raw 5-field cron string (minute hour day month weekday), e.g. '*/15 * * * *'. When filled it WINS over Frequency/Time/Weekday. Leave blank for normal use. Invalid crons are rejected on save."},
-  {"fieldname": "sec_help", "fieldtype": "Section Break", "label": "How this trigger works"},
-  {"fieldname": "engine_help", "fieldtype": "Small Text", "label": "What / Effect / Why", "read_only": 1, "description": "Plain-English explanation of what this engine does, how it changes your data, and why it exists. Auto-filled - read-only."},
-  {"fieldname": "sec_pending", "fieldtype": "Section Break", "label": "Pending Voucher Statuses (override; leave blank to use the global TOC Settings defaults)"},
-  {"fieldname": "pending_so_statuses", "fieldtype": "Small Text", "label": "Pending SO Statuses (Status : Workflow State)", "description": "Multiselect of Status:WorkflowState pairs this engine treats as still-pending Sales Order demand — same picker as the global 'Pending Sales Order Statuses'. Blank = inherit the global TOC Settings list. Applies only to engines that read SOs (see 'Reads Sales Orders' below)."},
-  {"fieldname": "pending_wo_statuses", "fieldtype": "Small Text", "label": "Pending WO Statuses (Status : Workflow State)", "description": "Multiselect of Status:WorkflowState pairs this engine treats as in-progress Work Order supply — same picker as the global 'Pending Work Order Statuses'. Blank = inherit the global TOC Settings list. Applies only to engines that read WOs."},
-  {"fieldname": "pending_po_statuses", "fieldtype": "Small Text", "label": "Pending PO Statuses (Status : Workflow State)", "description": "Multiselect of Status:WorkflowState pairs this engine treats as incoming Purchase Order supply — same picker as the global 'Pending Purchase Order Statuses'. Blank = inherit the global TOC Settings list. Applies only to engines that read POs."},
-  {"fieldname": "pending_mr_statuses", "fieldtype": "Small Text", "label": "Pending Purchase MR Statuses", "description": "Multiselect of Material Request statuses (purpose = Purchase) this engine treats as in-flight purchase supply. The engine creates Draft Purchase MRs for purchase-mode items and nets their pending qty out of the shortage so it never re-requests the same shortage forever (a PO can't be auto-created — the supplier is your choice). Blank = inherit the built-in default (Draft, Pending, Partially Ordered). Applies only to engines that create Purchase MRs."},
-  {"fieldname": "sec_considers", "fieldtype": "Section Break", "label": "Applies To (read-only) - which pending lists this engine actually reads"},
-  {"fieldname": "considers_so", "fieldtype": "Check", "label": "Reads Sales Orders", "read_only": 1, "description": "If ticked, the Pending SO list above changes this engine's behaviour. If not, the SO list is ignored for this engine."},
-  {"fieldname": "considers_wo", "fieldtype": "Check", "label": "Reads Work Orders", "read_only": 1, "description": "If ticked, the Pending WO list above changes this engine's behaviour. If not, it is ignored."},
-  {"fieldname": "considers_po", "fieldtype": "Check", "label": "Reads Purchase Orders", "read_only": 1, "description": "If ticked, the Pending PO list above changes this engine's behaviour. If not, it is ignored."},
-  {"fieldname": "considers_mr", "fieldtype": "Check", "label": "Creates Purchase MRs", "read_only": 1, "description": "If ticked, this engine creates Purchase Material Requests for purchase-mode items and nets pending Purchase MRs out of the shortage (the Pending Purchase MR list above applies). If not, the MR list is ignored."}
+  {
+   "fieldname": "trigger_name",
+   "fieldtype": "Data",
+   "label": "Automation Trigger",
+   "in_list_view": 1,
+   "columns": 3,
+   "read_only": 1,
+   "description": "The automation engine this row configures. Read-only. Open the row (click the arrow) to see exactly what it does, how it affects your data, and why it exists."
+  },
+  {
+   "fieldname": "trigger_key",
+   "fieldtype": "Data",
+   "label": "Key",
+   "read_only": 1,
+   "reqd": 1,
+   "description": "Internal immutable identity that links this row to the engine and its Frappe Scheduled Job Type. Never edit."
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "in_list_view": 1,
+   "columns": 1,
+   "default": "1",
+   "description": "ON = the engine runs automatically on its schedule (and the matching Scheduled Job Type is active). OFF = it never fires on a timer (you can still use its Run Now button). Saving applies this immediately."
+  },
+  {
+   "fieldname": "col_break_sched",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "frequency",
+   "fieldtype": "Select",
+   "label": "Frequency",
+   "options": "Daily\nWeekly\nCron",
+   "default": "Daily",
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "How often the engine runs. Daily = every day at the Time below. Weekly = once a week on the Weekday below, at the Time. Cron = use the advanced Cron Override field instead."
+  },
+  {
+   "fieldname": "schedule_time",
+   "fieldtype": "Data",
+   "label": "Time (HH:MM)",
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "24-hour HH:MM, e.g. 07:30. This is exactly when the engine fires (server timezone). Editing it rewrites the underlying Frappe Scheduled Job Type immediately - no restart or migrate needed. (Also shown in the engine overview panel above the table.)"
+  },
+  {
+   "fieldname": "weekday",
+   "fieldtype": "Select",
+   "label": "Weekday",
+   "options": "\nSunday\nMonday\nTuesday\nWednesday\nThursday\nFriday\nSaturday",
+   "description": "Used only when Frequency = Weekly. The day of the week the engine runs (e.g. Weekly Dynamic Buffer Management runs Sunday)."
+  },
+  {
+   "fieldname": "cron_override",
+   "fieldtype": "Data",
+   "label": "Cron Override (advanced)",
+   "description": "Advanced: a raw 5-field cron string (minute hour day month weekday), e.g. '*/15 * * * *'. When filled it WINS over Frequency/Time/Weekday. Leave blank for normal use. Invalid crons are rejected on save."
+  },
+  {
+   "fieldname": "sec_help",
+   "fieldtype": "Section Break",
+   "label": "How this trigger works"
+  },
+  {
+   "fieldname": "engine_help",
+   "fieldtype": "Small Text",
+   "label": "What / Effect / Why",
+   "read_only": 1,
+   "description": "Plain-English explanation of what this engine does, how it changes your data, and why it exists. Auto-filled - read-only."
+  },
+  {
+   "fieldname": "sec_pending",
+   "fieldtype": "Section Break",
+   "label": "Pending Voucher Statuses (override; leave blank to use the global TOC Settings defaults)"
+  },
+  {
+   "fieldname": "pending_so_statuses",
+   "fieldtype": "Small Text",
+   "label": "Pending SO Statuses (Status : Workflow State)",
+   "description": "Multiselect of Status:WorkflowState pairs this engine treats as still-pending Sales Order demand \u2014 same picker as the global 'Pending Sales Order Statuses'. Blank = inherit the global TOC Settings list. Applies only to engines that read SOs (see 'Reads Sales Orders' below)."
+  },
+  {
+   "fieldname": "pending_wo_statuses",
+   "fieldtype": "Small Text",
+   "label": "Pending WO Statuses (Status : Workflow State)",
+   "description": "Multiselect of Status:WorkflowState pairs this engine treats as in-progress Work Order supply \u2014 same picker as the global 'Pending Work Order Statuses'. Blank = inherit the global TOC Settings list. Applies only to engines that read WOs."
+  },
+  {
+   "fieldname": "pending_po_statuses",
+   "fieldtype": "Small Text",
+   "label": "Pending PO Statuses (Status : Workflow State)",
+   "description": "Multiselect of Status:WorkflowState pairs this engine treats as incoming Purchase Order supply \u2014 same picker as the global 'Pending Purchase Order Statuses'. Blank = inherit the global TOC Settings list. Applies only to engines that read POs."
+  },
+  {
+   "fieldname": "pending_mr_statuses",
+   "fieldtype": "Small Text",
+   "label": "Pending Purchase MR Statuses",
+   "description": "Multiselect of Material Request statuses (purpose = Purchase) this engine treats as in-flight purchase supply. The engine creates Draft Purchase MRs for purchase-mode items and nets their pending qty out of the shortage so it never re-requests the same shortage forever (a PO can't be auto-created \u2014 the supplier is your choice). Blank = inherit the global TOC Settings 'Pending Purchase Material Request Statuses' (which defaults to Draft, Pending, Partially Ordered). Applies only to engines that create Purchase MRs."
+  },
+  {
+   "fieldname": "sec_considers",
+   "fieldtype": "Section Break",
+   "label": "Applies To (read-only) - which pending lists this engine actually reads"
+  },
+  {
+   "fieldname": "considers_so",
+   "fieldtype": "Check",
+   "label": "Reads Sales Orders",
+   "read_only": 1,
+   "description": "If ticked, the Pending SO list above changes this engine's behaviour. If not, the SO list is ignored for this engine."
+  },
+  {
+   "fieldname": "considers_wo",
+   "fieldtype": "Check",
+   "label": "Reads Work Orders",
+   "read_only": 1,
+   "description": "If ticked, the Pending WO list above changes this engine's behaviour. If not, it is ignored."
+  },
+  {
+   "fieldname": "considers_po",
+   "fieldtype": "Check",
+   "label": "Reads Purchase Orders",
+   "read_only": 1,
+   "description": "If ticked, the Pending PO list above changes this engine's behaviour. If not, it is ignored."
+  },
+  {
+   "fieldname": "considers_mr",
+   "fieldtype": "Check",
+   "label": "Creates Purchase MRs",
+   "read_only": 1,
+   "description": "If ticked, this engine creates Purchase Material Requests for purchase-mode items and nets pending Purchase MRs out of the shortage (the Pending Purchase MR list above applies). If not, the MR list is ignored."
+  }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,

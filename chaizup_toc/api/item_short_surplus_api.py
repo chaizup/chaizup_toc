@@ -457,6 +457,32 @@ def _get_filter_options_uncached() -> dict:
     wo_pairs = _distinct_pairs("Work Order",     _wo_has_wf())
     po_pairs = _distinct_pairs("Purchase Order", _po_has_wf())
 
+    # 2026-06-04 — Material Request (purpose Purchase) statuses for the TOC
+    # Trigger Configuration "Pending Purchase MR" multiselect. MR has no workflow
+    # here, so these are STATUS-ONLY pairs (key "<status>|"). Unlike _distinct_pairs,
+    # this INCLUDES 'Draft' — the purchase-MR netting loop-break depends on Draft
+    # (the engine leaves its own MRs as Draft). 'Cancelled' is excluded.
+    def _mr_status_pairs():
+        try:
+            opts = [s.strip() for s in
+                    (frappe.get_meta("Material Request").get_field("status").options or "").split("\n")
+                    if s.strip()]
+        except Exception:
+            opts = []
+        if not opts:
+            opts = ["Draft", "Pending", "Partially Ordered", "Ordered",
+                    "Issued", "Transferred", "Received", "Stopped"]
+        seen, out = set(), []
+        for st in opts:
+            if st == "Cancelled" or st in seen:
+                continue
+            seen.add(st)
+            out.append({"key": f"{st}|", "label": st, "status": st, "workflow_state": ""})
+        out.sort(key=lambda o: o["label"])
+        return out
+
+    mr_pairs = _mr_status_pairs()
+
     companies = [r["name"] for r in frappe.db.get_list(
         "Company", fields=["name"], order_by="name asc", limit=0)]
 
@@ -520,6 +546,7 @@ def _get_filter_options_uncached() -> dict:
             "so_pairs": so_pairs,
             "wo_pairs": wo_pairs,
             "po_pairs": po_pairs,
+            "mr_pairs": mr_pairs,
             "companies": companies,
         },
         # v0.0.30 — defaults seeded from TOC Settings (operator override
