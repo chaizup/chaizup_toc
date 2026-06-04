@@ -91,3 +91,26 @@ Full documentation: `projection_engine.md`
 - `docstatus == 0` check in `on_update` handler — prevents double-notification on submit
 - `delivery_date` in SO SQL — do NOT change to `transaction_date`
 - Empty `pending_statuses` guard — `IN ()` crashes MariaDB; always check len > 0
+
+## Configurable Automation Triggers (2026-06-04)
+
+Per-engine runtime schedule + per-trigger pending-status overrides + manual Run
+Now, configured on the TOC Settings page. Full developer doc:
+[`configurable_triggers.md`](./configurable_triggers.md).
+
+- **`trigger_registry.py`** — canonical list of all 9 engines (key, job_method,
+  default schedule, considers{so,wo,po}, seed_enabled, help). Single source.
+- **`trigger_scheduler.py`** — `compute_cron` (pure, validated) + `sync_one/all`
+  write the native `Scheduled Job Type`; `ensure_trigger_rows` + `seed_and_sync`
+  auto-seed one row per engine on install/migrate (idempotent; wired into
+  `after_install` + `after_migrate`, the latter running AFTER Frappe `sync_jobs`
+  so the table stays authoritative).
+- **`pending_status.py`** — `row_override(voucher, trigger_key)`: per-row override
+  text or `""` (inherit). Override-only; global fallback stays in the engine
+  helpers so the global path is byte-for-byte unchanged (blank row == legacy).
+- Engines set `frappe.flags.toc_trigger_key`; `_toc_wo/po_statuses_and_wf` and the
+  three SO entry points resolve override-or-global.
+- RESTRICT: `trigger_key` immutable; seed pending cells BLANK (pre-filling breaks
+  parity — combined cell parses workflow side the global WO/PO path ignores);
+  manual `run_trigger_now` is System-Manager-only; `considers` true only for
+  sales_projection / so_shortage / shortage_action.

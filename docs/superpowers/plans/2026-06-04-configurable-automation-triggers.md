@@ -1116,11 +1116,11 @@ git commit -m "feat(toc): Calc Action cron wrapper + after_migrate re-sync"
 
 ---
 
-## Task 8: Seed patch (one row per engine, idempotent) + initial sync
+## Task 8: Seed rows (one per engine, idempotent) — IMPLEMENTED AS A HOOK, not a one-shot patch
 
-**Files:**
-- Create: `chaizup_toc/patches/v1_0/seed_trigger_configurations.py`
-- Modify: `chaizup_toc/patches.txt`
+> **DESIGN CHANGE (2026-06-04, during execution):** The user requires "all schedule + automation appear on the table by default after installing the app", and the table must self-heal when new engines are added to the registry. A one-shot `patches.txt` entry runs only once and would not cover fresh installs cleanly nor future engines. **Replaced by** `trigger_scheduler.ensure_trigger_rows()` + `seed_and_sync()`, wired into BOTH `after_install` and `after_migrate` hooks (see Task 7). `after_migrate` runs on every `bench migrate` (and on install, since install runs migrate) AND after Frappe's `sync_jobs`, so it both seeds missing rows and re-asserts the table's cron over hooks.py. Idempotent: matches rows by `trigger_key`, never duplicates. No `patches.txt` entry, no separate patch file. The verification below still applies (run via migrate instead of a patch invocation).
+
+<details><summary>Superseded one-shot patch design (kept for reference)</summary>
 
 - [ ] **Step 1: Write the patch**
 
@@ -1238,6 +1238,8 @@ cd /workspace/development/frappe-bench/apps/chaizup_toc
 git add chaizup_toc/patches/v1_0/seed_trigger_configurations.py chaizup_toc/patches/v1_0/__init__.py chaizup_toc/patches.txt
 git commit -m "feat(toc): seed trigger configurations patch (idempotent + sync)"
 ```
+
+</details>
 
 ---
 
