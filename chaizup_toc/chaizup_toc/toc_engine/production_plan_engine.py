@@ -2610,6 +2610,13 @@ def _create_consolidated_purchase_mr(intents, company):
     mr.transaction_date = today()
     mr.company = company or frappe.db.get_value(
         "Warehouse", intents[0]["warehouse"], "company")
+    # 2026-06-04: every line already carries its own action warehouse. If the
+    # whole run targets ONE warehouse, also set the header set_warehouse for
+    # clarity; if intents span multiple warehouses, leave it blank (the per-line
+    # warehouse is authoritative and netting reads line-or-header).
+    _whs = {i["warehouse"] for i in intents}
+    if len(_whs) == 1:
+        mr.set_warehouse = next(iter(_whs))
     max_lead = max([int(i.get("lead_time_days") or 0) for i in intents] + [3])
     mr.schedule_date = add_days(today(), max(1, max_lead))
     try:
@@ -3818,6 +3825,10 @@ def _create_purchase_mr_for_shortage(item_code, item_name, qty_in_stock_uom,
     mr.material_request_type = "Purchase"
     mr.transaction_date = today()
     mr.company = company or frappe.db.get_value("Warehouse", warehouse, "company")
+    # 2026-06-04: the MR target warehouse IS the action's (item × warehouse)
+    # warehouse — set it at BOTH the header (set_warehouse) and the line. This
+    # is also what makes _open_purchase_mr_qty net this MR on the next run.
+    mr.set_warehouse = warehouse
     mr.schedule_date = add_days(today(), max(1, int(lead_time_days or 3)))
     # Match `mr_generator._create_mr` metadata so the existing list view
     # / TOC reports continue to recognise this MR as system-generated.
@@ -3930,6 +3941,14 @@ def _open_po_qty(item_code, warehouse):
     params = list(po_statuses)
     if po_wf and _po_has_workflow_column():
         params += list(po_wf)
+    # 2026-06-04: match the warehouse at the ITEM level OR the PO level
+    # (`po.set_warehouse`). A Purchase Order created DIRECTLY by a user (without
+    # going through a Material Request) often carries only the PO-level
+    # set_warehouse with a blank item-level warehouse. Counting only
+    # `poi.warehouse` would MISS those POs, so the engine would create an extra
+    # Purchase MR on top of a PO that already covers the need. COALESCE mirrors
+    # the SO eligibility logic. This counts EVERY open PO for the pair —
+    # MR-originated or directly user-created — which is the whole point.
     result = frappe.db.sql(
         f"""
         SELECT COALESCE(SUM(GREATEST(
@@ -3939,7 +3958,7 @@ def _open_po_qty(item_code, warehouse):
         FROM `tabPurchase Order Item` poi
         JOIN `tabPurchase Order` po ON po.name = poi.parent
         WHERE poi.item_code = %s
-          AND poi.warehouse = %s
+          AND COALESCE(NULLIF(poi.warehouse, ''), NULLIF(po.set_warehouse, '')) = %s
           AND ({eligibility})
         """,
         [item_code, warehouse] + params,
@@ -4016,7 +4035,7 @@ def _open_purchase_mr_qty(item_code, warehouse):
         FROM `tabMaterial Request Item` mri
         JOIN `tabMaterial Request` mr ON mr.name = mri.parent
         WHERE mri.item_code = %s
-          AND mri.warehouse = %s
+          AND COALESCE(NULLIF(mri.warehouse, ''), NULLIF(mr.set_warehouse, '')) = %s
           AND mr.material_request_type = 'Purchase'
           AND mr.docstatus < 2
           AND mr.status IN ({ph})

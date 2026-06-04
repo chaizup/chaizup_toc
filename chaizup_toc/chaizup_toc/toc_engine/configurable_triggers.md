@@ -116,3 +116,77 @@ shortage_action seeded stopped; blank rows == global lists (byte-for-byte);
 override wins; all 9 engines auto-seeded; `get_toc_pending_filters` (reports)
 unchanged. Pure unit tests: 15 pass. Integration tests committed in
 `doctype/toc_settings/test_toc_settings.py`.
+
+---
+
+## 2026-06-04 additions (Purchase-MR netting, ADU SR-exclusion, field rename, formatted reason)
+
+### ADU — Stock Reconciliation excluded
+`tasks/daily_tasks.update_min_mfg_adu_levels` now excludes
+`voucher_type = 'Stock Reconciliation'` from BOTH the outflow sum and the
+history-gate query. SR negative legs are inventory corrections, not demand, and
+were inflating ADU → oversizing buffers. Delivery Notes (SO), Stock Entry
+consumption (WO), issues and transfers are still counted. **RESTRICT:** keep the
+two queries in lock-step (gate + sum) — see the DANGER block in the function.
+
+### Pending Purchase MR netting (the loop guard)
+A purchase-mode item gets a **Material Request** (a PO can't be auto-created —
+the supplier is the buyer's choice). The pending MR is the in-flight supply.
+New `mr` voucher type added to `considers {so,wo,po,mr}`; `mr:1` for the 3
+purchase-MR engines (`sales_projection`, `so_shortage`, `shortage_action`).
+
+- `production_plan_engine._open_purchase_mr_qty(item, wh)` sums
+  `(qty − ordered_qty) × conversion_factor` (stock UOM) for purchase-MR lines
+  whose `status IN` the resolved pending-MR list. `− ordered_qty` means a line
+  that became a PO stops counting here (the PO is counted by `_open_po_qty`) —
+  **no double-count**.
+- Added to the supply side of all three purchase branches:
+  `shortage = demand − (stock + open_po + open_purchase_mr)`. This breaks the
+  infinite re-order loop AND allows partial top-up. For Calc SO / Calc Action it
+  **replaced** the boolean "MR exists → skip" dedup (which blocked top-up).
+- Status resolution `_toc_mr_statuses()`: per-trigger override → **global**
+  `TOC Settings.pending_mr_statuses` → built-in default (Draft / Pending /
+  Partially Ordered). **RESTRICT:** the default MUST include `Draft` — the
+  engine's own MRs are Draft; without it the loop is not broken.
+- UI: new per-trigger `pending_mr_statuses` cell + `considers_mr` flag; global
+  `pending_mr_statuses` field on TOC Settings (pending section); both use the
+  Status multiselect fed by `get_filter_options().options.mr_pairs` (status-only,
+  includes Draft). Overview panel shows an **MR** tag.
+
+### Field rename: custom_created_by → custom_recorded_by
+The custom field `custom_created_by` (which duplicated Frappe's built-in
+"Created By") was renamed to **`custom_recorded_by`** (label "Recorded By") on
+**Production Plan, Work Order, BOM**. All 45 source references updated. DB column
+renamed by patch `v1_0.rename_custom_created_by_to_recorded_by` (runs
+pre-fixtures via `ALTER TABLE ... CHANGE COLUMN`, preserving data; deletes the
+stale Custom Field docs). **RESTRICT:** `custom_created_time` is a DIFFERENT
+field — never rename it.
+
+### Recorded-By + formatted Creation Reason (MR / PP / WO)
+- **Material Request:** `custom_toc_recorded_by` (Select By User/By System) is
+  read-only; new `custom_toc_creation_reason` (Text Editor).
+- **Production Plan:** `custom_creation_reason` changed Long Text → Text Editor.
+- **Work Order:** new `custom_creation_reason` (Text Editor); the PP's formatted
+  reason is stamped onto each WO.
+- Engine builds a well-structured HTML reason via
+  `production_plan_engine._format_reason_html()` — header card + a two-column
+  **facts table** (parsed from the `Label : value` lines) + footer. **RESTRICT:**
+  `[Calc X]` markers survive `html.escape`, so the dedup `LIKE '%[Calc A]%'`
+  queries still match — do not change the marker format. The MR-item `description`
+  stays PLAIN text (MR dedup keys off it).
+- Form JS (MR / PP / WO): recorded-by read-only; reason read-only when System,
+  editable-before-submit when User.
+
+### Direct-PO netting + warehouse granularity (2026-06-04)
+**Why per (item × warehouse):** a company runs multiple warehouses; each
+location can have different configuration (ADU, min qty, pending statuses), so
+ALL replenishment math is scoped per (item, warehouse) — never company-wide.
+
+`_open_po_qty` and `_open_purchase_mr_qty` match the warehouse as
+`COALESCE(NULLIF(line.warehouse,''), NULLIF(header.set_warehouse,''))`. This is
+critical: a Purchase Order (or MR) a **user created directly** often carries only
+the header `set_warehouse` with a blank line warehouse. Without the COALESCE the
+engine would miss that PO and raise an UNNECESSARY extra Purchase MR on top of
+supply that already exists. Both MR-originated and directly-user-created POs are
+counted. Engine-created Purchase MRs set BOTH `set_warehouse` AND the line
+`warehouse` to the action's warehouse.

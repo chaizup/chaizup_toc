@@ -706,6 +706,35 @@ para(
     "System Managers. Shortage Action (Calc Action) is schedulable too, seeded "
     "disabled so it only runs once a System Manager enables its row."
 )
+para("Purchase Material Request netting (2026-06-04):", bold=True)
+para(
+    "For a purchase-mode item the engine creates a Material Request (a Purchase "
+    "Order cannot be raised automatically because the supplier is the buyer's "
+    "choice). To avoid re-requesting the same shortage forever, the three "
+    "purchase engines (Sales Projection, Sales Order Shortage, Shortage Action) "
+    "subtract the quantity already pending on open/draft Purchase Material "
+    "Requests from the shortage. A fourth pending list, 'Pending Purchase "
+    "Material Request Statuses', is configured globally in TOC Settings and can "
+    "be overridden per trigger; it must include Draft because the engine leaves "
+    "its own requests as Draft. The remaining quantity is measured as ordered "
+    "minus received so a request that has become a Purchase Order is not counted "
+    "twice."
+)
+para("Average Daily Usage — Stock Reconciliation excluded (2026-06-04):", bold=True)
+para(
+    "The Average Daily Usage refresh no longer counts Stock Reconciliation "
+    "outward legs (inventory corrections), only true consumption (Delivery "
+    "Notes, Work Order / Stock Entry consumption, issues, transfers), so a "
+    "physical-count adjustment does not inflate the buffer."
+)
+para("Created-by metadata (2026-06-04):", bold=True)
+para(
+    "Material Requests, Production Plans and Work Orders carry a read-only "
+    "'Recorded By' (User / System) and a formatted 'Creation Reason' showing, in "
+    "a small table, exactly why the document was created and the live figures the "
+    "engine used. System documents are read-only; user-created ones can be edited "
+    "before submit."
+)
 
 # ===========================================================================
 # 7. DOCTYPES
