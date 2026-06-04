@@ -53,15 +53,23 @@ def get_trigger_overview():
 
 @frappe.whitelist()
 def run_trigger_now(trigger_key):
-    """Fire one automation engine on demand (enqueued to the long queue).
+    """Fire one automation engine on demand, SYNCHRONOUSLY, returning its result.
 
-    Returns a small handle the UI toasts. The engine itself writes its own
-    TOC Production Plan Run Log where applicable.
+    Runs in the request (the UI freezes with an overlay) so the caller gets the
+    engine's structured result back — Run Log link + created/skipped/errors —
+    in a result dialog, matching the old per-engine Run buttons.
 
-    SECURITY (2026-06-04, per requirement): manual runs are restricted to
-    **System Manager only** — they can trigger heavy voucher-creating engines
-    on demand, so the privilege bar is the highest. The scheduled (cron) path
-    is unaffected; only this whitelisted on-demand entry is gated.
+    Routing (single source = the registry):
+      - Voucher engines (sales_projection / so_shortage / shortage_action) carry a
+        `run_method` (the rich @whitelist engine) + `run_triggered_by`. We call
+        THAT so the result dict (ok, run_log, counts) flows back to the dialog.
+      - Other engines have no run_method → we call their no-arg `job_method`
+        (monitoring/buffer runs that return None → the dialog shows a generic
+        "completed" with a pointer to the Error Log).
+
+    SECURITY (2026-06-04): System Manager only. The rich engines also self-guard
+    with frappe.only_for([...]); a System Manager passes, and the run is recorded
+    against the REAL user (better audit than a queued Administrator run).
     """
     frappe.only_for("System Manager")
     try:
@@ -69,28 +77,27 @@ def run_trigger_now(trigger_key):
     except KeyError:
         frappe.throw(f"Unknown trigger: {trigger_key}")
 
-    frappe.enqueue(
-        "chaizup_toc.api.trigger_runner._execute_trigger",
-        queue="long",
-        timeout=1500,
-        trigger_key=trigger_key,
-        enqueued_by=frappe.session.user,
-    )
-    return {"ok": True, "queued": True, "trigger_key": trigger_key, "name": trig["name"]}
+    run_method = trig.get("run_method") or trig["job_method"]
+    fn = frappe.get_attr(run_method)
+    kwargs = {}
+    if trig.get("run_method") and trig.get("run_triggered_by"):
+        kwargs["triggered_by"] = trig["run_triggered_by"]
 
+    result = fn(**kwargs)
 
-def _execute_trigger(trigger_key, enqueued_by=None):
-    """Worker side: run the engine's no-arg job method as Administrator."""
-    trig = trigger_registry.get_trigger(trigger_key)
-    frappe.set_user("Administrator")
-    fn = frappe.get_attr(trig["job_method"])
-    try:
-        fn()
-        frappe.db.commit()
-        frappe.logger("chaizup_toc").info(
-            "run_trigger_now: %s done (by %s)" % (trigger_key, enqueued_by)
-        )
-    except Exception:
-        frappe.db.rollback()
-        frappe.log_error(frappe.get_traceback(), f"run_trigger_now {trigger_key} FAILED")
-        raise
+    # Normalise to a plain dict the UI can read. Rich engines return a dict with
+    # run_log + counts; monitoring engines return None.
+    rich = result if isinstance(result, dict) else {}
+    return {
+        "ok": True,
+        "trigger_key": trigger_key,
+        "name": trig["name"],
+        "has_result": bool(rich),
+        "run_log": rich.get("run_log"),
+        "created": rich.get("created"),
+        "skipped": rich.get("skipped"),
+        "errors": rich.get("errors"),
+        "evaluated": rich.get("evaluated"),
+        "pairs": rich.get("pairs"),
+        "message": rich.get("message"),
+    }

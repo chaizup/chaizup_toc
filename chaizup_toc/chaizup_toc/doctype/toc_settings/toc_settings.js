@@ -2,184 +2,21 @@
 // For license information, please see license.txt
 //
 // =============================================================================
-// CONTEXT: TOC Settings client-side handlers — manual trigger for Sales
-//   Projection Automation (Calc A + Calc B). Server-side entry point is
-//   `chaizup_toc.toc_engine.production_plan_engine.run_projection_automation_for_all_warehouses`.
-// MEMORY: app_chaizup_toc.md § Sales Projection Automation
-// RESTRICT:
-//   - Do NOT change the whitelisted method name without updating the engine
-//     decorator AND the projection_overview page if it also calls it.
-//   - Do NOT remove the disabled-while-running guard — without it, an impatient
-//     user can fire the cron mid-run and create duplicate Production Plans.
+// CONTEXT: TOC Settings client-side handlers.
+//   Two additive blocks follow this header:
+//     1. Pending-pair multi-select widget for the GLOBAL pending fields
+//        (v0.0.27, IIFE just below).
+//     2. Configurable Automation Triggers — engine overview panel + per-engine
+//        Run Now (sync, rich result dialog), HH:MM validation, locked grid,
+//        and the child-row Status:Workflow multiselect (Task 10 block).
+// MEMORY: chaizup_configurable_triggers.md | app_chaizup_toc.md
+// HISTORY (2026-06-04): the 3 legacy run-button handlers
+//   (_wire_projection_run_button / _wire_so_shortage_run_button /
+//   _wire_shortage_action_run_button) were REMOVED after the operator deleted
+//   the run_*_now Button fields from TOC Settings and consolidated manual runs
+//   into the engine overview panel's per-engine Run Now buttons. Do NOT
+//   re-add those handlers; add run controls to the overview panel instead.
 // =============================================================================
-
-frappe.ui.form.on("TOC Settings", {
-    refresh(frm) {
-        _wire_projection_run_button(frm);
-        _wire_so_shortage_run_button(frm);
-        _wire_shortage_action_run_button(frm);
-    },
-});
-
-function _wire_shortage_action_run_button(frm) {
-    // SPA-001 (2026-05-14): manual trigger for run_shortage_action_automation.
-    // Iterates Item Minimum Manufacture rows with auto_on_shortage=1 OR
-    // auto_on_max_level=1 and creates PPs / MRs per row.action_type.
-    if (!frm.fields_dict.run_shortage_action_automation_now) return;
-    const $btn = frm.fields_dict.run_shortage_action_automation_now.$wrapper.find("button");
-    if (!$btn.length) return;
-    const reset_btn = () => $btn.prop("disabled", false).text(__("Run Shortage Action Now"));
-
-    $btn.off("click.toc-sa").on("click.toc-sa", () => {
-        frappe.confirm(
-            __(
-                "Iterate every <b>Item Minimum Manufacture</b> row where <i>Auto on Shortage</i> or <i>Auto on Max Level</i> is enabled, and create a Production Plan or Material Request per <i>Action Type</i> when a trigger fires.<br><br>" +
-                    "<b>Shortage mode</b>: <code>(pending SO + WO required) &minus; (stock + open WO) &gt; 0</code><br>" +
-                    "<b>Max-level mode</b>: <code>cover% &lt; row threshold</code> where <code>cover = (stock + open WO + open PO) &minus; (pending SO + WO required)</code>.<br><br>" +
-                    "Continue?"
-            ),
-            () => {
-                $btn.prop("disabled", true).text(__("Running…"));
-                frappe.call({
-                    method:
-                        "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_shortage_action_automation",
-                    args: { triggered_by: "shortage_action_manual" },
-                    freeze: true,
-                    freeze_message: __("Evaluating Shortage Action triggers and creating artifacts…"),
-                    callback: (r) => {
-                        reset_btn();
-                        if (!r.message) return;
-                        const m = r.message;
-                        const log_link = m.run_log
-                            ? `<a href="/app/toc-production-plan-run-log/${frappe.utils.escape_html(m.run_log)}" target="_blank">${frappe.utils.escape_html(m.run_log)}</a>`
-                            : "&mdash;";
-                        frappe.msgprint({
-                            title: __("Shortage Action Run Complete"),
-                            message:
-                                `<div style="font-size:13px;line-height:1.7">` +
-                                `<div><b>Run Log:</b> ${log_link}</div>` +
-                                `<div><b>Rows evaluated:</b> ${m.evaluated || 0}</div>` +
-                                `<div><b>Artifacts created:</b> ${m.created || 0}</div>` +
-                                `<div><b>Skipped:</b> ${m.skipped || 0}</div>` +
-                                `<div><b>Errors:</b> ${m.errors || 0}</div>` +
-                                `<p style="margin-top:10px;color:#888;font-size:12px">${frappe.utils.escape_html(m.message || "")}</p>` +
-                                `</div>`,
-                            indicator: (m.created || 0) > 0 ? "green" : ((m.errors || 0) > 0 ? "red" : "orange"),
-                        });
-                    },
-                    error: () => reset_btn(),
-                });
-            }
-        );
-    });
-}
-
-function _wire_so_shortage_run_button(frm) {
-    // SPE-001 (2026-05-13): manual trigger for run_so_shortage_automation.
-    // Independent of any Sales Projection. Same disabled-while-running
-    // guard as the projection runner so a double-click cannot fire the
-    // engine twice and create duplicate PPs before the first commit lands.
-    if (!frm.fields_dict.run_so_shortage_automation_now) return;
-    const $btn = frm.fields_dict.run_so_shortage_automation_now.$wrapper.find("button");
-    if (!$btn.length) return;
-
-    const reset_btn = () => $btn.prop("disabled", false).text(__("Run Sales Order Shortage Now"));
-
-    $btn.off("click.toc-so").on("click.toc-so", () => {
-        frappe.confirm(
-            __(
-                "Scan every <b>pending Sales Order</b> (across all items and warehouses) and create Production Plans for any (item &times; warehouse) where:<br>" +
-                    "<code>pending SO qty &minus; stock &minus; open WO &gt; 0</code> (all in stock UOM)<br><br>" +
-                    "PP qty = <code>max(shortage, MINMFG per-warehouse)</code>. Each decision is logged in <b>TOC Production Plan Run Log</b> with marker <code>[Calc SO]</code>.<br><br>" +
-                    "Continue?"
-            ),
-            () => {
-                $btn.prop("disabled", true).text(__("Running…"));
-                frappe.call({
-                    method:
-                        "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_so_shortage_automation",
-                    args: { triggered_by: "so_shortage_manual" },
-                    freeze: true,
-                    freeze_message: __("Scanning pending Sales Orders and creating Production Plans…"),
-                    callback: (r) => {
-                        reset_btn();
-                        if (!r.message) return;
-                        const m = r.message;
-                        const log_link = m.run_log
-                            ? `<a href="/app/toc-production-plan-run-log/${frappe.utils.escape_html(m.run_log)}" target="_blank">${frappe.utils.escape_html(m.run_log)}</a>`
-                            : "&mdash;";
-                        frappe.msgprint({
-                            title: __("Sales Order Shortage Run Complete"),
-                            message:
-                                `<div style="font-size:13px;line-height:1.7">` +
-                                `<div><b>Run Log:</b> ${log_link}</div>` +
-                                `<div><b>Pairs scanned (item &times; warehouse):</b> ${m.pairs || 0}</div>` +
-                                `<div><b>Production Plans created:</b> ${m.created || 0}</div>` +
-                                `<div><b>Skipped:</b> ${m.skipped || 0}</div>` +
-                                `<div><b>Errors:</b> ${m.errors || 0}</div>` +
-                                `<p style="margin-top:10px;color:#888;font-size:12px">${frappe.utils.escape_html(m.message || "")}</p>` +
-                                `</div>`,
-                            indicator: (m.created || 0) > 0 ? "green" : ((m.errors || 0) > 0 ? "red" : "orange"),
-                        });
-                    },
-                    error: () => reset_btn(),
-                });
-            }
-        );
-    });
-}
-
-function _wire_projection_run_button(frm) {
-    // The Button field is rendered as a plain field; we attach our handler in JS.
-    if (!frm.fields_dict.run_projection_automation_now) return;
-
-    const $btn = frm.fields_dict.run_projection_automation_now.$wrapper.find("button");
-    if (!$btn.length) return;
-
-    $btn.off("click.toc").on("click.toc", () => {
-        if (!frm.doc.enable_projection_automation) {
-            frappe.msgprint({
-                title: __("Automation disabled"),
-                message: __("Enable 'Enable Projection Automation' first."),
-                indicator: "orange",
-            });
-            return;
-        }
-
-        frappe.confirm(
-            __(
-                "Run Calc A (forecast) + Calc B (SO-driven) now for every submitted Sales Projection of the current month?<br><br>" +
-                    "Each decision will be logged in <b>TOC Production Plan Run Log</b>. Production Plans are created (and submitted) for items with shortage > 0."
-            ),
-            () => {
-                $btn.prop("disabled", true).text(__("Running…"));
-                frappe.call({
-                    method:
-                        "chaizup_toc.toc_engine.production_plan_engine.run_projection_automation_for_all_warehouses",
-                    args: { triggered_by: "manual_button" },
-                    callback: (r) => {
-                        $btn.prop("disabled", false).text(__("Run Now (Calc A + Calc B)"));
-                        if (r.message) {
-                            const summary = r.message;
-                            frappe.msgprint({
-                                title: __("Run Complete"),
-                                message:
-                                    `<b>Calc A (Forecast):</b> Created ${summary.calc_a_created || 0} · Skipped ${summary.calc_a_skipped || 0}<br>` +
-                                    `<b>Calc B (SO-driven):</b> Created ${summary.calc_b_created || 0} · Skipped ${summary.calc_b_skipped || 0}<br><br>` +
-                                    `<a href="/app/toc-production-plan-run-log?filters=%5B%5B%22run_started%22%2C%22%3E%3D%22%2C%22${frappe.datetime.now_datetime()}%22%5D%5D">View Run Log →</a>`,
-                                indicator: "green",
-                            });
-                        }
-                    },
-                    error: () => {
-                        $btn.prop("disabled", false).text(__("Run Now (Calc A + Calc B)"));
-                    },
-                });
-            }
-        );
-    });
-}
-
 
 // =============================================================================
 // v0.0.27 (2026-05-27) — Pending pair multi-select widget for the 6 pending
@@ -1174,6 +1011,40 @@ function _wire_projection_run_button(frm) {
         return t ? `${t} ${__("daily")}` : __("daily (time unset)");
     }
 
+    // Rich result dialog after a synchronous Run Now. Voucher engines return a
+    // run_log + counts; monitoring engines return nothing -> generic success.
+    function _showRunResult(m, eng) {
+        const name = _esc(m.name || (eng && eng.name) || (eng && eng.key) || "");
+        const num = (v) => (v === undefined || v === null) ? null : v;
+        if (m && m.has_result) {
+            const logLink = m.run_log
+                ? `<a href="/app/toc-production-plan-run-log/${encodeURIComponent(m.run_log)}" target="_blank">${_esc(m.run_log)}</a>`
+                : "&mdash;";
+            const rows = [];
+            rows.push(`<div><b>${_esc(__("Run Log"))}:</b> ${logLink}</div>`);
+            if (num(m.evaluated) !== null) rows.push(`<div><b>${_esc(__("Rows evaluated"))}:</b> ${_esc(m.evaluated)}</div>`);
+            if (num(m.pairs) !== null) rows.push(`<div><b>${_esc(__("Pairs scanned"))}:</b> ${_esc(m.pairs)}</div>`);
+            rows.push(`<div><b>${_esc(__("Created"))}:</b> ${_esc(num(m.created) ?? 0)}</div>`);
+            rows.push(`<div><b>${_esc(__("Skipped"))}:</b> ${_esc(num(m.skipped) ?? 0)}</div>`);
+            rows.push(`<div><b>${_esc(__("Errors"))}:</b> ${_esc(num(m.errors) ?? 0)}</div>`);
+            const created = num(m.created) || 0, errors = num(m.errors) || 0;
+            frappe.msgprint({
+                title: __("{0} — Run Complete", [name]),
+                indicator: created > 0 ? "green" : (errors > 0 ? "red" : "orange"),
+                message:
+                    `<div style="font-size:13px;line-height:1.8">${rows.join("")}` +
+                    (m.message ? `<p style="margin-top:10px;color:#888;font-size:12px">${_esc(m.message)}</p>` : "") +
+                    `</div>`,
+            });
+        } else {
+            // Monitoring/buffer engine — no structured result.
+            frappe.show_alert({
+                message: __("{0} finished. See the Error Log if anything failed.", [name]),
+                indicator: "green",
+            }, 6);
+        }
+    }
+
     function _renderEngineOverview(frm) {
         const sec = frm.fields_dict.automation_triggers_section;
         if (!sec || !sec.wrapper) return;
@@ -1239,29 +1110,19 @@ function _wire_projection_run_button(frm) {
                     const $btn = $row.find(".toc-eo-run");
                     $btn.on("click", () => {
                         frappe.confirm(
-                            __("Run <b>{0}</b> now? This enqueues the engine on the long queue.", [_esc(eng.name || eng.key)]),
+                            __("Run <b>{0}</b> now? This runs the engine immediately and shows the result.", [_esc(eng.name || eng.key)]),
                             () => {
                                 const orig = $btn.html();
                                 $btn.prop("disabled", true)
-                                    .html(`<i class="fa fa-spinner fa-spin"></i> ${_esc(__("Queuing…"))}`);
+                                    .html(`<i class="fa fa-spinner fa-spin"></i> ${_esc(__("Running…"))}`);
                                 frappe.call({
                                     method: "chaizup_toc.api.trigger_runner.run_trigger_now",
                                     args: { trigger_key: eng.key },
+                                    freeze: true,
+                                    freeze_message: __("Running {0}…", [_esc(eng.name || eng.key)]),
                                     callback: (rr) => {
                                         $btn.prop("disabled", false).html(orig);
-                                        const m = (rr && rr.message) || {};
-                                        if (m.ok && m.queued) {
-                                            frappe.show_alert({
-                                                message: __("{0} queued (long queue). Check the Run Log / Error Log.",
-                                                    [m.name || eng.name || eng.key]),
-                                                indicator: "green",
-                                            }, 7);
-                                        } else {
-                                            frappe.show_alert({
-                                                message: __("{0} could not be queued.", [eng.name || eng.key]),
-                                                indicator: "orange",
-                                            }, 7);
-                                        }
+                                        _showRunResult((rr && rr.message) || {}, eng);
                                     },
                                     error: () => {
                                         $btn.prop("disabled", false).html(orig);

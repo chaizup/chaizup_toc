@@ -4,6 +4,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "global_toc_setup_tab",
   "zone_section",
   "red_zone_threshold",
   "yellow_zone_threshold",
@@ -33,24 +34,21 @@
   "warehouse_rules",
   "ai_section",
   "custom_deepseek_api_key",
-  "projection_section",
-  "enable_projection_automation",
-  "projection_pending_so_statuses",
-  "column_break_fnpt",
-  "default_so_warehouse",
-  "pending_section_break",
-  "pending_wo_statuses",
-  "pending_po_statuses",
-  "automation_triggers_section",
-  "trigger_configurations",
-  "pending_po_col_break",
-  "run_projection_automation_now",
-  "run_so_shortage_automation_now",
-  "run_shortage_action_automation_now",
   "section_break_oosi",
   "projection_notification_users",
   "demo_section",
-  "demo_data_manifest"
+  "demo_data_manifest",
+  "global_defaults_tab",
+  "automation_triggers_section",
+  "trigger_configurations",
+  "projection_section",
+  "enable_projection_automation",
+  "column_break_fnpt",
+  "default_so_warehouse",
+  "pending_section_break",
+  "projection_pending_so_statuses",
+  "pending_wo_statuses",
+  "pending_po_statuses"
  ],
  "fields": [
   {
@@ -295,33 +293,11 @@
    "label": "Pending Work Order Statuses"
   },
   {
-   "fieldname": "pending_po_col_break",
-   "fieldtype": "Column Break"
-  },
-  {
    "default": "To Receive\nTo Receive and Bill",
    "description": "<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">PO</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Pending Purchase Order Statuses</strong>\n    </div>\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:12px\">\n        Submitted ($docstatus=1$) Purchase Order <code>&lt;Status&gt; : &lt;Workflow State&gt;</code> pairs to count as <b>incoming supply</b>. Typical: <i>To Receive, To Receive and Bill</i>. EXCLUDE <i>Completed, Closed, Cancelled</i>.\n    </p>\n    <div style=\"background-color:#fefce8;border-left:3px solid #eab308;padding:8px 12px;border-radius:4px;font-size:11px;color:#854d0e\">\n        <b>Impact:</b> Drives <code>open_po</code> in Calc Action max-level mode, in WO Kitting Planner Purchase Priority, and in the Production Overview \"Incoming (Purchase)\" column.\n    </div>\n</div>",
    "fieldname": "pending_po_statuses",
    "fieldtype": "Small Text",
    "label": "Pending Purchase Order Statuses"
-  },
-  {
-   "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;font-family:sans-serif\">\n    <div style=\"display:flex;align-items:center;margin-bottom:8px\">\n        <span style=\"font-size:15px;margin-right:8px\">\u25b6</span>\n        <strong style=\"font-size:12px;text-transform:uppercase;letter-spacing:0.025em;color:#1e40af\">Manual Run Trigger</strong>\n    </div>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:0;line-height:1.5\">\n        Click <b>Run Now</b> to execute Calc A (forecast) and Calc B (SO-driven) for every submitted Sales Projection of the current month. Each per-item decision is recorded in the <b>TOC Production Plan Run Log</b>.\n    </p>\n</div>",
-   "fieldname": "run_projection_automation_now",
-   "fieldtype": "Button",
-   "label": "Run Now (Calc A + Calc B)"
-  },
-  {
-   "description": "<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;font-family:sans-serif;margin-top:8px\">\n    <div style=\"display:flex;align-items:center;margin-bottom:8px\">\n        <span style=\"font-size:15px;margin-right:8px\">SO</span>\n        <strong style=\"font-size:12px;text-transform:uppercase;letter-spacing:0.025em;color:#0e7c32\">Sales Order Shortage Run</strong>\n    </div>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:0;line-height:1.5\">\n        Scans every <b>pending Sales Order</b> (independent of any Sales Projection), aggregates pending qty per item x warehouse in stock UOM, and creates a Production Plan when <code>pending SO - stock - open WO &gt; 0</code>. PP qty = <code>max(shortage, MINMFG per-warehouse)</code>. Each decision is recorded in <b>TOC Production Plan Run Log</b> with marker <code>[Calc SO]</code>.\n    </p>\n</div>",
-   "fieldname": "run_so_shortage_automation_now",
-   "fieldtype": "Button",
-   "label": "Run Sales Order Shortage Now"
-  },
-  {
-   "description": "<div style=\"background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:12px;font-family:sans-serif;margin-top:8px\">\n    <div style=\"display:flex;align-items:center;margin-bottom:8px\">\n        <span style=\"font-size:15px;margin-right:8px\">SA</span>\n        <strong style=\"font-size:12px;text-transform:uppercase;letter-spacing:0.025em;color:#15803d\">Shortage Action Run</strong>\n    </div>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:8px;line-height:1.5\">\n        Iterates every <b>Item Minimum Manufacture</b> row where <i>Auto on Shortage</i> or <i>Auto on Max Level</i> is enabled. Two evaluation modes:\n    </p>\n    <ul style=\"font-size:12px;color:#475569;line-height:1.6;margin:0 0 8px 18px;padding:0\">\n      <li><b>Shortage mode</b>: <code>shortage = (pending SO + WO component requirement) - (stock + open WO output)</code>. Fires when shortage &gt; 0.</li>\n      <li><b>Max-level mode</b>: <code>cover %% = ((stock + open WO + open PO) - (pending SO + WO component requirement)) / max_level x 100</code>. Fires when cover %% &lt; row threshold.</li>\n    </ul>\n    <p style=\"font-size:12px;color:#475569;margin-bottom:0;line-height:1.5\">\n        Action depends on <i>Action Type</i> on the same row: <b>Manufacture</b> creates a Production Plan, <b>Purchase</b> creates a Material Request of type Purchase (with stock UOM converted to Item purchase UOM). Each decision is logged in <b>TOC Production Plan Run Log</b> with marker <code>[Calc Action]</code>.\n    </p>\n</div>",
-   "fieldname": "run_shortage_action_automation_now",
-   "fieldtype": "Button",
-   "label": "Run Shortage Action Now"
   },
   {
    "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#fcfcfd;border:1px solid #d1d8dd;border-radius:6px;padding:15px;font-family:-apple-system , BlinkMacSystemFont , &quot;Segoe UI&quot; , Roboto , Helvetica , Arial , sans-serif\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;color:#1a1c1e\">\n        <span style=\"font-size:16px;margin-right:8px\">\ud83d\udce7</span>\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.025em\">Email Notification Settings</strong>\n    </div>\n\n    <p style=\"font-size:13px;color:#64748b;margin-bottom:15px\">\n        Add users to the table below to subscribe them to automated alerts. Each user can receive three types of updates:\n    </p>\n\n    <div style=\"display:grid;grid-template-columns:1fr\">\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#2490ef;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON EDIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered every time a <b>Sales Projection</b> draft is saved.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#28a745;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON SUBMIT</div>\n            <div style=\"font-size:12px;color:#444\">Triggered when a Sales Projection is officially finalized/submitted.</div>\n        </div>\n\n        <div style=\"display:flex;align-items:flex-start;background:#fff;border:1px solid #ebeff2;padding:8px 12px;border-radius:4px\">\n            <div style=\"color:#ff9800;font-weight:bold;margin-right:12px;font-size:12px;min-width:80px\">ON WO RUN</div>\n            <div style=\"font-size:12px;color:#444\">\n                Full summary report (daily or manual) including:\n                <ul style=\"margin:4px 0 0 0;padding-left:18px;color:#666;font-size:11px\">\n                    <li>List of Work Orders created</li>\n                    <li>Items skipped and specific reasons (Capacity/BOM)</li>\n                </ul>\n            </div>\n        </div>\n    </div>\n</div>",
@@ -363,11 +339,21 @@
   {
    "fieldname": "column_break_fnpt",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "global_toc_setup_tab",
+   "fieldtype": "Tab Break",
+   "label": "Global TOC Setup"
+  },
+  {
+   "fieldname": "global_defaults_tab",
+   "fieldtype": "Tab Break",
+   "label": "Rules and Automation Engine"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-05-27 22:31:58.833971",
+ "modified": "2026-06-04 19:38:50.250127",
  "modified_by": "it@chaizup.in",
  "module": "Chaizup Toc",
  "name": "TOC Settings",

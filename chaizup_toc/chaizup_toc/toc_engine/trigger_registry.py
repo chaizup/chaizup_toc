@@ -69,6 +69,11 @@ TOC_TRIGGERS = [
         "key": "sales_projection",
         "name": "Sales Projection (Calc A + Calc B)",
         "job_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.daily_production_plan_automation",
+        # run_method = the rich whitelisted entry used by the manual "Run Now"
+        # button (returns {ok, run_log, summary, ...} for the result dialog). The
+        # job_method above is the no-arg CRON wrapper (returns None).
+        "run_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_projection_automation_for_all_warehouses",
+        "run_triggered_by": "manual_button",
         "default_frequency": "Daily", "default_time": "02:00", "default_weekday": "",
         "considers": {"so": 1, "wo": 1, "po": 0},
         "schedulable": 1, "seed_enabled": 1,
@@ -102,6 +107,8 @@ TOC_TRIGGERS = [
         "key": "so_shortage",
         "name": "Sales Order Shortage (Calc SO)",
         "job_method": "chaizup_toc.tasks.daily_tasks.daily_so_shortage_automation",
+        "run_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_so_shortage_automation",
+        "run_triggered_by": "so_shortage_manual",
         "default_frequency": "Daily", "default_time": "07:00", "default_weekday": "",
         "considers": {"so": 1, "wo": 1, "po": 1},
         "schedulable": 1, "seed_enabled": 1,
@@ -162,6 +169,8 @@ TOC_TRIGGERS = [
         "key": "shortage_action",
         "name": "Shortage Action (Calc Action)",
         "job_method": "chaizup_toc.tasks.daily_tasks.daily_shortage_action_automation",
+        "run_method": "chaizup_toc.chaizup_toc.toc_engine.production_plan_engine.run_shortage_action_automation",
+        "run_triggered_by": "shortage_action_manual",
         "default_frequency": "Daily", "default_time": "07:15", "default_weekday": "",
         "considers": {"so": 1, "wo": 1, "po": 1},
         "schedulable": 1, "seed_enabled": 0,  # opt-in: seeded disabled
