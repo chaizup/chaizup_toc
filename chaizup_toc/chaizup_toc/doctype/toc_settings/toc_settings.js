@@ -639,3 +639,709 @@ function _wire_projection_run_button(frm) {
             .forEach(p => p.classList.remove("tocs-open"));
     });
 })();
+
+
+// =============================================================================
+// Configurable Automation Triggers — Task 10 (frontend JS) — ADDITIVE BLOCK
+// -----------------------------------------------------------------------------
+// CONTEXT: A new child table `trigger_configurations` (doctype
+//   "TOC Trigger Configuration") holds one row per automation engine. This
+//   block adds the operator-facing UI WITHOUT touching the global pending-pair
+//   widget IIFE above (lines ~227-641). Everything here is brand new,
+//   mounted via additional `frappe.ui.form.on(...)` handlers (Frappe runs ALL
+//   registered handlers for the same event, so adding more is safe).
+//
+//   (A) Engine overview panel + per-engine "Run Now" buttons, rendered into the
+//       `automation_triggers_section` Section Break wrapper. Data comes from
+//       chaizup_toc.api.trigger_runner.get_trigger_overview(). Each engine row
+//       shows its name, schedule, enabled/disabled badge, an info tooltip with
+//       the engine help text, and a ▶ Run Now button calling
+//       chaizup_toc.api.trigger_runner.run_trigger_now(trigger_key).
+//   (B) HH:MM validation on the child grid `schedule_time` cell.
+//   (C) System-managed rows — the grid cannot add or delete rows (identity
+//       fields are read-only, so a manual row would be useless).
+//   (D) ★ The 3 child pending fields (pending_so_statuses / _wo_ / _po_) get the
+//       SAME Status:WorkflowState chip+dropdown multiselect as the global
+//       widget, mounted on each grid row's DETAIL form when the row is expanded
+//       (form_render event). It COMMITS via frappe.model.set_value (child rows
+//       go through the model, not field.set_value/frm.dirty). Only mounted for
+//       vouchers the engine actually considers (row.considers_so/wo/po); a
+//       not-considered voucher shows a small "Not applicable" note.
+//
+// RESTRICT (CRITICAL):
+//   - This block is INTENTIONALLY self-contained (it duplicates the ~150 lines
+//     of widget logic, adapted for frappe.model.set_value) so the working
+//     global widget above is never refactored or risked. Duplication is the
+//     safe choice here.
+//   - The stored format for the 3 pending fields is UNCHANGED: newline-
+//     separated `<Status>|<WorkflowState>` lines. Blank = inherit global
+//     default. Do NOT change the storage format.
+//   - Reuses the SAME `<style id="tocs-pair-style">` (id-guarded re-inject) and
+//     the same `get_filter_options` backend method + a module-level pair cache.
+// MEMORY: chaizup_automation_logging_plan.md (Configurable Automation Triggers)
+// =============================================================================
+
+(function () {
+    "use strict";
+
+    const PENDING_VOUCHER = {
+        pending_so_statuses: { dtype: "Sales Order",    considers: "considers_so" },
+        pending_wo_statuses: { dtype: "Work Order",     considers: "considers_wo" },
+        pending_po_statuses: { dtype: "Purchase Order", considers: "considers_po" },
+    };
+    const PENDING_FIELDS = Object.keys(PENDING_VOUCHER);
+
+    function _esc(v) {
+        return frappe.utils.escape_html(String(v == null ? "" : v));
+    }
+
+    // ── Reuse the global widget's CSS. The id-guard means if the global IIFE
+    //    already injected the <style id="tocs-pair-style">, we do nothing;
+    //    otherwise we re-inject an identical copy so this block is independent.
+    function _ensureStyle() {
+        if (document.getElementById("tocs-pair-style")) return;
+        const css = `
+            .tocs-pair-host { margin-top: 4px; }
+            .tocs-pair-chips {
+                display: flex; flex-wrap: wrap; gap: 4px;
+                min-height: 32px; padding: 4px 28px 4px 6px; position: relative;
+                background: var(--input-bg, #fff);
+                border: 1px solid var(--border-color, #d1d5db);
+                border-radius: var(--border-radius-sm, 4px);
+                cursor: pointer; transition: border-color 120ms ease;
+            }
+            .tocs-pair-chips:hover { border-color: var(--primary, #2563eb); }
+            .tocs-pair-chips.tocs-open { border-color: var(--primary, #2563eb);
+                box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15); }
+            .tocs-pair-caret {
+                position: absolute; right: 8px; top: 50%;
+                transform: translateY(-50%);
+                color: var(--text-muted, #94a3b8); font-size: 11px; pointer-events: none;
+            }
+            .tocs-pair-placeholder {
+                color: var(--text-muted, #94a3b8); font-size: 12px;
+                padding: 4px 4px; font-style: italic;
+            }
+            .tocs-pair-chip {
+                display: inline-flex; align-items: center; gap: 4px;
+                padding: 2px 4px 2px 8px;
+                background: linear-gradient(135deg, #2563eb, #7c3aed);
+                color: #fff; border-radius: 10px;
+                font-size: 11px; line-height: 1.5; font-weight: 500;
+                max-width: 220px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
+            .tocs-pair-chip-x {
+                cursor: pointer; padding: 0 2px 0 4px;
+                margin-left: 2px; font-weight: 700; opacity: 0.85;
+                font-size: 13px; line-height: 1;
+            }
+            .tocs-pair-chip-x:hover { opacity: 1; }
+            .tocs-pair-panel {
+                position: fixed; min-width: 320px; max-width: 480px;
+                background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
+                box-shadow: 0 12px 28px -4px rgba(15, 23, 42, 0.16),
+                            0 4px 12px -2px rgba(15, 23, 42, 0.08);
+                z-index: 1050; display: none; overflow: hidden;
+                flex-direction: column; max-height: 420px;
+            }
+            .tocs-pair-panel.tocs-open { display: flex; }
+            .tocs-pair-head {
+                position: sticky; top: 0; z-index: 1;
+                background: #fff; border-bottom: 1px solid #e2e8f0;
+                padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+            }
+            .tocs-pair-search-wrap { position: relative; }
+            .tocs-pair-search-icon {
+                position: absolute; left: 8px; top: 50%;
+                transform: translateY(-50%);
+                color: #94a3b8; font-size: 11px; pointer-events: none;
+            }
+            .tocs-pair-search {
+                width: 100%; padding: 6px 8px 6px 26px;
+                border: 1px solid #e2e8f0; border-radius: 4px;
+                font-size: 12px; background: #fff;
+            }
+            .tocs-pair-search:focus {
+                outline: none; border-color: #2563eb;
+                box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+            }
+            .tocs-pair-actions { display: flex; gap: 6px; justify-content: flex-end; }
+            .tocs-pair-action {
+                border: 1px solid #e2e8f0; background: #f8fafc; color: #0f172a;
+                padding: 3px 10px; border-radius: 4px;
+                font-size: 11px; font-weight: 500; cursor: pointer;
+                transition: all 100ms ease;
+            }
+            .tocs-pair-action:hover {
+                background: #2563eb; color: #fff; border-color: #2563eb;
+            }
+            .tocs-pair-opts {
+                flex: 1; overflow-y: auto; padding: 4px 0; max-height: 280px;
+            }
+            .tocs-pair-opt {
+                display: flex; align-items: center; gap: 8px;
+                padding: 8px 12px; font-size: 13px; cursor: pointer;
+                transition: background 80ms ease; user-select: none;
+            }
+            .tocs-pair-opt:hover { background: #f1f5f9; }
+            .tocs-pair-opt.tocs-selected { background: rgba(37, 99, 235, 0.06); }
+            .tocs-pair-opt input[type=checkbox] {
+                margin: 0; cursor: pointer; accent-color: #2563eb;
+            }
+            .tocs-pair-cell {
+                flex: 1; display: flex; align-items: center; gap: 6px;
+                overflow: hidden;
+            }
+            .tocs-pair-pill {
+                display: inline-block; padding: 2px 8px; border-radius: 10px;
+                font-size: 11px; font-weight: 500; white-space: nowrap;
+                max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+            }
+            .tocs-pair-pill-status   { background: rgba(37, 99, 235, 0.1);  color: #1d4ed8; }
+            .tocs-pair-pill-workflow { background: rgba(124, 58, 237, 0.1); color: #6d28d9; }
+            .tocs-pair-sep { color: #cbd5e1; font-weight: 700; padding: 0 2px; }
+            .tocs-pair-empty-side { color: #cbd5e1; font-size: 12px; padding: 0 4px; }
+            .tocs-pair-empty {
+                padding: 18px; text-align: center; color: #94a3b8; font-size: 12px;
+            }
+            .tocs-pair-foot {
+                position: sticky; bottom: 0;
+                background: #f8fafc; border-top: 1px solid #e2e8f0;
+                padding: 5px 10px; font-size: 11px; color: #64748b;
+                text-align: right;
+            }
+            .tocs-pair-chip-more {
+                background: #64748b !important; cursor: help;
+            }
+        `;
+        const tag = document.createElement("style");
+        tag.id = "tocs-pair-style";
+        tag.textContent = css;
+        document.head.appendChild(tag);
+    }
+
+    // ── CSS scoped to the engine-overview panel only (its own id).
+    function _ensureOverviewStyle() {
+        if (document.getElementById("toc-engine-overview-style")) return;
+        const css = `
+            #toc-engine-overview {
+                margin: 6px 0 14px; border: 1px solid var(--border-color, #e2e8f0);
+                border-radius: 8px; overflow: hidden; background: #fff;
+            }
+            #toc-engine-overview .toc-eo-head {
+                display: flex; align-items: center; gap: 8px;
+                padding: 8px 12px; background: #f8fafc;
+                border-bottom: 1px solid var(--border-color, #e2e8f0);
+                font-size: 12px; font-weight: 600; color: #334155;
+            }
+            #toc-engine-overview .toc-eo-head .toc-eo-sub {
+                font-weight: 400; color: #94a3b8; font-size: 11px;
+            }
+            #toc-engine-overview .toc-eo-row {
+                display: flex; align-items: center; gap: 10px;
+                padding: 9px 12px; border-bottom: 1px solid #f1f5f9;
+            }
+            #toc-engine-overview .toc-eo-row:last-child { border-bottom: none; }
+            #toc-engine-overview .toc-eo-main { flex: 1; min-width: 0; }
+            #toc-engine-overview .toc-eo-name {
+                font-size: 13px; font-weight: 600; color: #0f172a;
+                display: flex; align-items: center; gap: 6px;
+            }
+            #toc-engine-overview .toc-eo-help {
+                color: #94a3b8; cursor: help; font-size: 11px;
+            }
+            #toc-engine-overview .toc-eo-sched {
+                font-size: 11px; color: #64748b; margin-top: 2px;
+            }
+            #toc-engine-overview .toc-eo-badge {
+                display: inline-block; padding: 2px 9px; border-radius: 10px;
+                font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+                text-transform: uppercase;
+            }
+            #toc-engine-overview .toc-eo-badge.on  { background: rgba(22,163,74,0.12); color: #15803d; }
+            #toc-engine-overview .toc-eo-badge.off { background: rgba(100,116,139,0.12); color: #64748b; }
+            #toc-engine-overview .toc-eo-considers {
+                display: inline-flex; gap: 4px; margin-left: 4px;
+            }
+            #toc-engine-overview .toc-eo-tag {
+                font-size: 9px; font-weight: 600; padding: 1px 5px;
+                border-radius: 4px; background: rgba(37,99,235,0.08); color: #1d4ed8;
+            }
+            #toc-engine-overview .toc-eo-tag.muted {
+                background: #f1f5f9; color: #cbd5e1;
+            }
+        `;
+        const tag = document.createElement("style");
+        tag.id = "toc-engine-overview-style";
+        tag.textContent = css;
+        document.head.appendChild(tag);
+    }
+
+    // ── State read/write helpers (identical semantics to the global widget).
+    function _readState(v) {
+        if (!v) return [];
+        return v.trim().split("\n").map(l => l.trim()).filter(l => l.length);
+    }
+    function _writeState(arr) {
+        return (arr || []).join("\n");
+    }
+
+    // ── Shared pair cache + fetch (own module-level cache so the global widget
+    //    is untouched; backend method is the same single source of truth).
+    const _pairCache = {};
+    async function _fetchPairs(doctype) {
+        if (_pairCache[doctype]) return _pairCache[doctype];
+        const r = await frappe.call({
+            method: "chaizup_toc.api.item_short_surplus_api.get_filter_options",
+        });
+        const m = (r && r.message) || { options: {} };
+        const opt = m.options || {};
+        const map = {
+            "Sales Order":    opt.so_pairs || [],
+            "Work Order":     opt.wo_pairs || [],
+            "Purchase Order": opt.po_pairs || [],
+        };
+        Object.keys(map).forEach(k => { _pairCache[k] = map[k]; });
+        return _pairCache[doctype] || [];
+    }
+
+    function _positionPanel(triggerEl, panelEl) {
+        if (!triggerEl || !panelEl) return;
+        const rect = triggerEl.getBoundingClientRect();
+        const vpH = window.innerHeight, vpW = window.innerWidth;
+        const dropH = Math.min(420, panelEl.scrollHeight || 420);
+        const minW = Math.max(320, Math.min(480, rect.width));
+        let top = rect.bottom + 4, left = rect.left;
+        if (top + dropH > vpH - 8 && rect.top > dropH + 8) top = rect.top - dropH - 4;
+        if (left + minW > vpW - 8) left = Math.max(8, vpW - minW - 8);
+        if (left < 8) left = 8;
+        panelEl.style.top = `${top}px`;
+        panelEl.style.left = `${left}px`;
+        panelEl.style.width = `${minW}px`;
+    }
+
+    // -------------------------------------------------------------------------
+    // (D) Mount the chip+dropdown multiselect on ONE child-row detail field.
+    //     Commits through frappe.model.set_value(cdt, cdn, fieldname, val).
+    //     `fieldObj` is the grid detail-form field control (.$wrapper, .$input,
+    //     .value, .df). We do NOT call fieldObj.set_value / frm.dirty here.
+    // -------------------------------------------------------------------------
+    async function _mountChildPairWidget(fieldObj, dtype, cdt, cdn, fieldname) {
+        if (!fieldObj || !fieldObj.$wrapper) return;
+        if (fieldObj._tocTrigPairMounted) return;
+        fieldObj._tocTrigPairMounted = true;
+
+        // Hide the raw textarea but keep it as a value mirror.
+        const $textarea = fieldObj.$input;
+        if ($textarea && $textarea.length) $textarea.hide();
+
+        const pairs = await _fetchPairs(dtype);
+        const byKey = {};
+        pairs.forEach(p => { byKey[p.key] = p; });
+
+        const $host = $(`<div class="tocs-pair-host"></div>`);
+        const $chips = $(`<div class="tocs-pair-chips" tabindex="0"></div>`);
+        const $caret = $(`<i class="fa fa-caret-down tocs-pair-caret"></i>`);
+        $chips.append($caret);
+        $host.append($chips);
+        const $panel = $(`<div class="tocs-pair-panel"></div>`);
+        const $head = $(`
+            <div class="tocs-pair-head">
+                <div class="tocs-pair-search-wrap">
+                    <i class="fa fa-search tocs-pair-search-icon"></i>
+                    <input type="search" class="tocs-pair-search"
+                           placeholder="${_esc(__("Search status or workflow…"))}">
+                </div>
+                <div class="tocs-pair-actions">
+                    <button class="tocs-pair-action tocs-all">${_esc(__("Select all"))}</button>
+                    <button class="tocs-pair-action tocs-clear">${_esc(__("Clear"))}</button>
+                </div>
+            </div>
+        `);
+        const $opts = $(`<div class="tocs-pair-opts"></div>`);
+        const $foot = $(`<div class="tocs-pair-foot"></div>`);
+        $panel.append($head).append($opts).append($foot);
+        fieldObj.$wrapper.append($host);
+
+        // Read current value from the live row (most authoritative source).
+        const _rowVal = () => {
+            const row = (locals[cdt] || {})[cdn];
+            return (row && row[fieldname]) || fieldObj.value || "";
+        };
+        let state = _readState(_rowVal());
+
+        const renderChips = () => {
+            $chips.find(".tocs-pair-chip, .tocs-pair-placeholder").remove();
+            if (!state.length) {
+                // Blank cell = inherit the global default — make that explicit.
+                $chips.prepend(`<span class="tocs-pair-placeholder">${_esc(__("Inheriting global default"))}</span>`);
+                return;
+            }
+            const visible = state.slice(0, 4);
+            visible.forEach(k => {
+                const opt = byKey[k] || { label: k };
+                const $c = $(`<span class="tocs-pair-chip" title="${_esc(opt.label)}">${_esc(opt.label)}<span class="tocs-pair-chip-x">&times;</span></span>`);
+                $c.find(".tocs-pair-chip-x").on("click", (e) => {
+                    e.stopPropagation();
+                    state = state.filter(z => z !== k);
+                    _commit();
+                    renderChips();
+                    renderFoot();
+                });
+                $chips.find(".tocs-pair-caret").before($c);
+            });
+            if (state.length > 4) {
+                const moreLabels = state.slice(4).map(k => (byKey[k] && byKey[k].label) || k).join(", ");
+                $chips.find(".tocs-pair-caret").before(
+                    `<span class="tocs-pair-chip tocs-pair-chip-more" title="${_esc(moreLabels)}">+${state.length - 4} ${_esc(__("more"))}</span>`
+                );
+            }
+        };
+
+        const renderFoot = () => {
+            $foot.text(__("{0} of {1} selected", [state.length, pairs.length]));
+        };
+
+        let currentList = pairs.slice();
+        const renderOpts = (filter = "") => {
+            $opts.empty();
+            currentList = pairs.slice();
+            if (filter) {
+                const f = filter.toLowerCase();
+                currentList = currentList.filter(o =>
+                    String(o.label).toLowerCase().includes(f) ||
+                    String(o.status).toLowerCase().includes(f) ||
+                    String(o.workflow_state).toLowerCase().includes(f));
+            }
+            if (!currentList.length) {
+                $opts.append(`<div class="tocs-pair-empty">
+                    <i class="fa fa-search-minus"></i> ${_esc(__("No matching pairs"))}
+                </div>`);
+                return;
+            }
+            currentList.forEach(opt => {
+                const sel = state.includes(opt.key);
+                const stHtml = opt.status
+                    ? `<span class="tocs-pair-pill tocs-pair-pill-status">${_esc(opt.status)}</span>`
+                    : `<span class="tocs-pair-empty-side">—</span>`;
+                const wfHtml = opt.workflow_state
+                    ? `<span class="tocs-pair-pill tocs-pair-pill-workflow">${_esc(opt.workflow_state)}</span>`
+                    : `<span class="tocs-pair-empty-side">—</span>`;
+                const $o = $(`
+                    <label class="tocs-pair-opt ${sel ? "tocs-selected" : ""}">
+                        <input type="checkbox" ${sel ? "checked" : ""}>
+                        <span class="tocs-pair-cell">
+                            ${stHtml}<span class="tocs-pair-sep">:</span>${wfHtml}
+                        </span>
+                    </label>
+                `);
+                $o.on("click", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (state.includes(opt.key)) {
+                        state = state.filter(z => z !== opt.key);
+                    } else {
+                        state = [...state, opt.key];
+                    }
+                    const nowSel = state.includes(opt.key);
+                    $o.toggleClass("tocs-selected", nowSel)
+                      .find("input").prop("checked", nowSel);
+                    _commit();
+                    renderChips();
+                    renderFoot();
+                });
+                $opts.append($o);
+            });
+        };
+
+        // ★ Child-row commit: write through the model so the row persists on
+        //   Save. set_value auto-marks the parent dirty.
+        const _commit = () => {
+            const newVal = _writeState(state);
+            const row = (locals[cdt] || {})[cdn];
+            const cur = (row && row[fieldname]) || "";
+            if (cur !== newVal) {
+                frappe.model.set_value(cdt, cdn, fieldname, newVal);
+            }
+        };
+
+        const $search = $head.find(".tocs-pair-search");
+        const reposition = () => _positionPanel($chips[0], $panel[0]);
+        const closePanel = () => {
+            $panel.removeClass("tocs-open");
+            $chips.removeClass("tocs-open");
+            window.removeEventListener("scroll", reposition, true);
+            window.removeEventListener("resize", reposition);
+        };
+
+        $chips.on("click", (e) => {
+            if ($(e.target).hasClass("tocs-pair-chip-x")) return;
+            $(".tocs-pair-panel.tocs-open").not($panel).removeClass("tocs-open");
+            $(".tocs-pair-chips.tocs-open").not($chips).removeClass("tocs-open");
+            const wasOpen = $panel.hasClass("tocs-open");
+            if (wasOpen) { closePanel(); return; }
+            // Re-sync from the row in case the value changed elsewhere.
+            state = _readState(_rowVal());
+            $search.val("");
+            renderOpts();
+            renderFoot();
+            if ($panel[0].parentNode !== document.body) {
+                document.body.appendChild($panel[0]);
+            }
+            $panel.addClass("tocs-open");
+            $chips.addClass("tocs-open");
+            requestAnimationFrame(reposition);
+            window.addEventListener("scroll", reposition, true);
+            window.addEventListener("resize", reposition);
+            setTimeout(() => $search.focus(), 0);
+        });
+
+        $search.on("input", (e) => renderOpts(e.target.value));
+        $search.on("keydown", (e) => { if (e.key === "Escape") closePanel(); });
+
+        $head.find(".tocs-all").on("click", (e) => {
+            e.stopPropagation();
+            const set = new Set([...state, ...currentList.map(o => o.key)]);
+            state = Array.from(set);
+            _commit();
+            renderChips();
+            renderFoot();
+            renderOpts($search.val());
+        });
+        $head.find(".tocs-clear").on("click", (e) => {
+            e.stopPropagation();
+            state = [];
+            _commit();
+            renderChips();
+            renderFoot();
+            renderOpts($search.val());
+        });
+
+        // Outer-click close — namespaced per row+field so multiple open rows
+        // don't fight over the same handler.
+        const ns = `click.tocTrig-${cdn}-${fieldname}`;
+        $(document).off(ns).on(ns, (e) => {
+            if (!document.body.contains($host[0])) {
+                // Detail form closed/destroyed — detach the panel + handler.
+                if ($panel[0] && $panel[0].parentNode) $panel[0].parentNode.removeChild($panel[0]);
+                $(document).off(ns);
+                return;
+            }
+            if ($panel[0].contains(e.target)) return;
+            if (!$host[0].contains(e.target)) closePanel();
+        });
+
+        renderChips();
+    }
+
+    // ── Render a "Not applicable" note for vouchers an engine doesn't read.
+    function _markChildFieldNotApplicable(fieldObj) {
+        if (!fieldObj || !fieldObj.$wrapper) return;
+        if (fieldObj._tocTrigNAMarked) return;
+        fieldObj._tocTrigNAMarked = true;
+        const $textarea = fieldObj.$input;
+        if ($textarea && $textarea.length) {
+            $textarea.prop("disabled", true)
+                .attr("placeholder", __("Not applicable — this engine does not read this voucher"));
+        }
+        fieldObj.$wrapper.find(".tocs-trig-na").remove();
+        fieldObj.$wrapper.append(
+            `<div class="tocs-trig-na" style="margin-top:4px;font-size:11px;color:#94a3b8;font-style:italic">` +
+            `${_esc(__("Not applicable for this engine."))}</div>`
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // (A) Render the engine overview panel into the section wrapper.
+    // -------------------------------------------------------------------------
+    function _formatSchedule(eng) {
+        const freq = (eng.frequency || "").toLowerCase();
+        const t = eng.schedule_time || "";
+        if (freq === "cron") {
+            return eng.cron_override ? `cron: ${eng.cron_override}` : __("custom cron");
+        }
+        if (freq === "weekly") {
+            const wd = eng.weekday || __("(weekday unset)");
+            return t ? `${wd} ${t}` : `${wd}`;
+        }
+        // default daily
+        return t ? `${t} ${__("daily")}` : __("daily (time unset)");
+    }
+
+    function _renderEngineOverview(frm) {
+        const sec = frm.fields_dict.automation_triggers_section;
+        if (!sec || !sec.wrapper) return;
+        const $w = $(sec.wrapper);
+        // Idempotent: drop any prior panel before re-render.
+        $w.find("#toc-engine-overview").remove();
+
+        const $panel = $(`
+            <div id="toc-engine-overview">
+                <div class="toc-eo-head">
+                    <i class="fa fa-bolt"></i>
+                    <span>${_esc(__("Automation Engines"))}</span>
+                    <span class="toc-eo-sub">${_esc(__("Schedules and on-demand runs"))}</span>
+                </div>
+                <div class="toc-eo-body">
+                    <div class="toc-eo-loading" style="padding:12px;color:#94a3b8;font-size:12px">
+                        ${_esc(__("Loading engines…"))}
+                    </div>
+                </div>
+            </div>
+        `);
+        $w.prepend($panel);
+
+        frappe.call({
+            method: "chaizup_toc.api.trigger_runner.get_trigger_overview",
+            callback: (r) => {
+                const $body = $panel.find(".toc-eo-body");
+                $body.empty();
+                const engines = (r && r.message) || [];
+                if (!engines.length) {
+                    $body.append(`<div style="padding:12px;color:#94a3b8;font-size:12px">${_esc(__("No engines configured."))}</div>`);
+                    return;
+                }
+                engines.forEach((eng) => {
+                    const enabled = !!eng.enabled;
+                    const considers = eng.considers || {};
+                    const tag = (on, label) =>
+                        `<span class="toc-eo-tag ${on ? "" : "muted"}">${_esc(label)}</span>`;
+                    const helpTitle = eng.help ? _esc(eng.help) : "";
+                    const $row = $(`
+                        <div class="toc-eo-row">
+                            <div class="toc-eo-main">
+                                <div class="toc-eo-name">
+                                    <span>${_esc(eng.name || eng.key)}</span>
+                                    ${helpTitle ? `<i class="fa fa-info-circle toc-eo-help" title="${helpTitle}"></i>` : ""}
+                                    <span class="toc-eo-considers">
+                                        ${tag(considers.so, "SO")}${tag(considers.wo, "WO")}${tag(considers.po, "PO")}
+                                    </span>
+                                </div>
+                                <div class="toc-eo-sched">${_esc(_formatSchedule(eng))}</div>
+                            </div>
+                            <span class="toc-eo-badge ${enabled ? "on" : "off"}">${enabled ? _esc(__("Enabled")) : _esc(__("Disabled"))}</span>
+                            <button class="btn btn-xs btn-default toc-eo-run" type="button">
+                                <i class="fa fa-play"></i> ${_esc(__("Run Now"))}
+                            </button>
+                        </div>
+                    `);
+                    const $btn = $row.find(".toc-eo-run");
+                    $btn.on("click", () => {
+                        frappe.confirm(
+                            __("Run <b>{0}</b> now? This enqueues the engine on the long queue.", [_esc(eng.name || eng.key)]),
+                            () => {
+                                const orig = $btn.html();
+                                $btn.prop("disabled", true)
+                                    .html(`<i class="fa fa-spinner fa-spin"></i> ${_esc(__("Queuing…"))}`);
+                                frappe.call({
+                                    method: "chaizup_toc.api.trigger_runner.run_trigger_now",
+                                    args: { trigger_key: eng.key },
+                                    callback: (rr) => {
+                                        $btn.prop("disabled", false).html(orig);
+                                        const m = (rr && rr.message) || {};
+                                        if (m.ok && m.queued) {
+                                            frappe.show_alert({
+                                                message: __("{0} queued (long queue). Check the Run Log / Error Log.",
+                                                    [m.name || eng.name || eng.key]),
+                                                indicator: "green",
+                                            }, 7);
+                                        } else {
+                                            frappe.show_alert({
+                                                message: __("{0} could not be queued.", [eng.name || eng.key]),
+                                                indicator: "orange",
+                                            }, 7);
+                                        }
+                                    },
+                                    error: () => {
+                                        $btn.prop("disabled", false).html(orig);
+                                    },
+                                });
+                            }
+                        );
+                    });
+                    $body.append($row);
+                });
+            },
+            error: () => {
+                $panel.find(".toc-eo-body").html(
+                    `<div style="padding:12px;color:#dc2626;font-size:12px">${_esc(__("Failed to load engine overview."))}</div>`
+                );
+            },
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // (C) Lock the child grid: no manual add/delete (rows are system-managed).
+    // -------------------------------------------------------------------------
+    function _lockTriggerGrid(frm) {
+        const fld = frm.fields_dict.trigger_configurations;
+        if (!fld || !fld.grid) return;
+        fld.grid.cannot_add_rows = true;
+        // cannot_delete_rows is honored by newer Frappe grids; harmless on older.
+        fld.grid.cannot_delete_rows = true;
+        try {
+            frm.set_df_property("trigger_configurations", "cannot_add_rows", true);
+        } catch (e) { /* older Frappe — grid flag above already covers it */ }
+        fld.grid.refresh();
+    }
+
+    // -------------------------------------------------------------------------
+    // Parent-form handlers (ADDITIVE — Frappe runs all refresh handlers).
+    // -------------------------------------------------------------------------
+    frappe.ui.form.on("TOC Settings", {
+        refresh(frm) {
+            _ensureStyle();
+            _ensureOverviewStyle();
+            _renderEngineOverview(frm);   // (A)
+            _lockTriggerGrid(frm);        // (C)
+        },
+    });
+
+    // -------------------------------------------------------------------------
+    // Child-row handlers.
+    // -------------------------------------------------------------------------
+    frappe.ui.form.on("TOC Trigger Configuration", {
+        // (B) HH:MM validation.
+        schedule_time(frm, cdt, cdn) {
+            const row = locals[cdt][cdn];
+            const v = (row.schedule_time || "").trim();
+            if (!v) return;
+            let bad = !/^\d{1,2}:\d{2}$/.test(v);
+            if (!bad) {
+                const [h, m] = v.split(":").map((x) => parseInt(x, 10));
+                if (h > 23 || m > 59) bad = true;
+            }
+            if (bad) {
+                frappe.msgprint({
+                    title: __("Invalid time"),
+                    message: __("Schedule Time must be in 24-hour <b>HH:MM</b> format (00:00 – 23:59). The value <b>{0}</b> was cleared.", [_esc(v)]),
+                    indicator: "red",
+                });
+                frappe.model.set_value(cdt, cdn, "schedule_time", "");
+            }
+        },
+
+        // (D) Mount the multiselect widgets when a grid row's detail form opens.
+        form_render(frm, cdt, cdn) {
+            _ensureStyle();
+            const gridFld = frm.fields_dict.trigger_configurations;
+            if (!gridFld || !gridFld.grid) return;
+            const gridRow = gridFld.grid.grid_rows_by_docname[cdn];
+            if (!gridRow || !gridRow.grid_form || !gridRow.grid_form.fields_dict) return;
+            const row = locals[cdt][cdn];
+
+            PENDING_FIELDS.forEach((fieldname) => {
+                const fieldObj = gridRow.grid_form.fields_dict[fieldname];
+                if (!fieldObj) return;
+                const cfg = PENDING_VOUCHER[fieldname];
+                const considered = !!(row && row[cfg.considers]);
+                if (considered) {
+                    _mountChildPairWidget(fieldObj, cfg.dtype, cdt, cdn, fieldname);
+                } else {
+                    _markChildFieldNotApplicable(fieldObj);
+                }
+            });
+        },
+    });
+})();
