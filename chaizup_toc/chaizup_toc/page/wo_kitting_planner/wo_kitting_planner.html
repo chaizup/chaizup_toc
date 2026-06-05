@@ -54,7 +54,7 @@
                         [data-tab="ai-chat"]    [data-tab="item-view"]
                         [data-tab="purchase-priority"]
 
-     Export/Email bar:  #wkp-export-csv  #wkp-export-pdf  #wkp-send-email
+     Export/Email bar:  #wkp-export-csv  #wkp-export-pdf  #wkp-export-xlsx  #wkp-send-email
 
      Filter bar:        #wkp-filter-bar
                         #wkp-fbar-group  #wkp-fbar-status  #wkp-fbar-urgency
@@ -302,6 +302,10 @@
         <button class="wkp-btn wkp-btn-sm wkp-btn-export" id="wkp-export-pdf"
                 data-tip="Export current tab as PDF.&#10;Opens a print-ready view of this report.">
           <i class="fa-solid fa-file-pdf"></i> PDF
+        </button>
+        <button class="wkp-btn wkp-btn-sm wkp-btn-export" id="wkp-export-xlsx"
+                data-tip="Export a branded multi-sheet Excel workbook (Main, Filters, Shortage, Dispatch) with every quantity in both UOMs.">
+          <i class="fa-solid fa-file-excel"></i> Excel
         </button>
         <button class="wkp-btn wkp-btn-sm wkp-btn-email" id="wkp-send-email"
                 data-tip="Send this report by email.&#10;Choose recipients, CC, and which report to include.&#10;Email includes a link to the live dashboard.">

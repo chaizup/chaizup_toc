@@ -1101,6 +1101,8 @@ class WOKittingPlanner {
     const emailBtn = document.getElementById("wkp-send-email");
     if (csvBtn)   csvBtn.addEventListener("click",   () => this._exportCSV());
     if (pdfBtn)   pdfBtn.addEventListener("click",   () => this._exportPDF());
+    const xlsxBtn = document.getElementById("wkp-export-xlsx");
+    if (xlsxBtn) xlsxBtn.addEventListener("click", () => this._exportXLSX());
     if (emailBtn) emailBtn.addEventListener("click", () => this._showEmailDialog());
 
     // Global search
@@ -6063,6 +6065,25 @@ class WOKittingPlanner {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     frappe.show_alert({ message: "CSV downloaded: " + filename, indicator: "green" });
+  }
+
+  // Phase B: branded multi-sheet XLSX (both UOMs). Additive — CSV/PDF/email
+  // untouched. GET + window.open is the proven binary-download idiom on this
+  // site (mirrors item_short_surplus export_xlsx).
+  _exportXLSX() {
+    const filters = {
+      warehouses: this._selWh || [],
+      company: this._selCompany || "",
+      wo_statuses: this._selWo || [],
+      so_statuses: this._selSo || [],
+      po_statuses: this._selPo || [],
+      stock_mode: this.stockMode || "current_only",
+      calc_mode: this.calcMode || "isolated",
+      work_orders: (this.rows || []).map((r) => r.wo).filter(Boolean),
+    };
+    const args = encodeURIComponent(JSON.stringify(filters));
+    const url = `/api/method/chaizup_toc.api.wo_kitting_api.export_xlsx_kitting?filters=${args}`;
+    window.open(url, "_blank");
   }
 
   _exportPDF() {
