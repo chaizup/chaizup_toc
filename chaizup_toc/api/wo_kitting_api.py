@@ -2551,6 +2551,51 @@ def _get_secondary_uom(item_codes):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  DUAL-UOM PAIR DECORATION — presentational higher-UOM companion values
+# ═══════════════════════════════════════════════════════════════════════
+#  CONTEXT  : Built on top of _get_secondary_uom. Many WKP rows carry qty
+#             numbers in the item's stock_uom; the UI wants to ALSO show the
+#             same quantity in the item's next-higher UOM (g→kg, ml→litre,
+#             pcs→dozen) next to the primary number.
+#  RESTRICT : The conversion is FIXED — higher_qty = stock_qty / factor — and
+#             NOTHING else. Never apply any other conversion path or rate.
+#             This layer is purely ADDITIVE / PRESENTATIONAL: it only appends
+#             "<field>_higher" companion keys and NEVER mutates or recomputes
+#             any already-computed business number. Items WITHOUT a higher UOM
+#             (absent from _get_secondary_uom) show the primary value only
+#             ({"uom": "", "qty": None}) — the caller renders primary alone.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _higher_uom_pair(stock_qty, sec):
+    """Given a stock-UOM qty and the item's secondary-UOM entry
+    (sec = {"uom","factor"} from _get_secondary_uom, or falsy), return the
+    paired higher-UOM dict {"uom": str, "qty": float}. When the item has no
+    higher UOM, returns {"uom": "", "qty": None} (caller shows primary only).
+    Higher qty is ALWAYS stock_qty / factor — never any other conversion."""
+    if not sec or not sec.get("factor"):
+        return {"uom": "", "qty": None}
+    return {"uom": sec.get("uom", ""), "qty": round(flt(stock_qty) / flt(sec["factor"]), 3)}
+
+
+def _decorate_qty_pairs(rows, qty_fields, item_key="item_code", sec_map=None):
+    """For each row in `rows`, add `<field>_higher` = {"uom","qty"} for every
+    field name in `qty_fields`, using the row's item (row[item_key]) higher-UOM.
+    Mutates rows in place and returns them. `sec_map` (item_code -> sec) may be
+    passed to avoid re-querying; otherwise it is built from the rows' items.
+    Side-effect free except the added keys. Existing fields are untouched."""
+    rows = rows or []
+    if sec_map is None:
+        items = {r.get(item_key) for r in rows if r.get(item_key)}
+        sec_map = _get_secondary_uom(items)
+    for r in rows:
+        sec = sec_map.get(r.get(item_key))
+        for f in qty_fields:
+            if f in r:
+                r[f"{f}_higher"] = _higher_uom_pair(r.get(f) or 0, sec)
+    return rows
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  DISPATCH INFO (Sales Orders)
 # ═══════════════════════════════════════════════════════════════════════
 
