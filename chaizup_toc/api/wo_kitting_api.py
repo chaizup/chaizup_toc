@@ -5417,3 +5417,231 @@ def get_purchase_priority():
         -r["net_gap"],
     ))
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  BRANDED MULTI-SHEET XLSX EXPORT  (Phase-B Task-4)
+# ═══════════════════════════════════════════════════════════════════════
+#  CONTEXT      : Operators want offline access to the full WO Kitting Planner
+#                 in one branded workbook — the WO plan (Main), the run's filter
+#                 snapshot (PCAOB-style audit trail), the flattened material
+#                 shortage list, and the dispatch-bottleneck view — with EVERY
+#                 qty rendered in BOTH the stock UOM and the next-higher UOM
+#                 (g→kg, ml→litre, pcs→dozen), exactly as the live tabs show.
+#  MODEL        : Mirrors item_short_surplus_api.export_xlsx — same openpyxl
+#                 style tokens, freeze_panes + column-width pattern, and the
+#                 EXACT streaming tail (frappe.response.filename / .filecontent /
+#                 .type="binary" / .display_content_as="attachment" via BytesIO).
+#  DATA SHAPES  : *** VERIFIED against the real return values ***
+#                 - simulate_kitting() → LIST of WO rows. Each row:
+#                     wo, item_code, item_name, uom (stock uom),
+#                     planned_qty/produced_qty/remaining_qty/prev_month_so/
+#                     curr_month_so/total_pending_so + their "<field>_higher"
+#                     {"uom","qty"} pairs, and nested shortage_items:
+#                       [{item_code, item_name, uom, required, available,
+#                         shortage, ...} + "<field>_higher" pairs].
+#                 - get_dispatch_bottleneck() → DICT keyed by item_code. Each
+#                     VALUE carries item_name, uom, fg_stock/total_pending/
+#                     total_reserved + their "<field>_higher" pairs (so we read
+#                     item_name/uom straight off the value — no extra Item query).
+#  RESTRICT     : ADDITIVE ONLY. Does NOT touch the CSV/PDF/email paths, does NOT
+#                 mutate any return schema, and does NOT call .get("rows") on the
+#                 simulate LIST or the dispatch DICT (those keys do not exist).
+# ═══════════════════════════════════════════════════════════════════════
+@frappe.whitelist()
+def export_xlsx_kitting(filters=None):
+    """Branded multi-sheet XLSX for the WO Kitting Planner (Main / Filters & Run /
+    Material Shortage / Dispatch), every qty in BOTH UOMs. Streams via
+    frappe.response (filename + filecontent + type=binary). Additive — does NOT
+    touch CSV/PDF/email. Model: item_short_surplus_api.export_xlsx."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    f = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
+
+    warehouses_list = f.get("warehouses") or []
+    wo_statuses_list = f.get("wo_statuses") or []
+    so_statuses_list = f.get("so_statuses") or []
+    po_statuses_list = f.get("po_statuses") or []
+    company = f.get("company") or ""
+    stock_mode = f.get("stock_mode", "current_only")
+    calc_mode = f.get("calc_mode", "isolated")
+
+    warehouses = json.dumps(warehouses_list)
+    wo_statuses = json.dumps(wo_statuses_list)
+    so_statuses = json.dumps(so_statuses_list)
+    po_statuses = json.dumps(po_statuses_list)
+
+    # WO universe: caller-supplied list, else discover open WOs under the scope.
+    work_orders = f.get("work_orders") or [
+        w["name"]
+        for w in (
+            get_open_work_orders(
+                wo_statuses=wo_statuses, warehouses=warehouses, company=company
+            )
+            or []
+        )
+    ]
+
+    sim_rows = (
+        simulate_kitting(
+            json.dumps(work_orders),
+            stock_mode=stock_mode,
+            calc_mode=calc_mode,
+            wo_statuses=wo_statuses,
+            po_statuses=po_statuses,
+            warehouses=warehouses,
+            company=company,
+        )
+        or []
+    )
+    disp = (
+        get_dispatch_bottleneck(
+            stock_mode=stock_mode,
+            so_statuses=so_statuses,
+            po_statuses=po_statuses,
+            warehouses=warehouses,
+            company=company,
+        )
+        or {}
+    )
+
+    # ── Style tokens (slate header / zebra rows / thin grid) ─────────────
+    header_fill = PatternFill("solid", fgColor="111827")
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    zebra_fill = PatternFill("solid", fgColor="F9FAFB")
+    thin = Side(style="thin", color="E5E7EB")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def write_sheet(ws, title, headers, data_rows):
+        ws.title = title[:31]  # Excel sheet-name max length
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=c, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+        for ri, rr in enumerate(data_rows, 2):
+            for ci, val in enumerate(rr, 1):
+                cell = ws.cell(row=ri, column=ci, value=val)
+                cell.border = border
+                if ri % 2 == 0:
+                    cell.fill = zebra_fill
+        ws.freeze_panes = "A2"
+        for c, h in enumerate(headers, 1):
+            ws.column_dimensions[get_column_letter(c)].width = max(
+                12, min(40, len(str(h)) + 4)
+            )
+
+    def hq(d):  # higher-UOM qty from a "<field>_higher" {"uom","qty"} pair
+        return (d or {}).get("qty")
+
+    def hu(d):  # higher-UOM label from a "<field>_higher" pair
+        return (d or {}).get("uom", "")
+
+    wb = Workbook()
+
+    # ── Sheet 1 — Main (WO plan rows; every qty in BOTH UOMs) ────────────
+    main_headers = [
+        "WO", "Item Code", "Item", "Status",
+        "Remaining (Stock)", "UOM", "Remaining (Higher)", "Higher UOM",
+        "Produced (Stock)", "Produced (Higher)",
+        "Planned (Stock)", "Planned (Higher)",
+        "Prev-Mo SO (Stock)", "Prev-Mo SO (Higher)",
+        "Curr-Mo SO (Stock)", "Curr-Mo SO (Higher)",
+        "Total Pending SO (Stock)", "Total Pending SO (Higher)",
+        "Kit Status", "Shortage Count",
+    ]
+    main_data = []
+    for r in sim_rows:
+        main_data.append([
+            r.get("wo", ""), r.get("item_code", ""), r.get("item_name", ""),
+            r.get("status", ""),
+            r.get("remaining_qty", 0), r.get("uom", ""),
+            hq(r.get("remaining_qty_higher")), hu(r.get("remaining_qty_higher")),
+            r.get("produced_qty", 0), hq(r.get("produced_qty_higher")),
+            r.get("planned_qty", 0), hq(r.get("planned_qty_higher")),
+            r.get("prev_month_so", 0), hq(r.get("prev_month_so_higher")),
+            r.get("curr_month_so", 0), hq(r.get("curr_month_so_higher")),
+            r.get("total_pending_so", 0), hq(r.get("total_pending_so_higher")),
+            r.get("kit_status", ""), r.get("shortage_count", 0),
+        ])
+    write_sheet(wb.active, "Main", main_headers, main_data)
+
+    # ── Sheet 2 — Filters & Run Info (audit snapshot) ────────────────────
+    ws2 = wb.create_sheet("Filters & Run Info")
+    info = [
+        ("Generated", frappe.utils.now_datetime().strftime("%Y-%m-%d %H:%M:%S")),
+        ("Company", company or "(all)"),
+        ("Warehouses", ", ".join(warehouses_list) or "(all)"),
+        ("WO Statuses", ", ".join(wo_statuses_list) or "(TOC default)"),
+        ("SO Statuses", ", ".join(so_statuses_list) or "(TOC default)"),
+        ("PO Statuses", ", ".join(po_statuses_list) or "(TOC default)"),
+        ("Stock Mode", stock_mode),
+        ("Calc Mode", calc_mode),
+        ("Work Orders", str(len(sim_rows))),
+    ]
+    write_sheet(
+        ws2, "Filters & Run Info", ["Field", "Value"], [[k, v] for k, v in info]
+    )
+
+    # ── Sheet 3 — Material Shortage (flatten shortage_items, both UOMs) ──
+    short = []
+    for r in sim_rows:
+        wo_name = r.get("wo", "")
+        fg_item = r.get("item_code", "")
+        for s in (r.get("shortage_items") or []):
+            short.append((wo_name, fg_item, s))
+    sh_headers = [
+        "WO", "For FG", "Item Code", "Item",
+        "Shortage (Stock)", "UOM", "Shortage (Higher)", "Higher UOM",
+        "Required (Stock)", "Required (Higher)",
+        "Available (Stock)", "Available (Higher)",
+    ]
+    sh_data = []
+    for wo_name, fg_item, s in sorted(
+        short, key=lambda x: -(flt(x[2].get("shortage")) or 0)
+    ):
+        sh_data.append([
+            wo_name, fg_item, s.get("item_code", ""), s.get("item_name", ""),
+            s.get("shortage", 0), s.get("uom", ""),
+            hq(s.get("shortage_higher")), hu(s.get("shortage_higher")),
+            s.get("required", 0), hq(s.get("required_higher")),
+            s.get("available", 0), hq(s.get("available_higher")),
+        ])
+    write_sheet(
+        wb.create_sheet("Material Shortage"), "Material Shortage", sh_headers, sh_data
+    )
+
+    # ── Sheet 4 — Dispatch (dict keyed by item_code; both UOMs) ──────────
+    dp_headers = [
+        "Item Code", "Item", "UOM",
+        "FG Stock (Stock)", "FG Stock (Higher)", "Higher UOM",
+        "Total Pending (Stock)", "Total Pending (Higher)",
+        "Total Reserved (Stock)", "Total Reserved (Higher)",
+    ]
+    dp_data = []
+    for ic, v in disp.items():
+        dp_data.append([
+            ic, v.get("item_name", ""), v.get("uom", ""),
+            v.get("fg_stock", 0), hq(v.get("fg_stock_higher")),
+            hu(v.get("fg_stock_higher")),
+            v.get("total_pending", 0), hq(v.get("total_pending_higher")),
+            v.get("total_reserved", 0), hq(v.get("total_reserved_higher")),
+        ])
+    write_sheet(wb.create_sheet("Dispatch"), "Dispatch", dp_headers, dp_data)
+
+    # ── Stream (mirror item_short_surplus_api.export_xlsx tail EXACTLY) ──
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    frappe.response.filename = (
+        f"wo_kitting_planner_"
+        f"{frappe.utils.now_datetime().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
+    frappe.response.filecontent = buf.getvalue()
+    frappe.response.type = "binary"
+    frappe.response.display_content_as = "attachment"
