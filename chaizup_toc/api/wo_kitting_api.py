@@ -471,6 +471,60 @@ def _wkp_parse_status_list(value, default):
     return cleaned or list(default)
 
 
+# ---------------------------------------------------------------------------
+# WAREHOUSE / COMPANY SCOPE HELPERS (PURE — no SQL execution)
+# CONTEXT  : The WKP planner queries (Pending SO/WO/PO, buffers) can optionally
+#            be narrowed to a set of warehouses and/or a single company. These
+#            helpers parse the warehouses/company kwargs and resolve the
+#            effective scope. They are the warehouse analogue of the _wkp_*
+#            status helpers above and are consumed by later WKP tasks.
+# RESTRICT : Keep these PURE (parse/resolve only). BLANK / empty input ⇒ []
+#            with active=False, which callers MUST treat as "all warehouses"
+#            (today's behavior — NO warehouse predicate applied).
+# ---------------------------------------------------------------------------
+def _wkp_parse_warehouses(value):
+    """Parse the warehouses kwarg (list | JSON-string | None | "") into a clean
+    list. EMPTY ⇒ [] which the callers treat as 'all warehouses' (today's
+    behavior — NO warehouse predicate)."""
+    import json as _json
+    if value in (None, "", b""):
+        return []
+    if isinstance(value, str):
+        try:
+            value = _json.loads(value)
+        except Exception:
+            value = [value]
+    return [str(w).strip() for w in (value or []) if str(w).strip()]
+
+
+def _wkp_company_warehouses(company):
+    """Return the list of warehouse names belonging to `company`, or [] when no
+    company is given. Used to AND a company filter into the warehouse scope."""
+    if not company:
+        return []
+    return frappe.get_all("Warehouse", filters={"company": company, "disabled": 0},
+                          pluck="name") or []
+
+
+def _wkp_resolve_wh_scope(warehouses=None, company=None):
+    """Combine an explicit warehouse list with a company's warehouses.
+    Returns (wh_list, active) where active=True means a predicate should be
+    applied. When both are given, intersect; when only company, use its
+    warehouses; when neither, active=False (scope everything — today's behavior).
+    """
+    whs = _wkp_parse_warehouses(warehouses)
+    comp_whs = _wkp_company_warehouses(company)
+    if whs and comp_whs:
+        scope = [w for w in whs if w in comp_whs]
+    elif whs:
+        scope = whs
+    elif comp_whs:
+        scope = comp_whs
+    else:
+        return [], False
+    return scope, True
+
+
 def _wkp_split_status_and_workflow(status_list):
     """
     Split a JS-supplied list like ["To Deliver", "Workflow: Confirmed"]
