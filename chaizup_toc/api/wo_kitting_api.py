@@ -787,7 +787,7 @@ def get_work_order_statuses():
 
 
 @frappe.whitelist()
-def get_open_work_orders(status_filter=None, wo_statuses=None):
+def get_open_work_orders(status_filter=None, wo_statuses=None, warehouses=None, company=None):
     """
     Fetch open Work Orders for the planner, scoped to the user-selected WO statuses.
 
@@ -801,6 +801,13 @@ def get_open_work_orders(status_filter=None, wo_statuses=None):
             "open". When None or empty, defaults to
             _DEFAULT_WKP_WO_STATUSES (Not Started / In Process /
             Material Transferred).
+        warehouses (list | JSON-string, optional):
+            WKP Phase-A warehouse scope. When given (or `company` is given),
+            the result is restricted to WOs whose finished-good warehouse
+            (Work Order.fg_warehouse) falls inside the resolved scope.
+        company (str, optional):
+            WKP Phase-A company scope. ANDed with `warehouses` via
+            _wkp_resolve_wh_scope (intersection when both supplied).
     """
     # WKP-034: prefer the multi-select; fall back to default if neither is set.
     selected = _wkp_parse_status_list(wo_statuses, _toc_settings_wo_statuses())
@@ -808,10 +815,25 @@ def get_open_work_orders(status_filter=None, wo_statuses=None):
         # Back-compat: a legacy single-status filter further narrows.
         selected = [s for s in selected if s == status_filter] or [status_filter]
 
+    # CONTEXT (WKP Phase-A): resolve the optional warehouse/company scope.
+    # wh_active is False when neither warehouses nor company is supplied —
+    # in that case NO warehouse predicate is applied and the resultset is
+    # byte-for-byte identical to pre-Phase-A behavior (the "no-surprise" rule).
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+
     filters = [
         ["docstatus", "=", 1],
         ["status", "in", selected],
     ]
+
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on Work
+    # Order.fg_warehouse (the finished-good warehouse column). Appended ONLY
+    # when wh_active — blank scope ⇒ no predicate ⇒ today's behavior.
+    # NOTE: this function uses frappe.get_all (filters list), not raw SQL,
+    # so the scope is expressed as a ["fg_warehouse", "in", [...]] filter
+    # rather than an SQL fragment + %(whs)s param.
+    if wh_active:
+        filters.append(["fg_warehouse", "in", wh_scope])
 
     wos = frappe.get_all(
         "Work Order",
@@ -1919,7 +1941,8 @@ def _explode_multi_level(bom_map, max_depth=6):
 #  STOCK POOL
 # ═══════════════════════════════════════════════════════════════════════
 
-def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None):
+def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None,
+                      warehouses=None, company=None):
     """
     Build the available qty map per item code.
 
@@ -1947,13 +1970,26 @@ def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None
     wo_statuses_eff = wo_statuses or list(_DEFAULT_WKP_WO_STATUSES)
     po_statuses_eff = po_statuses or list(_DEFAULT_WKP_PO_STATUSES)
 
+    # CONTEXT (WKP Phase-A): resolve the optional warehouse/company scope ONCE.
+    # wh_active is False when neither is supplied — every warehouse predicate
+    # below is then skipped and both the param dict and SQL stay byte-for-byte
+    # identical to pre-Phase-A behavior (the "no-surprise" rule).
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+
     # ── Base: physical Bin stock ────────────────────────────────────────
-    rows = frappe.db.sql("""
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on Bin.warehouse.
+    # Blank scope ⇒ wh_active False ⇒ no fragment, no "whs" param ⇒ today's behavior.
+    bin_wh_sql = " AND warehouse IN %(whs)s" if wh_active else ""
+    bin_params = {"items": item_codes}
+    if wh_active:
+        bin_params["whs"] = tuple(wh_scope)
+    rows = frappe.db.sql(f"""
         SELECT item_code, SUM(actual_qty) AS qty
         FROM   `tabBin`
         WHERE  item_code IN %(items)s
+          {bin_wh_sql}
         GROUP BY item_code
-    """, {"items": item_codes}, as_dict=True)
+    """, bin_params, as_dict=True)
 
     pool = {r.item_code: flt(r.qty) for r in rows}
     # Ensure all item_codes have an entry (default 0)
@@ -1964,7 +2000,16 @@ def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None
         return pool
 
     # ── Open PO remaining (user-selected PO statuses) ───────────────────
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on the PO Item's
+    # row warehouse, falling back to the PO header set_warehouse when the row
+    # warehouse is blank. Parent `tabPurchase Order po` is already JOINed.
+    # Blank scope ⇒ no fragment, no "whs" param ⇒ today's behavior.
     po_clause = _wkp_po_status_clause(po_statuses_eff)
+    po_wh_sql = (" AND COALESCE(NULLIF(poi.warehouse,''), NULLIF(po.set_warehouse,'')) IN %(whs)s"
+                 if wh_active else "")
+    po_params = {"items": item_codes}
+    if wh_active:
+        po_params["whs"] = tuple(wh_scope)
     po_rows = frappe.db.sql(f"""
         SELECT poi.item_code,
                SUM(poi.qty - COALESCE(poi.received_qty, 0)) AS expected
@@ -1972,15 +2017,25 @@ def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None
         JOIN   `tabPurchase Order` po ON po.name = poi.parent
         WHERE  poi.item_code IN %(items)s
           AND  {po_clause}
+          {po_wh_sql}
           AND  (poi.qty - COALESCE(poi.received_qty, 0)) > 0
         GROUP BY poi.item_code
-    """, {"items": item_codes}, as_dict=True)
+    """, po_params, as_dict=True)
 
     for r in po_rows:
         pool[r.item_code] = pool.get(r.item_code, 0) + flt(r.expected)
 
     # ── Open Purchase MR (not yet converted to PO) ──────────────────────
-    mr_rows = frappe.db.sql("""
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on the MR Item's
+    # row warehouse, falling back to the MR header set_warehouse when blank.
+    # Parent `tabMaterial Request mr` is already JOINed.
+    # Blank scope ⇒ no fragment, no "whs" param ⇒ today's behavior.
+    mr_wh_sql = (" AND COALESCE(NULLIF(mri.warehouse,''), NULLIF(mr.set_warehouse,'')) IN %(whs)s"
+                 if wh_active else "")
+    mr_params = {"items": item_codes}
+    if wh_active:
+        mr_params["whs"] = tuple(wh_scope)
+    mr_rows = frappe.db.sql(f"""
         SELECT mri.item_code,
                SUM(mri.qty - COALESCE(mri.ordered_qty, 0)) AS expected
         FROM   `tabMaterial Request Item` mri
@@ -1989,23 +2044,32 @@ def _build_stock_pool(stock_mode, item_codes, wo_statuses=None, po_statuses=None
           AND  mr.docstatus = 1
           AND  mr.material_request_type = 'Purchase'
           AND  mr.status NOT IN ('Cancelled', 'Stopped', 'Ordered')
+          {mr_wh_sql}
           AND  (mri.qty - COALESCE(mri.ordered_qty, 0)) > 0
         GROUP BY mri.item_code
-    """, {"items": item_codes}, as_dict=True)
+    """, mr_params, as_dict=True)
 
     for r in mr_rows:
         pool[r.item_code] = pool.get(r.item_code, 0) + flt(r.expected)
 
     # ── Open WO expected output, sub-assembly WOs (user-selected WO statuses) ──
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on the WO
+    # finished-good warehouse (Work Order.fg_warehouse, alias `wo`).
+    # Blank scope ⇒ no fragment, no "whs" param ⇒ today's behavior.
     wo_clause = _wkp_wo_status_clause(wo_statuses_eff)
+    wo_wh_sql = " AND wo.fg_warehouse IN %(whs)s" if wh_active else ""
+    wo_params = {"items": item_codes}
+    if wh_active:
+        wo_params["whs"] = tuple(wh_scope)
     wo_rows = frappe.db.sql(f"""
         SELECT production_item                                 AS item_code,
                SUM(qty - COALESCE(produced_qty, 0))           AS expected
         FROM   `tabWork Order` wo
         WHERE  production_item IN %(items)s
           AND  {wo_clause}
+          {wo_wh_sql}
         GROUP BY production_item
-    """, {"items": item_codes}, as_dict=True)
+    """, wo_params, as_dict=True)
 
     for r in wo_rows:
         pool[r.item_code] = pool.get(r.item_code, 0) + flt(r.expected)
