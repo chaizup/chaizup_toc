@@ -752,12 +752,31 @@ def wkp_get_filter_universe():
     except Exception:
         wh_default = []
 
+    # 2026-06-05 — mandatory-scope modal: single default warehouse.
+    # CONTEXT: the new opening modal scopes the planner to exactly ONE warehouse.
+    #   Prefer the explicit TOC Settings `default_so_warehouse`; if blank, fall
+    #   back to the first "Inventory" warehouse (wh_default[0]); else "".
+    wh_single_default = ""
+    try:
+        wh_single_default = frappe.db.get_single_value("TOC Settings", "default_so_warehouse") or ""
+    except Exception:
+        wh_single_default = ""
+    if not wh_single_default and wh_default:
+        wh_single_default = wh_default[0]
+
     companies = frappe.get_all("Company", pluck="name", order_by="name asc")
+    # 2026-06-05 — mandatory-scope modal: read the new TOC Settings
+    #   `default_wkp_company` first, then fall back to Global Defaults company.
     company_default = ""
     try:
-        company_default = frappe.db.get_single_value("Global Defaults", "default_company") or ""
+        company_default = frappe.db.get_single_value("TOC Settings", "default_wkp_company") or ""
     except Exception:
         company_default = ""
+    if not company_default:
+        try:
+            company_default = frappe.db.get_single_value("Global Defaults", "default_company") or ""
+        except Exception:
+            company_default = ""
     if not company_default and len(companies) == 1:
         company_default = companies[0]
 
@@ -765,6 +784,7 @@ def wkp_get_filter_universe():
         "statuses": statuses,
         "warehouses": warehouses,
         "wh_default": wh_default,
+        "wh_single_default": wh_single_default,
         "companies": companies,
         "company_default": company_default,
     }

@@ -274,7 +274,7 @@
           <div class="wkp-ms" id="wkp-po-ms" tabindex="0" data-key="po"></div>
         </div>
         <div class="wkp-fr-group wkp-fr-wide">
-          <label class="wkp-fr-label">Warehouses</label>
+          <label class="wkp-fr-label">Warehouse</label>
           <div class="wkp-ms" id="wkp-wh-ms" tabindex="0" data-key="wh"></div>
         </div>
         <div class="wkp-fr-group">
@@ -1046,6 +1046,31 @@
       <div class="wkp-m2-sub" id="wkp-m2-sub"></div>
       <div class="wkp-m2-body" id="wkp-m2-body"></div>
       <div class="wkp-m2-foot" id="wkp-m2-foot"></div>
+    </div>
+  </div>
+
+  <!-- 2026-06-05 — mandatory scope modal: pick one Warehouse + one Company
+       (or Use defaults) before the planner loads. Shown once per session. -->
+  <div class="wkp-scope-overlay" id="wkp-scope-overlay" style="display:none">
+    <div class="wkp-scope" role="dialog" aria-modal="true" aria-labelledby="wkp-scope-title">
+      <div class="wkp-scope-head">
+        <div class="wkp-scope-title" id="wkp-scope-title">Select Warehouse &amp; Company</div>
+      </div>
+      <div class="wkp-scope-sub">Choose the Warehouse and Company to scope the planner, or use the TOC Settings defaults.</div>
+      <div class="wkp-scope-body">
+        <div class="wkp-scope-field">
+          <label class="wkp-fr-label">Warehouse</label>
+          <select class="wkp-ms" id="wkp-scope-wh" tabindex="0"></select>
+        </div>
+        <div class="wkp-scope-field">
+          <label class="wkp-fr-label">Company</label>
+          <select class="wkp-ms" id="wkp-scope-company" tabindex="0"></select>
+        </div>
+      </div>
+      <div class="wkp-scope-foot">
+        <button class="wkp-btn wkp-btn-sm" id="wkp-scope-default" type="button">Use defaults</button>
+        <button class="wkp-btn wkp-btn-sm wkp-btn-brand" id="wkp-scope-apply" type="button" disabled>Apply</button>
+      </div>
     </div>
   </div>
 

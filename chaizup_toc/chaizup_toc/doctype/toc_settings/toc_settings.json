@@ -45,6 +45,7 @@
   "enable_projection_automation",
   "column_break_fnpt",
   "default_so_warehouse",
+  "default_wkp_company",
   "pending_section_break",
   "projection_pending_so_statuses",
   "pending_wo_statuses",
@@ -279,6 +280,13 @@
    "fieldtype": "Link",
    "label": "Default Warehouse for Sales Orders",
    "options": "Warehouse"
+  },
+  {
+   "description": "Default Company used by the WO Kitting Planner's mandatory scope modal when the user chooses \"Use defaults\".",
+   "fieldname": "default_wkp_company",
+   "fieldtype": "Link",
+   "label": "Default Company (WO Kitting Planner)",
+   "options": "Company"
   },
   {
    "description": "Configure which Sales Order, Work Order, and Purchase Order pairs are counted as <b>open / pending</b> by the engine. Each field is a multi-select of <code>&lt;Status&gt; : &lt;Workflow State&gt;</code> pairs sourced from live data. Backend parses the pair list and routes the relevant side (status for the \"Pending \u2026\" fields, workflow_state for the \"Draft \u2026 Workflow\" fields).",

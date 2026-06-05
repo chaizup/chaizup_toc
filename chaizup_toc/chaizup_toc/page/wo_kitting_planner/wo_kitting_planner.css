@@ -3841,3 +3841,74 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 }
 .wkp-m2 .wkp-m2-body a { color: var(--indigo-600, #4f46e5); text-decoration: none; font-weight: 600; }
 .wkp-m2 .wkp-m2-body a:hover { text-decoration: underline; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Mandatory scope modal (2026-06-05)
+   Full-screen, non-dismissable overlay shown once per session until the user
+   picks a Warehouse + Company (or Use defaults). Reuses the page palette vars
+   and mirrors the .wkp-m2 modal family. No Tailwind / CDN.
+   ────────────────────────────────────────────────────────────────────────── */
+.wkp-scope-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.wkp-scope {
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--slate-200, #e2e8f0);
+  border-radius: var(--r-lg, 14px);
+  box-shadow: var(--sh-xl, 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04));
+  width: 100%; max-width: 460px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.wkp-scope-head {
+  padding: 18px 22px 4px;
+}
+.wkp-scope-title {
+  font-size: 16px; font-weight: 700; line-height: 1.3;
+  color: var(--slate-900, #0f172a);
+  font-family: var(--font-display, "Oswald", sans-serif);
+}
+.wkp-scope-sub {
+  padding: 0 22px 14px; font-size: 12px; color: var(--slate-500, #64748b);
+}
+.wkp-scope-body {
+  padding: 0 22px 8px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.wkp-scope-field {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.wkp-scope-field .wkp-fr-label {
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  color: var(--slate-600, #475569); text-transform: uppercase;
+}
+.wkp-scope-field select.wkp-ms {
+  width: 100%; height: 34px; padding: 0 10px;
+  font-size: 13px; color: var(--slate-800, #1e293b);
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--slate-300, #cbd5e1);
+  border-radius: var(--r-sm, 6px);
+  cursor: pointer; appearance: auto;
+}
+.wkp-scope-field select.wkp-ms:focus {
+  outline: none; border-color: var(--indigo-500, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+.wkp-scope-foot {
+  padding: 14px 22px; margin-top: 6px;
+  border-top: 1px solid var(--slate-100, #f1f5f9);
+  background: var(--slate-50, #f8fafc);
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+}
+.wkp-scope-foot .wkp-btn[disabled] {
+  opacity: .5; cursor: not-allowed;
+}
+/* Explicit rules for the modal control IDs so every wkp-scope-* token used in
+   the JS/HTML has a matching CSS reference (parity with the verification grep). */
+#wkp-scope-wh,
+#wkp-scope-company { display: block; }
+#wkp-scope-apply,
+#wkp-scope-default { min-width: 92px; }

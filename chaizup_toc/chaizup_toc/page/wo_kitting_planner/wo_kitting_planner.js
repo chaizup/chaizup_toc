@@ -2666,9 +2666,25 @@ class WOKittingPlanner {
   }
 
   /* Single-value Link picker (Company). Ported from ISS _mkSingleLink.
-     Click selects exactly one option then closes. Writes _selCompany. */
+     Click selects exactly one option then closes.
+     2026-06-05 — generalized to drive EITHER company or warehouse:
+       key==="company" → reads/writes this._selCompany (a string).
+       key==="wh"      → reads/writes this._selWh as a 1-item array
+                         ([name] when set, [] when cleared) so the backend
+                         `warehouses` JSON-list contract is unchanged. */
   _wkpSingleLink(host, key, doctype) {
     if (!host) return;
+    // key-aware accessors so one picker can back two distinct state slots.
+    const getVal = () => (key === "wh")
+      ? ((this._selWh && this._selWh[0]) || "")
+      : (this._selCompany || "");
+    const setVal = (name) => {
+      if (key === "wh") {
+        this._selWh = name ? [name] : [];
+      } else {
+        this._selCompany = name || "";
+      }
+    };
     const $ms   = $(host).empty().attr("tabindex", "0");
     const $drop = $(`<div class="wkp-ms-dropdown"></div>`);
     const $head = $(`
@@ -2688,14 +2704,14 @@ class WOKittingPlanner {
 
     const renderChip = () => {
       $ms.empty();
-      const v = this._selCompany;
+      const v = getVal();
       if (!v) {
         $ms.append(`<span class="wkp-ms-placeholder">${__("Any")}</span>`);
       } else {
         const $c = $(`<span class="wkp-ms-chip" title="${_wkpEsc(v)}">${_wkpEsc(v)}<span class="wkp-ms-chip-x" title="${_wkpEsc(__("Clear"))}">&times;</span></span>`);
         $c.find(".wkp-ms-chip-x").on("click", (e) => {
           e.stopPropagation();
-          this._selCompany = "";
+          setVal("");
           renderChip(); this._markLoadDirty();
         });
         $ms.append($c);
@@ -2703,10 +2719,12 @@ class WOKittingPlanner {
       $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
     };
 
-    // Company is a tiny list — seed from the universe payload, no live fetch.
-    const _seed = (doctype === "Company" && this._filterUniverse)
-      ? (this._filterUniverse.companies || [])
-      : null;
+    // Tiny lists — seed from the universe payload, no live fetch.
+    let _seed = null;
+    if (this._filterUniverse) {
+      if (doctype === "Company") _seed = (this._filterUniverse.companies || []);
+      else if (doctype === "Warehouse") _seed = (this._filterUniverse.warehouses || []).map(w => w.name);
+    }
 
     const fetchAndRender = (term = "") => {
       const renderRows = (rows) => {
@@ -2716,7 +2734,7 @@ class WOKittingPlanner {
           return;
         }
         rows.forEach(name => {
-          const isSel = this._selCompany === name;
+          const isSel = getVal() === name;
           const $o = $(`
               <label class="wkp-ms-option ${isSel ? "selected" : ""}">
                   <span class="wkp-ms-option-text">${_wkpEsc(name)}</span>
@@ -2725,7 +2743,7 @@ class WOKittingPlanner {
           $o.on("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            this._selCompany = isSel ? "" : name;
+            setVal(isSel ? "" : name);
             renderChip();
             $drop.removeClass("open");
             this._markLoadDirty();
@@ -2758,7 +2776,7 @@ class WOKittingPlanner {
 
     $head.find(".wkp-ms-act-clear").on("click", (e) => {
       e.stopPropagation();
-      this._selCompany = "";
+      setVal("");
       renderChip(); fetchAndRender($search.val()); this._markLoadDirty();
     });
 
@@ -2848,13 +2866,107 @@ class WOKittingPlanner {
         this._wkpPairMulti(document.getElementById("wkp-so-ms"), "so", st.all_so_statuses || []);
         this._wkpPairMulti(document.getElementById("wkp-wo-ms"), "wo", st.all_wo_statuses || []);
         this._wkpPairMulti(document.getElementById("wkp-po-ms"), "po", st.all_po_statuses || []);
-        this._wkpLinkMulti(document.getElementById("wkp-wh-ms"), "wh", "Warehouse", {});
+        // 2026-06-05 — Warehouse + Company are now SINGLE-selects in the
+        //   filter row (changing them only marks Load dirty — explicit Load
+        //   reloads with the new scope). The first data load is GATED behind
+        //   the mandatory scope modal below; it never runs unconditionally.
+        this._wkpSingleLink(document.getElementById("wkp-wh-ms"), "wh", "Warehouse");
         this._wkpSingleLink(document.getElementById("wkp-company-ms"), "company", "Company");
-        this._clearLoadDirty();
-        // First load runs AFTER seeding so warehouse/company defaults apply.
-        this.load();
+
+        // ── Scope gate ──────────────────────────────────────────────────
+        // If a scope is already chosen this session, reflect it and load.
+        // Otherwise show the mandatory modal and DO NOT load yet.
+        let stored = null;
+        try { stored = JSON.parse(sessionStorage.getItem("wkp.scope") || "null"); }
+        catch (e) { stored = null; }
+        if (stored && stored.warehouse && stored.company) {
+          this._selWh      = [stored.warehouse];
+          this._selCompany = stored.company;
+          this._reflectScopeFilters();
+          this._clearLoadDirty();
+          this.load();
+        } else {
+          this._openScopeModal(m);
+        }
       },
     });
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Mandatory scope modal (2026-06-05)
+  //   Shown once per session when no `wkp.scope` is in sessionStorage.
+  //   The planner does NOT load its data until the user either picks a
+  //   Warehouse + Company and clicks Apply, or clicks "Use defaults".
+  //   The modal cannot be dismissed without a choice (no X / no backdrop).
+  // ───────────────────────────────────────────────────────────────────
+  _openScopeModal(m) {
+    const overlay = document.getElementById("wkp-scope-overlay");
+    const whSel   = document.getElementById("wkp-scope-wh");
+    const coSel   = document.getElementById("wkp-scope-company");
+    const applyBtn= document.getElementById("wkp-scope-apply");
+    const defBtn  = document.getElementById("wkp-scope-default");
+    if (!overlay || !whSel || !coSel || !applyBtn || !defBtn) {
+      // Fail-open: if the modal shell is missing, fall back to defaults so
+      // the page is never left blank with no way to load.
+      this._commitScope(
+        m.wh_single_default || ((m.warehouses || [])[0] || {}).name || "",
+        m.company_default   || (m.companies || [])[0] || "",
+      );
+      return;
+    }
+
+    // Populate the two native <select>s from the universe payload.
+    const fillSel = (sel, options, preselect) => {
+      sel.innerHTML = `<option value="">${_wkpEsc(__("Select…"))}</option>`;
+      (options || []).forEach((opt) => {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt;
+        if (opt === preselect) o.selected = true;
+        sel.appendChild(o);
+      });
+    };
+    const whNames = (m.warehouses || []).map(w => w.name);
+    fillSel(whSel, whNames, m.wh_single_default || "");
+    fillSel(coSel, m.companies || [], m.company_default || "");
+
+    const syncApply = () => { applyBtn.disabled = !(whSel.value && coSel.value); };
+    whSel.onchange = syncApply;
+    coSel.onchange = syncApply;
+    syncApply();
+
+    applyBtn.onclick = () => {
+      if (!whSel.value || !coSel.value) return;
+      this._commitScope(whSel.value, coSel.value);
+    };
+    defBtn.onclick = () => {
+      const wh = m.wh_single_default || whNames[0] || "";
+      const co = m.company_default   || (m.companies || [])[0] || "";
+      this._commitScope(wh, co);
+    };
+
+    overlay.style.display = "flex";
+  }
+
+  // commit(warehouse, company): persist for the session, reflect into the
+  // filter-row single-selects, hide the modal, clear dirty, then load.
+  _commitScope(warehouse, company) {
+    this._selWh      = warehouse ? [warehouse] : [];
+    this._selCompany = company || "";
+    this._reflectScopeFilters();
+    try {
+      sessionStorage.setItem("wkp.scope", JSON.stringify({ warehouse, company }));
+    } catch (e) { /* sessionStorage unavailable — proceed for this load */ }
+    const overlay = document.getElementById("wkp-scope-overlay");
+    if (overlay) overlay.style.display = "none";
+    this._clearLoadDirty();
+    this.load();
+  }
+
+  // Re-mount the filter-row Warehouse + Company single-selects so their chips
+  // reflect the current this._selWh / this._selCompany values.
+  _reflectScopeFilters() {
+    this._wkpSingleLink(document.getElementById("wkp-wh-ms"), "wh", "Warehouse");
+    this._wkpSingleLink(document.getElementById("wkp-company-ms"), "company", "Company");
   }
 
   // WKP-038 (2026-05-14): Hide / Unhide controls bar.
