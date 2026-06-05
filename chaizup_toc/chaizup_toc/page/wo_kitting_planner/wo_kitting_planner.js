@@ -1531,8 +1531,14 @@ class WOKittingPlanner {
       ? ` data-drill-item="${_esc(drill.item)}" data-drill-metric="${_esc(drill.metric)}"`
       : "";
     const cls = drill ? "wkp-qty-clickable" : "";
+    // Phase B: preserve fractional precision — WO units are whole (0 dp), but
+    // material/component qtys (shortage, item-view) are often fractional (2 dp).
+    // _fmt_num(x,0) would silently truncate e.g. 2.5 kg -> 3. Show 2 dp only when
+    // the value actually has a fractional part, keeping the old whole-unit look.
+    const _pq = Number(stockQty) || 0;
+    const primaryDp = Number.isInteger(_pq) ? 0 : 2;
     return `<div class="wkp-qty-cell ${cls}"${drillAttr}>`
-         + `<div class="wkp-qty-primary">${_fmt_num(stockQty, 0)}</div>`
+         + `<div class="wkp-qty-primary">${_fmt_num(stockQty, primaryDp)}</div>`
          + `<div class="wkp-qty-uom">${_esc(stockUom || "")}</div>${sec}</div>`;
   }
 
