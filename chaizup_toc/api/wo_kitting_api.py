@@ -885,7 +885,8 @@ def get_open_work_orders(status_filter=None, wo_statuses=None, warehouses=None, 
 @frappe.whitelist()
 def simulate_kitting(work_orders_json, stock_mode="current_only",
                      calc_mode="isolated", multi_level=0,
-                     wo_statuses=None, po_statuses=None):
+                     wo_statuses=None, po_statuses=None,
+                     warehouses=None, company=None):
     """
     Main kitting simulation endpoint.
 
@@ -950,10 +951,14 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
     # ── Step 3: Stock pool ──────────────────────────────────────────────
     # WKP-034: thread the user-selected WO/PO statuses into the supply pool
     # so "current_and_expected" honours the page filter.
+    # RESTRICT (WKP Phase-A): forward the optional warehouse/company scope to
+    # _build_stock_pool — that callee applies the conditional warehouse
+    # predicate. Blank warehouses+company ⇒ today's behavior (no-surprise rule).
     stock_pool = _build_stock_pool(
         stock_mode, all_comp_codes,
         wo_statuses=_wkp_parse_status_list(wo_statuses, _toc_settings_wo_statuses()),
         po_statuses=_wkp_parse_status_list(po_statuses, _toc_settings_po_statuses()),
+        warehouses=warehouses, company=company,
     )
 
     # ── Step 4: Dispatch info (Sales Orders) ────────────────────────────
@@ -1153,7 +1158,8 @@ def get_items_procurement_info(item_codes_json):
 
 
 @frappe.whitelist()
-def get_item_wo_summary(wo_statuses=None, so_statuses=None):
+def get_item_wo_summary(wo_statuses=None, so_statuses=None,
+                        warehouses=None, company=None):
     """
     FG-wise summary: all items with active Work Orders or pending Sales Orders.
     Called by the Item View tab to show production + demand context per FG item.
@@ -1182,7 +1188,20 @@ def get_item_wo_summary(wo_statuses=None, so_statuses=None):
     wo_clause = _wkp_wo_status_clause(wo_statuses_eff)
     so_clause = _wkp_so_status_clause(so_statuses_eff)
 
+    # CONTEXT (WKP Phase-A): resolve the optional warehouse/company scope ONCE.
+    # wh_active is False when neither is supplied — the WO + SO warehouse
+    # predicates below are then skipped and SQL + params stay byte-for-byte
+    # identical to pre-Phase-A behavior (the "no-surprise" rule).
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+
     # ── 1. Active Work Orders ──────────────────────────────────────────────
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on the WO
+    # finished-good warehouse (Work Order.fg_warehouse, alias `wo`).
+    # Blank scope ⇒ no fragment, no "whs" param ⇒ today's behavior.
+    wo_wh_sql = " AND wo.fg_warehouse IN %(whs)s" if wh_active else ""
+    wo_params = {}
+    if wh_active:
+        wo_params["whs"] = tuple(wh_scope)
     wos = frappe.db.sql(f"""
         SELECT
             wo.name         AS wo_name,
@@ -1195,7 +1214,8 @@ def get_item_wo_summary(wo_statuses=None, so_statuses=None):
             wo.status
         FROM `tabWork Order` wo
         WHERE {wo_clause}
-    """, as_dict=True)
+          {wo_wh_sql}
+    """, wo_params, as_dict=True)
 
     # Index WOs by item_code
     wo_by_item = {}
@@ -1217,6 +1237,15 @@ def get_item_wo_summary(wo_statuses=None, so_statuses=None):
         wo_by_item[ic]["remaining_qty"] += flt(wo.remaining_qty)
 
     # ── 2. Pending Sales Orders (user-selected statuses + workflow_state) ──
+    # RESTRICT (WKP Phase-A): conditional warehouse predicate on the SO Item's
+    # row warehouse, falling back to the SO header set_warehouse when blank.
+    # Parent `tabSales Order so` is already JOINed.
+    # Blank scope ⇒ no fragment, no "whs" param ⇒ today's behavior.
+    so_wh_sql = (" AND COALESCE(NULLIF(soi.warehouse,''), NULLIF(so.set_warehouse,'')) IN %(whs)s"
+                 if wh_active else "")
+    so_params = {}
+    if wh_active:
+        so_params["whs"] = tuple(wh_scope)
     sos = frappe.db.sql(f"""
         SELECT
             soi.item_code,
@@ -1228,8 +1257,9 @@ def get_item_wo_summary(wo_statuses=None, so_statuses=None):
         JOIN `tabSales Order` so ON so.name = soi.parent
         WHERE {so_clause}
           AND (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0.001
+          {so_wh_sql}
         GROUP BY soi.item_code
-    """, as_dict=True)
+    """, so_params, as_dict=True)
 
     so_by_item = {s.item_code: s for s in sos}
 
@@ -2605,7 +2635,8 @@ def _get_dispatch_info(item_codes):
 
 @frappe.whitelist()
 def get_dispatch_bottleneck(stock_mode="current_only",
-                            so_statuses=None, po_statuses=None):
+                            so_statuses=None, po_statuses=None,
+                            warehouses=None, company=None):
     """
     Dispatch bottleneck analysis — independent of WO simulation.
 
@@ -2649,10 +2680,20 @@ def get_dispatch_bottleneck(stock_mode="current_only",
     Returns:
         dict: {item_code: {fg_stock, total_pending, ..., so_list, item_name, uom, ...}}
     """
+    # CONTEXT (WKP Phase-A): resolve the optional warehouse/company scope ONCE.
+    # wh_active is False when neither is supplied — every warehouse predicate
+    # below is then skipped and SQL + params stay byte-for-byte identical to
+    # pre-Phase-A behavior (the "no-surprise" rule).
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+
     # ── Step 1: Discover all items with pending SOs (submitted + drafts) ──
     # WKP-034: thread the user-selected SO status filter through.
+    # RESTRICT (WKP Phase-A): forward warehouse/company so the SO demand query
+    # scopes by line/header warehouse. Blank ⇒ today's behavior.
     so_statuses_eff = _wkp_parse_status_list(so_statuses, _toc_settings_so_statuses())
-    so_rows = _get_open_so_detail(so_statuses=so_statuses_eff)
+    so_rows = _get_open_so_detail(
+        so_statuses=so_statuses_eff, warehouses=warehouses, company=company
+    )
 
     if not so_rows:
         return {}
@@ -2660,22 +2701,34 @@ def get_dispatch_bottleneck(stock_mode="current_only",
     item_codes = list({r["item_code"] for r in so_rows})
 
     # ── Step 2: FG physical stock ────────────────────────────────────
-    fg_stock = _get_fg_stock(item_codes)
+    # RESTRICT (WKP Phase-A): forward scope to _get_fg_stock — it applies the
+    # conditional Bin.warehouse predicate. Blank ⇒ today's behavior.
+    fg_stock = _get_fg_stock(item_codes, warehouses=warehouses, company=company)
 
     # When stock_mode = "current_and_expected", add open FG PO inbound qty
     # so the Dispatch tab reflects the same mode as the main simulation.
     if stock_mode == "current_and_expected":
         po_statuses_eff = _wkp_parse_status_list(po_statuses, _toc_settings_po_statuses())
         po_clause = _wkp_po_status_clause(po_statuses_eff)
+        # RESTRICT (WKP Phase-A): conditional warehouse predicate on the PO Item's
+        # row warehouse, falling back to the PO header set_warehouse when blank.
+        # Parent `tabPurchase Order po` is already JOINed.
+        # Blank scope ⇒ no fragment, no "whs" param ⇒ today's behavior.
+        po_in_wh_sql = (" AND COALESCE(NULLIF(poi.warehouse,''), NULLIF(po.set_warehouse,'')) IN %(whs)s"
+                        if wh_active else "")
+        po_in_params = {"items": item_codes}
+        if wh_active:
+            po_in_params["whs"] = tuple(wh_scope)
         po_inbound = frappe.db.sql(f"""
             SELECT poi.item_code, SUM(poi.qty - IFNULL(poi.received_qty, 0)) AS inbound
             FROM   `tabPurchase Order Item` poi
             JOIN   `tabPurchase Order` po ON po.name = poi.parent
             WHERE  poi.item_code IN %(items)s
               AND  {po_clause}
+              {po_in_wh_sql}
               AND  poi.received_qty < poi.qty
             GROUP BY poi.item_code
-        """, {"items": item_codes}, as_dict=True)
+        """, po_in_params, as_dict=True)
         for r in po_inbound:
             ic = r.item_code
             fg_stock[ic] = flt(fg_stock.get(ic, 0)) + flt(r.inbound)
@@ -2922,25 +2975,39 @@ def get_material_supply_detail(item_code):
     }
 
 
-def _get_fg_stock(item_codes):
+def _get_fg_stock(item_codes, warehouses=None, company=None):
     """
     Physical finished-good stock: sum of actual_qty across all warehouses.
+
+    WKP Phase-A: when a warehouse/company scope is supplied the Bin sum is
+    restricted to those warehouses; when blank, behavior is byte-for-byte the
+    pre-Phase-A "all warehouses" sum (no-surprise rule).
 
     Returns:
         dict: {item_code: actual_qty}
     """
     if not item_codes:
         return {}
-    rows = frappe.db.sql("""
+    # CONTEXT (WKP Phase-A): resolve optional warehouse/company scope.
+    # RESTRICT: conditional Bin.warehouse predicate — blank ⇒ no fragment,
+    # no "whs" param ⇒ today's behavior.
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+    bin_wh_sql = " AND warehouse IN %(whs)s" if wh_active else ""
+    bin_params = {"items": item_codes}
+    if wh_active:
+        bin_params["whs"] = tuple(wh_scope)
+    rows = frappe.db.sql(f"""
         SELECT item_code, SUM(actual_qty) AS qty
         FROM   `tabBin`
         WHERE  item_code IN %(items)s
+          {bin_wh_sql}
         GROUP BY item_code
-    """, {"items": item_codes}, as_dict=True)
+    """, bin_params, as_dict=True)
     return {r.item_code: flt(r.qty) for r in rows}
 
 
-def _get_open_so_detail(item_codes=None, so_statuses=None):
+def _get_open_so_detail(item_codes=None, so_statuses=None,
+                        warehouses=None, company=None):
     """
     Fetch all open (undelivered) Sales Order lines.
 
@@ -2968,7 +3035,19 @@ def _get_open_so_detail(item_codes=None, so_statuses=None):
     so_statuses_eff = _wkp_parse_status_list(so_statuses, _toc_settings_so_statuses())
     so_clause = _wkp_so_status_clause(so_statuses_eff)
 
+    # CONTEXT (WKP Phase-A): resolve the optional warehouse/company scope ONCE.
+    # RESTRICT: conditional warehouse predicate on the SO Item's row warehouse,
+    # falling back to the SO header set_warehouse when blank. Parent
+    # `tabSales Order so` is already JOINed in both branches. Blank scope ⇒
+    # no fragment, no "whs" param ⇒ today's behavior (the "no-surprise" rule).
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+    so_wh_sql = (" AND COALESCE(NULLIF(soi.warehouse,''), NULLIF(so.set_warehouse,'')) IN %(whs)s"
+                 if wh_active else "")
+
     if item_codes:
+        params = {"items": item_codes}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
         rows = frappe.db.sql(f"""
             SELECT soi.item_code,
                    so.name                                         AS so_name,
@@ -2985,12 +3064,16 @@ def _get_open_so_detail(item_codes=None, so_statuses=None):
             LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
             WHERE  soi.item_code IN %(items)s
               AND  {so_clause}
+              {so_wh_sql}
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
             ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
-        """, {"items": item_codes}, as_dict=True)
+        """, params, as_dict=True)
     else:
         # No item filter — fetch ALL items with pending SOs that pass the
         # user-selected status / workflow_state clause.
+        params = {}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
         rows = frappe.db.sql(f"""
             SELECT soi.item_code,
                    so.name                                         AS so_name,
@@ -3006,9 +3089,10 @@ def _get_open_so_detail(item_codes=None, so_statuses=None):
             JOIN   `tabSales Order` so ON so.name = soi.parent
             LEFT JOIN `tabCustomer` cust ON cust.name = so.customer
             WHERE  {so_clause}
+              {so_wh_sql}
               AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
             ORDER BY so.docstatus DESC, so.delivery_date ASC, so.creation ASC
-        """, as_dict=True)
+        """, params, as_dict=True)
 
     return [dict(r) for r in rows]
 
