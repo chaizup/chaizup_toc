@@ -695,6 +695,81 @@ def wkp_get_default_statuses():
     }
 
 
+# =============================================================================
+# WKP Phase-A / Task-2 (2026-06-05): wkp_get_filter_universe
+# -----------------------------------------------------------------------------
+# CONTEXT:
+#   One round-trip that seeds the WHOLE WKP filter bar in a single call so the
+#   frontend (Task 6) does not fire three separate requests on page load:
+#     - statuses   : the SO/WO/PO universe + TOC-Settings pending defaults
+#                    (re-uses wkp_get_default_statuses as-is — single source
+#                    of truth, never re-implement that logic here),
+#     - warehouses : every enabled non-group Warehouse (the picker options),
+#                    with the TOC Settings "Inventory" warehouses as the
+#                    on-load default selection,
+#     - companies  : all companies (options) + the default company.
+#
+#   A BLANK warehouse default (wh_default == []) is intentional and means the
+#   page loads across ALL warehouses — i.e. today's unscoped view. Only when
+#   TOC Settings actually classifies warehouses as "Inventory" does the page
+#   pre-scope to them on load.
+#
+# DANGER:
+#   - The "Inventory" warehouse default is read from TOC Settings'
+#     `warehouse_rules` child table (fieldname `warehouse_rules`, child fields
+#     `warehouse` + `warehouse_purpose`, purpose option "Inventory"). This MUST
+#     stay in lockstep with the same read in buffer_calculator.py and
+#     item_short_surplus_api.py. If the child schema is renamed, update all of
+#     those call sites together.
+# RESTRICT:
+#   - Do NOT re-derive pending status defaults here — always delegate to
+#     wkp_get_default_statuses() so the TOC-Settings contract stays single-source.
+# =============================================================================
+@frappe.whitelist()
+def wkp_get_filter_universe():
+    """One call that seeds the WKP filter bar:
+      - statuses: same payload as wkp_get_default_statuses (SO/WO/PO universe +
+        TOC-Settings defaults, with 'Workflow: <state>' entries),
+      - warehouses: all enabled non-group warehouses (options) + the TOC Settings
+        'Inventory' warehouses as the on-load default,
+      - companies: all companies (options) + the default company.
+    Blank warehouse default ⇒ the page loads across ALL warehouses (today's view).
+    """
+    statuses = wkp_get_default_statuses()
+
+    warehouses = frappe.get_all(
+        "Warehouse",
+        filters={"disabled": 0, "is_group": 0},
+        fields=["name", "company"],
+        order_by="name asc",
+    )
+    wh_default = []
+    try:
+        toc = frappe.get_single("TOC Settings")
+        for r in (toc.get("warehouse_rules") or []):
+            if (r.warehouse_purpose or "").strip() == "Inventory" and r.warehouse:
+                wh_default.append(r.warehouse)
+    except Exception:
+        wh_default = []
+
+    companies = frappe.get_all("Company", pluck="name", order_by="name asc")
+    company_default = ""
+    try:
+        company_default = frappe.db.get_single_value("Global Defaults", "default_company") or ""
+    except Exception:
+        company_default = ""
+    if not company_default and len(companies) == 1:
+        company_default = companies[0]
+
+    return {
+        "statuses": statuses,
+        "warehouses": warehouses,
+        "wh_default": wh_default,
+        "companies": companies,
+        "company_default": company_default,
+    }
+
+
 @frappe.whitelist()
 def get_work_order_statuses():
     """
