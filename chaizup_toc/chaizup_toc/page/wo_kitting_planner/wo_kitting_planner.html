@@ -1026,4 +1026,23 @@
     </div>
   </div>
 
+  <!-- 2026-06-05 (Phase B / Task 6) — qty drill-down modal (both UOMs).
+       Opened by cell-click on any .wkp-qty-clickable cell (see JS
+       _openQtyDrilldown / _renderQtyDrilldown). Lives OUTSIDE the data table
+       so page-level filters never touch it. Distinct id/class family
+       (wkp-m2-overlay / wkp-m2) so it never collides with the .wkp-overlay
+       modals. POR-023: ZERO raw apostrophes here (a stray &apos; blanks the
+       page) — use &apos; / &quot; entities in any literal text. -->
+  <div class="wkp-m2-overlay" id="wkp-m2-overlay" style="display:none">
+    <div class="wkp-m2" role="dialog" aria-modal="true" aria-labelledby="wkp-m2-title">
+      <div class="wkp-m2-head">
+        <div class="wkp-m2-title" id="wkp-m2-title">Quantity breakdown</div>
+        <button class="wkp-m2-close" id="wkp-m2-close" type="button" title="Close">&times;</button>
+      </div>
+      <div class="wkp-m2-sub" id="wkp-m2-sub"></div>
+      <div class="wkp-m2-body" id="wkp-m2-body"></div>
+      <div class="wkp-m2-foot" id="wkp-m2-foot"></div>
+    </div>
+  </div>
+
 </div>

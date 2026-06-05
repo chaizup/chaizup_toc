@@ -1196,6 +1196,30 @@ class WOKittingPlanner {
       if (e.target.id === "wkp-row-detail-modal") this._closeModal("wkp-row-detail-modal");
     });
 
+    // ── Phase B / Task 6 (2026-06-05): qty-cell both-UOM drill-down ─────
+    // Delegated on the page root. Cell-scoped (closest .wkp-qty-clickable)
+    // + stopPropagation so it NEVER fires the WO-plan row drag / sequence
+    // handlers that also live under #wkp-root.
+    // DANGER: the drill-down MUST stay cell-click — never promote to a
+    // row-click, or it will hijack the WO drag-to-reorder interaction.
+    const wkpRoot = document.getElementById("wkp-root");
+    if (wkpRoot) wkpRoot.addEventListener("click", (e) => {
+      const cell = e.target.closest(".wkp-qty-clickable");
+      if (!cell) return;
+      e.stopPropagation();
+      this._openQtyDrilldown(cell.dataset.drillItem, cell.dataset.drillMetric);
+    });
+    // Close handlers (button + backdrop). The wkp-m2 modal hides via inline
+    // display (its own overlay is NOT a .wkp-overlay, so _closeModal — which
+    // sets display:none — works, but we set it directly here for clarity and
+    // to mirror the open path that sets display:"flex").
+    const m2Close = document.getElementById("wkp-m2-close");
+    const m2Overlay = document.getElementById("wkp-m2-overlay");
+    if (m2Close) m2Close.addEventListener("click", () => { m2Overlay.style.display = "none"; });
+    if (m2Overlay) m2Overlay.addEventListener("click", (e) => {
+      if (e.target === m2Overlay) m2Overlay.style.display = "none";
+    });
+
     // ── Inline column sort bar (Task 7) ────────────────────────────────
     // Wires the #wkp-sort* widgets ported from item-short-surplus. The
     // column list is sourced live from the ACTIVE pane's <table> header,
@@ -6804,6 +6828,70 @@ class WOKittingPlanner {
   _showEmpty(show) {
     const el = document.getElementById("wkp-empty");
     if (el) el.style.display = show ? "flex" : "none";
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Phase B / Task 6 (2026-06-05): both-UOM qty drill-down modal
+  // ─────────────────────────────────────────────────────────────────────
+  // Opened from any qty cell rendered with drill={item,metric} (see
+  // _qtyCell). Calls the live server resolver get_qty_drilldown with the
+  // CURRENT selections (warehouses/company/WO+SO+PO statuses) so the
+  // breakdown always reflects the same scope as the table it was clicked
+  // from. Stock + higher UOM are shown side-by-side.
+  _openQtyDrilldown(item, metric) {
+    if (!item || !metric) return;
+    const overlay = document.getElementById("wkp-m2-overlay");
+    const body = document.getElementById("wkp-m2-body");
+    if (body) body.innerHTML = `<div class="wkp-m2-loading">Loading…</div>`;
+    if (overlay) overlay.style.display = "flex";
+    frappe.call({
+      method: "chaizup_toc.api.wo_kitting_api.get_qty_drilldown",
+      args: {
+        item_code: item, metric,
+        warehouses: JSON.stringify(this._selWh || []),
+        company: this._selCompany || "",
+        wo_statuses: JSON.stringify(this._selWo || []),
+        so_statuses: JSON.stringify(this._selSo || []),
+        po_statuses: JSON.stringify(this._selPo || []),
+      },
+      callback: (r) => this._renderQtyDrilldown(r && r.message),
+    });
+  }
+
+  _renderQtyDrilldown(d) {
+    if (!d) return;
+    const METRIC_LABEL = {
+      stock: "Current Stock", pending_so: "Pending Sales Orders",
+      pending_po: "Pending Purchase Orders", pending_wo: "Pending Work Orders",
+      pending_mr: "Pending Material Requests",
+    };
+    const title = document.getElementById("wkp-m2-title");
+    const sub   = document.getElementById("wkp-m2-sub");
+    const body  = document.getElementById("wkp-m2-body");
+    const foot  = document.getElementById("wkp-m2-foot");
+    title.textContent = `${d.item_name || d.item_code} — ${METRIC_LABEL[d.metric] || d.metric || ""}`;
+    sub.textContent = `Stock UOM: ${d.stock_uom}${d.higher_uom ? "  ·  Higher UOM: " + d.higher_uom : ""}`;
+    const rows = (d.rows || []).map((x) => {
+      const dt = (x.voucher_type || "").toLowerCase().replace(/ /g, "-");
+      const link = x.voucher
+        ? `<a href="/app/${_esc(dt)}/${_esc(x.voucher)}" target="_blank">${_esc(x.voucher)}</a>`
+        : "";
+      return `<tr>
+        <td>${_esc(x.voucher_type || "")}</td>
+        <td>${link}</td>
+        <td>${_esc(x.party_or_wh || "")}</td>
+        <td class="ta-r">${_fmt_num(x.qty_stock, 2)} ${_esc(d.stock_uom)}</td>
+        <td class="ta-r">${x.qty_higher != null ? _fmt_num(x.qty_higher, 2) + " " + _esc(d.higher_uom) : "—"}</td>
+      </tr>`;
+    }).join("");
+    body.innerHTML = `<table class="wkp-m2-table"><thead><tr>
+        <th>Type</th><th>Voucher</th><th>Party / Warehouse</th>
+        <th class="ta-r">Qty (${_esc(d.stock_uom)})</th>
+        <th class="ta-r">Qty (${_esc(d.higher_uom || "—")})</th>
+      </tr></thead><tbody>${rows || `<tr><td colspan="5" class="wkp-m2-empty">No contributing vouchers.</td></tr>`}</tbody></table>`;
+    const t = d.totals || {};
+    foot.innerHTML = `Total: <strong>${_fmt_num(t.qty_stock, 2)} ${_esc(d.stock_uom)}</strong>`
+      + (t.qty_higher != null ? `  ·  <strong>${_fmt_num(t.qty_higher, 2)} ${_esc(d.higher_uom)}</strong>` : "");
   }
 
   _closeModal(id) {

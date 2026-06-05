@@ -3772,3 +3772,69 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 .wkp-qty-clickable { cursor:pointer; border-radius:6px; padding:2px 4px; margin:-2px -4px; transition:background .12s, box-shadow .12s; }
 .wkp-qty-clickable:hover { background:var(--indigo-50,#eef2ff); box-shadow:inset 0 0 0 1px var(--indigo-200,#c7d2fe); }
 .wkp-qty-secondary { font-size:10.5px; color:var(--slate-500,#64748b); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   §  PHASE B / TASK 6 (2026-06-05): both-UOM qty drill-down modal
+   ─────────────────────────────────────────────────────────────────────────
+   Self-contained modal opened by clicking any .wkp-qty-clickable cell.
+   Distinct wkp-m2-overlay / .wkp-m2 family so it never collides with the
+   .wkp-overlay modals. Reuses the page palette tokens (--slate-*, --border,
+   --indigo-*, shadows) with hex fallbacks. .wkp-m2-table is already defined
+   above (generic, standalone) and is reused as-is; .ta-r already exists.
+   JS toggles the overlay via inline style.display (flex = shown, none = hidden). */
+.wkp-m2-overlay {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.wkp-m2 {
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--slate-200, #e2e8f0);
+  border-radius: var(--r-lg, 14px);
+  box-shadow: var(--sh-xl, 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04));
+  width: 100%; max-width: 720px; max-height: 80vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.wkp-m2-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--slate-100, #f1f5f9);
+  flex-shrink: 0;
+}
+.wkp-m2-title {
+  font-size: 16px; font-weight: 700; line-height: 1.3;
+  color: var(--slate-900, #0f172a);
+  font-family: var(--font-display, "Oswald", sans-serif);
+}
+.wkp-m2-close {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 22px; line-height: 1; color: var(--slate-400, #94a3b8);
+  width: 28px; height: 28px; border-radius: var(--r-sm, 6px);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: background .15s, color .15s;
+}
+.wkp-m2-close:hover { background: var(--err-bg, #fff1f2); color: var(--err-text, #9f1239); }
+.wkp-m2-sub {
+  padding: 0 22px 10px; font-size: 12px; color: var(--slate-500, #64748b);
+  flex-shrink: 0;
+}
+.wkp-m2 .wkp-m2-body {
+  flex: 1; overflow: auto; padding: 0 22px 14px; background: var(--bg-surface, #ffffff);
+}
+.wkp-m2-empty {
+  text-align: center; color: var(--slate-400, #94a3b8);
+  padding: 24px 8px; font-style: italic;
+}
+.wkp-m2-loading {
+  text-align: center; color: var(--slate-400, #94a3b8); padding: 32px 8px;
+}
+.wkp-m2-foot {
+  flex-shrink: 0; padding: 12px 22px;
+  border-top: 1px solid var(--slate-100, #f1f5f9);
+  text-align: right; font-size: 13px; color: var(--slate-700, #334155);
+  background: var(--slate-50, #f8fafc);
+}
+.wkp-m2 .wkp-m2-body a { color: var(--indigo-600, #4f46e5); text-decoration: none; font-weight: 600; }
+.wkp-m2 .wkp-m2-body a:hover { text-decoration: underline; }
