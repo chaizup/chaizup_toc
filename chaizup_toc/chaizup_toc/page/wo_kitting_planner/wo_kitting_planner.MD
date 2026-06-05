@@ -600,10 +600,111 @@ Two complaints on small / low-PPI screens:
 - `#wkp-status-filter` legacy hidden `<select>` MUST stay in the DOM for back-compat.
 - Multi-select labels: "Default" when all-checked OR none-changed, "<N> selected" when a strict subset is checked, "None" when explicitly all-unchecked. The label state drives the active border colour on the button.
 
+## Phase A — Editable Filters + Warehouse Context + Table-First UI (2026-06-05)
+
+Phase A **reverses TS-001** (2026-05-14, which had removed the per-report pickers
+in favour of a read-only TOC-Settings banner) and **restores the WKP-034 editable
+SO/WO/PO `Status : Workflow` multi-selects**, adding three things on top:
+warehouse/company scoping, an inline column sort, and a slimmed table-first layout.
+The driving principle was the user's: *"the calculation and filter will be like
+item-short-surplus"* and *"make sure the old user should not [be] confused"* — so the
+pickers pre-fill from TOC Settings on load and the warehouse/company scope defaults to
+"all" (today's view) until the user narrows it.
+
+### What changed
+- **Read-only banner → editable filter row.** `#wkp-pending-banner` was replaced by
+  `#wkp-filter-row` containing five pickers — SO/WO/PO `Status : Workflow` multi-selects,
+  a **Warehouses** multi-select, and a **Company** single-select — plus an explicit
+  **Load** button. Selections only mark Load *dirty* (`.wkp-load-dirty` pulse); heavy
+  recompute is gated behind an explicit Load click (WKP-034 RESTRICT preserved). The
+  legacy hidden `#wkp-status-filter` `<select>` is kept for back-compat.
+- **New endpoint `wkp_get_filter_universe()`** (one round-trip that seeds the whole bar):
+  returns `statuses` (delegates to `wkp_get_default_statuses` — single source of truth),
+  `warehouses` (enabled non-group), `wh_default` (the TOC Settings `warehouse_rules`
+  rows whose `warehouse_purpose == "Inventory"`), `companies`, and `company_default`
+  (Global Defaults). A **blank** `wh_default` means the page loads across ALL warehouses.
+- **Warehouse / company scoping** threaded as optional `warehouses` (JSON list) + `company`
+  kwargs through `get_open_work_orders`, `_build_stock_pool`, `simulate_kitting`,
+  `get_dispatch_bottleneck`, `get_item_wo_summary`, `_get_open_so_detail`, and the new
+  helper `_get_fg_stock`. Resolution is centralised in `_wkp_resolve_wh_scope(warehouses,
+  company) → (wh_list, wh_active)`: explicit warehouses ∩ company's warehouses; only
+  company ⇒ its warehouses; neither ⇒ `active=False`. **Every** warehouse predicate (and
+  its `%(whs)s` param) is appended **only when `wh_active`** — blank scope ⇒ byte-identical
+  to today's SQL (the no-surprise guarantee). Warehouse columns used:
+  `Work Order.fg_warehouse`, `Bin.warehouse`, and
+  `COALESCE(NULLIF(line.warehouse,''), NULLIF(header.set_warehouse,''))` for SO/PO/MR lines.
+- **Inline column sort** (`#wkp-sortbar`, ported from item-short-surplus). Because WKP
+  renders one plain HTML `<table>` per `.wkp-tab-pane` (NOT a single Tabulator), the sort
+  operates on the **active pane's** rendered `<tbody>` rows: numeric-aware comparator
+  (`data-sort` attr → else parsed cell text → else case-insensitive string), detail/expand
+  rows kept paired with their main row, column list re-sourced on every `_switchTab`, and
+  the active sort cleared on tab switch / re-render.
+- **Slim summary.** `.wkp-summary` compacted to a single-line chip strip (`.wkp-sum-hint`
+  hidden) so vertical space goes to the table.
+
+### Behaviour note (intended, verified) — default WO/SO/PO filtering model
+Under TS-001 the page sent empty selections, so the **server** fell back to
+`_toc_settings_wo_statuses()` — the **compound `Status|WorkflowState` AND-pair** model
+(e.g. `Not Started|Taken In Production`). Phase A's pickers instead seed from
+`wkp_get_default_statuses()` (plain-status defaults `['Not Started','In Process']` +
+separate `Workflow: <state>` tokens) and send them explicitly — the **separable** model
+that **Production Overview** (`get_default_statuses`) and **item-short-surplus**
+(`_wo_eligibility_sql_local`) already use. On `development.localhost` this moved the
+default WO list from **0** (compound pairs match no dev WO workflow_states) to **11**
+(`status IN ('Not Started','In Process')`, `docstatus=1` — verified equal to a direct DB
+count). This is the **intended migration** the user asked for ("filter like
+item-short-surplus") and makes WKP **consistent with its sibling reports**, not a
+regression. Edge case left as a follow-up: if a user clears *all* picker tokens, the
+server still falls back to the compound-pair `_toc_settings_*` model (`1=0` for SO/PO via
+`_wkp_*_status_clause`); harmonising the cleared-state fallback with the separable model
+is a future cleanup, not a Phase-A requirement.
+
+### Restricted Areas (Phase A — DO NOT change without review)
+- **Conditional predicate rule:** never emit a warehouse SQL fragment or its `whs` param
+  unless `wh_active` is True. Breaking this changes results for users who pick no
+  warehouse — the exact no-surprise violation Phase A guards against.
+- `wkp_get_filter_universe` MUST keep delegating statuses to `wkp_get_default_statuses`
+  (single source) and read the Inventory default from `warehouse_rules` /
+  `warehouse_purpose == "Inventory"` in lockstep with `buffer_calculator.py` and
+  `item_short_surplus_api.py`. Rename the child schema in all three together.
+- `wo_kitting_planner.html` MUST stay free of raw single quotes outside HTML comments
+  (POR-023) — a single `'` blanks the page. Use `&apos;` / `&quot;`.
+- Load is explicit: pickers call `_markLoadDirty()` on change, never auto-`load()`.
+- The five picker mount points (`#wkp-so-ms`/`-wo-ms`/`-po-ms`/`-wh-ms`/`-company-ms`) and
+  every `wkp-ms-*` / `wkp-sort*` class must keep JS↔CSS parity (verified by grep `comm`).
+
 ### Sync Block (cross-AI continuity, WKP-034 + WKP-034.1)
 
 ```
-[chaizup_toc · wo_kitting_planner · WKP-034.1 · 2026-05-13]
+[chaizup_toc · wo_kitting_planner · WKP-PhaseA · 2026-06-05]
+- Reverses TS-001: read-only banner -> editable #wkp-filter-row with five pickers
+  (SO/WO/PO Status:Workflow multi-selects + Warehouses multi + Company single) +
+  explicit #wkp-load-btn (pulses .wkp-load-dirty; never auto-loads).
+- New endpoint wkp_get_filter_universe(): {statuses (delegates wkp_get_default_statuses),
+  warehouses, wh_default (TOC warehouse_rules purpose=Inventory), companies,
+  company_default (Global Defaults)}. Blank wh_default = load all warehouses.
+- Warehouse/company scope via _wkp_parse_warehouses, _wkp_company_warehouses,
+  _wkp_resolve_wh_scope(warehouses,company)->(wh_list,wh_active). Threaded (all
+  CONDITIONAL on wh_active, blank=identical-to-today) into get_open_work_orders
+  (fg_warehouse filter), _build_stock_pool (Bin.warehouse, PO/MR COALESCE line/header),
+  simulate_kitting (pass-through), get_dispatch_bottleneck (+_get_fg_stock new helper,
+  +PO inbound), get_item_wo_summary (WO + inline SO), _get_open_so_detail (both branches).
+- Columns: Work Order.fg_warehouse; Bin.warehouse;
+  COALESCE(NULLIF(line.warehouse,''),NULLIF(header.set_warehouse,'')) for SO/PO/MR.
+- Inline sort #wkp-sortbar ported from item-short-surplus; operates on active
+  .wkp-tab-pane's HTML <table> tbody (not Tabulator); numeric-aware; pairs detail rows;
+  re-sourced + cleared on _switchTab. Slim .wkp-summary chip strip.
+- BEHAVIOUR (intended): default WO/SO/PO filtering migrated from server compound
+  Status|Workflow AND-pairs (_toc_settings_*; old empty-send -> 0 WOs on dev) to the
+  separable plain-status + Workflow: token model (wkp_get_default_statuses; -> 11 WOs,
+  == direct DB count status IN defaults). Now consistent with Production Overview +
+  item-short-surplus. Cleared-all-tokens still hits compound fallback = future cleanup.
+- JS state added: this._selWh, this._selCompany, this._filterUniverse; builders
+  _wkpPairMulti/_wkpLinkMulti/_wkpSingleLink (wkp-ms-* classes); _loadDynamicFilters
+  seeds all five then fires the single first load(); _markLoadDirty/_clearLoadDirty.
+- Verified: JS↔CSS class parity (comm empty), node --check OK, all endpoints run
+  blank+scoped (both stock modes), warehouses=[] == no-arg, scoped <= all, build clean.
+```
 - Extends WKP-034: WO and PO panels now also surface "Workflow: <state>"
   entries (previously only SO did). When a site adds a custom Workflow to
   Work Order or Purchase Order, every distinct workflow_state value appears
