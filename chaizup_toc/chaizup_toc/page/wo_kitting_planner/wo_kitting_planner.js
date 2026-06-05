@@ -248,7 +248,7 @@
  * Three rendering patterns:
  *   a) Stacked (table cells):
  *      "5,000 g" on line 1, "5.00 kg" in a smaller sub-line below
- *      Used by: _buildRow(), shortage report (_dualQtySR), shortage modal (_dualQty),
+ *      Used by: _buildRow(), shortage report (_qtyCell), shortage modal (_dualQty),
  *               dispatch tab qty cells
  *   b) Inline with parens (text/cards):
  *      "5,000 g (5.00 kg)" all on one line
@@ -3055,26 +3055,33 @@ class WOKittingPlanner {
     //  Also updates the "Create Consolidated MR" button state.
     // ─────────────────────────────────────────────────────────────────────
 
-    // ── Dual-UOM helper (stacked style for table cells) ───────────────────
-    const _dualQtySR = (qty, uom, secFactor, secUom) => {
-      const base = `<div class="wkp-qty-primary">${_fmt_num(qty, 2)}</div>
-                    <div class="wkp-qty-uom">${_esc(uom || "")}</div>`;
-      if (secUom && secFactor > 1) {
-        const secQty = qty / secFactor;
-        return base + `<div class="wkp-qty-secondary">${_fmt_num(secQty, 2)}\u00a0${_esc(secUom)}</div>`;
-      }
-      return base;
-    };
+    // ── Phase B: route shortage cells through the shared _qtyCell ──────────
+    // build the {uom,qty} higher pair from the aggregate's own factor
+    // (client-side aggregation ⇒ no backend pair to ship; same stock/factor rule).
+    const _srHigher = (qty, secFactor, secUom) =>
+      (secUom && secFactor > 1) ? { uom: secUom, qty: qty / secFactor } : { uom: "", qty: null };
     // colspan = 13 (checkbox + material + 9 qty cols + MOQ + Lead Time + Details)
     const COL_SPAN = 13;
 
     const rowsHtml = aggList.map(a => {
       const netGap = Math.max(0, a.total_shortage - a.po_qty - a.mr_qty);
       const netCls = netGap > 0 ? "wkp-cell-red" : "wkp-cell-green";
-      const netTxt = netGap > 0 ? _dualQtySR(netGap, a.uom, a.secondary_factor, a.secondary_uom) : "\u2714 Covered";
-      const poTxt  = a.po_qty       > 0 ? _dualQtySR(a.po_qty,       a.uom, a.secondary_factor, a.secondary_uom) : "\u2014";
-      const rcvTxt = a.received_qty > 0 ? _dualQtySR(a.received_qty, a.uom, a.secondary_factor, a.secondary_uom) : "\u2014";
-      const mrTxt  = a.mr_qty       > 0 ? _dualQtySR(a.mr_qty,       a.uom, a.secondary_factor, a.secondary_uom) : "\u2014";
+      // Phase B: net gap & received are derived/aggregate \u21d2 dual-UOM but NOT drillable.
+      const netTxt = netGap > 0
+        ? this._qtyCell(netGap, a.uom, _srHigher(netGap, a.secondary_factor, a.secondary_uom), null)
+        : "\u2714 Covered";
+      const rcvTxt = a.received_qty > 0
+        ? this._qtyCell(a.received_qty, a.uom, _srHigher(a.received_qty, a.secondary_factor, a.secondary_uom), null)
+        : "\u2014";
+      // Phase B: PO/MR cells are drill-clickable into the backing pending vouchers.
+      const poTxt = a.po_qty > 0
+        ? this._qtyCell(a.po_qty, a.uom, _srHigher(a.po_qty, a.secondary_factor, a.secondary_uom),
+                        { item: a.item_code, metric: "pending_po" })
+        : "\u2014";
+      const mrTxt = a.mr_qty > 0
+        ? this._qtyCell(a.mr_qty, a.uom, _srHigher(a.mr_qty, a.secondary_factor, a.secondary_uom),
+                        { item: a.item_code, metric: "pending_mr" })
+        : "\u2014";
 
       // MOQ cell — show with UOM; "Not set" if 0
       const moqTxt = a.moq > 0
@@ -3101,7 +3108,7 @@ class WOKittingPlanner {
             ${d.wo_item ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(d.wo_item)}</div>` : ""}
           </td>
           <td style="padding:3px 10px;text-align:right">
-            ${_dualQtySR(d.shortage, a.uom, a.secondary_factor, a.secondary_uom)}
+            ${this._qtyCell(d.shortage, a.uom, _srHigher(d.shortage, a.secondary_factor, a.secondary_uom), null)}
           </td>
         </tr>`
       ).join("");
@@ -3120,9 +3127,9 @@ class WOKittingPlanner {
     </button>
     ${a.item_group ? `<div class="wkp-item-group-tag">${_esc(a.item_group)}</div>` : ""}
   </td>
-  <td class="ta-r" data-tip="Total qty of this material needed across all Work Orders.">${_dualQtySR(a.total_required, a.uom, a.secondary_factor, a.secondary_uom)}</td>
-  <td class="ta-r" data-tip="Physical warehouse stock right now (Bin.actual_qty).">${_dualQtySR(a.total_available, a.uom, a.secondary_factor, a.secondary_uom)}</td>
-  <td class="ta-r wkp-cell-red" data-tip="Total Shortage = Required &minus; In Stock.">${_dualQtySR(a.total_shortage, a.uom, a.secondary_factor, a.secondary_uom)}</td>
+  <td class="ta-r" data-tip="Total qty of this material needed across all Work Orders.">${this._qtyCell(a.total_required, a.uom, _srHigher(a.total_required, a.secondary_factor, a.secondary_uom), null)}</td>
+  <td class="ta-r" data-tip="Physical warehouse stock right now (Bin.actual_qty).">${this._qtyCell(a.total_available, a.uom, _srHigher(a.total_available, a.secondary_factor, a.secondary_uom), { item: a.item_code, metric: "stock" })}</td>
+  <td class="ta-r wkp-cell-red" data-tip="Total Shortage = Required &minus; In Stock.">${this._qtyCell(a.total_shortage, a.uom, _srHigher(a.total_shortage, a.secondary_factor, a.secondary_uom), null)}</td>
   <td class="ta-r" data-tip="Open Purchase Order qty (ordered from supplier, not yet received).">${poTxt}</td>
   <td class="ta-r" style="color:var(--ok-text)" data-tip="Qty already received from open POs (in transit or receiving bay).">${rcvTxt}</td>
   <td class="ta-r" data-tip="Open Material Request qty (not yet converted to a PO).">${mrTxt}</td>
@@ -3157,7 +3164,7 @@ class WOKittingPlanner {
             ${d.wo_item ? `<div style="font-size:10px;color:var(--stone-400)">${_esc(d.wo_item)}</div>` : ""}
           </td>
           <td style="padding:3px 10px;text-align:right">
-            ${_dualQtySR(d.shortage, a.uom, a.secondary_factor, a.secondary_uom)}
+            ${this._qtyCell(d.shortage, a.uom, _srHigher(d.shortage, a.secondary_factor, a.secondary_uom), null)}
           </td>
         </tr>`
       ).join("");
