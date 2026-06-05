@@ -3703,7 +3703,10 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .wkp-sortpicker-dropdown {
-    position:absolute; top:100%; right:0; margin-top:6px;
+    /* 2026-06-05 fix: anchor the dropdown to the LEFT edge of the sortbar
+       (= the "Sort:" trigger's left edge) instead of right:0, which made it
+       hang off past the trigger and look unaligned with its parent. */
+    position:absolute; top:100%; left:0; right:auto; margin-top:6px;
     min-width:320px; max-width:440px; background:#fff;
     border:1px solid var(--slate-300,#cbd5e1); border-radius:10px;
     box-shadow:0 12px 28px -8px rgba(15,23,42,.25),
