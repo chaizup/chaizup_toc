@@ -617,6 +617,10 @@ frappe.pages["wo-kitting-planner"].on_page_hide = function () {
 // ═══════════════════════════════════════════════════════════════════════
 
 const _wkpEsc = (v) => frappe.utils.escape_html(String(v == null ? "" : v));
+// Phase-A.2 (2026-06-05) — the verbatim-ported ISS `_mkPairMulti` widget
+// (renamed `_wkpPairMultiISS`) uses the global `_esc(val)` HTML-escaper defined
+// later in this file (function hoisting makes it available here), keeping the
+// ported markup byte-identical to the Item Short / Surplus source.
 
 /* Position a fixed-position dropdown panel relative to its trigger.
    Ported verbatim from item_short_surplus.js positionDropdownToTrigger.
@@ -1380,7 +1384,7 @@ class WOKittingPlanner {
       method: "chaizup_toc.api.wo_kitting_api.get_open_work_orders",
       args: {
         status_filter: this.statusFilter,
-        wo_statuses  : JSON.stringify(this._selWo || []),
+        wo_statuses  : JSON.stringify(this._pairsToTokens(this._selWo)),
         warehouses   : JSON.stringify(this._selWh || []),
         company      : this._selCompany || "",
       },
@@ -1417,8 +1421,8 @@ class WOKittingPlanner {
         calc_mode        : this.calcMode,
         multi_level      : this.multiLevel ? 1 : 0,
         // WKP-034: supply pool calc honours the user-selected WO + PO statuses
-        wo_statuses      : JSON.stringify(this._selWo || []),
-        po_statuses      : JSON.stringify(this._selPo || []),
+        wo_statuses      : JSON.stringify(this._pairsToTokens(this._selWo)),
+        po_statuses      : JSON.stringify(this._pairsToTokens(this._selPo)),
         warehouses       : JSON.stringify(this._selWh || []),
         company          : this._selCompany || "",
       },
@@ -2406,7 +2410,7 @@ class WOKittingPlanner {
   // ═══════════════════════════════════════════════════════════════════
   //  FILTER PICKERS (ported from item_short_surplus.js, 2026-06-05)
   //  Task 6 — five editable pickers in the filter row:
-  //    SO / WO / PO status-pair multiselects  → _wkpPairMulti
+  //    SO / WO / PO status-pair multiselects  → _wkpPairMultiISS
   //    Warehouses live Link multiselect        → _wkpLinkMulti
   //    Company single Link picker              → _wkpSingleLink
   //
@@ -2424,49 +2428,91 @@ class WOKittingPlanner {
     return ({ so: "_selSo", wo: "_selWo", po: "_selPo", wh: "_selWh" })[key];
   }
 
-  /* SO/WO/PO status-pair multiselect (chips + checkbox dropdown).
-     Ported from ISS _mkPairMulti, but WKP's status universe is a flat
-     array of STRINGS (plain submitted statuses + "Workflow: <state>"
-     strings), not {key,label,...} objects — so options are strings here.
-     Mounts the trigger + dropdown INTO `host` (the bare #wkp-*-ms div). */
-  _wkpPairMulti(host, key, options) {
-    if (!host) return;
-    const stateKey = this._wkpStateKey(key);
-    const $ms   = $(host).empty().attr("tabindex", "0");
-    const $drop = $(`<div class="wkp-ms-dropdown"></div>`);
-    const $head = $(`
-        <div class="wkp-ms-head">
-            <div class="wkp-ms-search-wrap">
-                <i class="fa fa-search wkp-ms-search-icon"></i>
-                <input type="search" class="wkp-ms-search"
-                       placeholder="${_wkpEsc(__("Search status or workflow…"))}">
-            </div>
-            <div class="wkp-ms-actions">
-                <button class="wkp-ms-act wkp-ms-act-all">${__("Select all")}</button>
-                <button class="wkp-ms-act wkp-ms-act-clear">${__("Clear")}</button>
-            </div>
-        </div>`);
-    const $opts = $(`<div class="wkp-ms-opts"></div>`);
-    const $foot = $(`<div class="wkp-ms-foot"></div>`);
-    $drop.append($head).append($opts).append($foot);
-    const $search = $head.find(".wkp-ms-search");
+  // Phase-A.2: convert selected "status|workflow_state" pair keys into WKP's
+  // existing token list (plain statuses + "Workflow: X"), mirroring ISS
+  // _split_pairs, so the proven _wkp_*_status_clause SQL is reused unchanged.
+  _pairsToTokens(pairs) {
+    const st = [], wf = [];
+    (pairs || []).forEach((p) => {
+      const i = String(p).indexOf("|");
+      if (i < 0) { if (p) st.push(p); return; }
+      const s = p.slice(0, i), w = p.slice(i + 1);
+      if (s) st.push(s);
+      if (w) wf.push(w);
+    });
+    const uniq = (a) => [...new Set(a)];
+    return [...uniq(st), ...uniq(wf).map((w) => "Workflow: " + w)];
+  }
 
-    const isWf = (s) => typeof s === "string" && s.indexOf("Workflow: ") === 0;
+  /* Phase-A.2 (2026-06-05) — SO/WO/PO status-pair multiselect, ported
+     VERBATIM from item_short_surplus.js `_mkPairMulti` so the look + behaviour
+     + data model are pixel-/byte-identical to the Item Short / Surplus report.
+
+     KEY DIFFERENCES from the ISS source (the ONLY adaptations):
+       - State: ISS reads/writes `this.state[key]`. Here `key` is one of
+         "so_pairs"|"wo_pairs"|"po_pairs"; STATE maps it to the controller
+         field (_selSo/_selWo/_selPo) which stores the array of pair KEYS
+         ("status|workflow_state").
+       - On change: ISS calls `this._refresh()` (auto-load). WKP NEVER auto-
+         loads (recompute is heavy) — it calls `this._markLoadDirty()` instead.
+         Load is explicit (the Load button).
+       - Mount target: WKP's filter row already has a `.wkp-fr-label` above the
+         bare host (#wkp-{so,wo,po}-ms). To avoid a double label we DROP the
+         ISS-internal `.iss-filter-label` and append the `.iss-multiselect` +
+         `.iss-multiselect-dropdown` INTO that host. All `iss-*` classes are
+         kept verbatim so the copied ISS CSS renders identically.
+       - `options` = array of {key,label,status,workflow_state} from
+         wkp_get_filter_universe()['{so,wo,po}_pairs'] (sourced from ISS).
+     RESTRICT: do not rename the iss-* classes; do not auto-load. */
+  _wkpPairMultiISS(host, key, options) {
+    if (!host) return;
+    // ISS uses this.state[key]; WKP maps key→controller field.
+    const STATE = { so_pairs: "_selSo", wo_pairs: "_selWo", po_pairs: "_selPo" };
+    const stateKey = STATE[key];
+    options = options || [];
+
+    const $g    = $(host).empty();   // mount INTO the existing host (no iss-filter-label)
+    const $ms   = $(`<div class="iss-multiselect" tabindex="0"></div>`);
+    const $drop = $(`<div class="iss-multiselect-dropdown"></div>`);
+    const $head = $(`
+        <div class="iss-multiselect-head">
+            <div class="iss-multiselect-search-wrap">
+                <i class="fa fa-search iss-multiselect-search-icon"></i>
+                <input type="search" class="iss-multiselect-search"
+                       placeholder="${_esc(__("Search status or workflow…"))}">
+            </div>
+            <div class="iss-multiselect-actions">
+                <button class="iss-msa iss-msa-all">${__("Select all")}</button>
+                <button class="iss-msa iss-msa-clear">${__("Clear")}</button>
+            </div>
+        </div>
+    `);
+    const $opts = $(`<div class="iss-multiselect-opts"></div>`);
+    const $foot = $(`<div class="iss-multiselect-foot"></div>`);
+    $drop.append($head).append($opts).append($foot);
+    $g.append($ms).append($drop);
+    const $search = $head.find(".iss-multiselect-search");
+
+    // Build a key -> option lookup so chips can show the human label
+    // for keys saved in state (e.g., from TOC Settings defaults).
+    const byKey = {};
+    options.forEach(o => { byKey[o.key] = o; });
 
     const renderChips = () => {
       $ms.empty();
       const arr = this[stateKey] || [];
       if (!arr.length) {
-        $ms.append(`<span class="wkp-ms-placeholder">${__("Pick pending statuses…")}</span>`);
-        $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+        $ms.append(`<span class="iss-multiselect-placeholder">${__("Pick pending pairs…")}</span>`);
+        $ms.append(`<i class="fa fa-caret-down iss-multiselect-caret"></i>`);
         return;
       }
       const visible = arr.slice(0, 2);
-      visible.forEach(v => {
-        const $c = $(`<span class="wkp-ms-chip${isWf(v) ? " wf" : ""}" title="${_wkpEsc(v)}">${_wkpEsc(v)}<span class="wkp-ms-chip-x" title="${_wkpEsc(__("Remove"))}">&times;</span></span>`);
-        $c.find(".wkp-ms-chip-x").on("click", (e) => {
+      visible.forEach(k => {
+        const opt = byKey[k] || { label: k };
+        const $c = $(`<span class="iss-chip iss-chip-pair" title="${_esc(opt.label)}">${_esc(opt.label)}<span class="iss-chip-x" title="${_esc(__("Remove"))}">&times;</span></span>`);
+        $c.find(".iss-chip-x").on("click", (e) => {
           e.stopPropagation();
-          this[stateKey] = (this[stateKey] || []).filter(z => z !== v);
+          this[stateKey] = (this[stateKey] || []).filter(z => z !== k);
           renderChips();
           renderFoot();
           this._markLoadDirty();
@@ -2474,48 +2520,64 @@ class WOKittingPlanner {
         $ms.append($c);
       });
       if (arr.length > 2) {
-        $ms.append(`<span class="wkp-ms-chip wkp-ms-chip-more" title="${_wkpEsc(arr.slice(2).join(", "))}">+${arr.length - 2} ${__("more")}</span>`);
+        const moreLabels = arr.slice(2).map(k => (byKey[k] && byKey[k].label) || k).join(", ");
+        $ms.append(`<span class="iss-chip iss-chip-more" title="${_esc(moreLabels)}">+${arr.length - 2} ${__("more")}</span>`);
       }
-      $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+      $ms.append(`<i class="fa fa-caret-down iss-multiselect-caret"></i>`);
     };
 
     const renderFoot = () => {
       const sel = (this[stateKey] || []).length;
-      $foot.text(__("{0} of {1} selected", [sel, options.length]));
+      const tot = options.length;
+      $foot.text(__("{0} of {1} selected", [sel, tot]));
     };
 
     let currentList = options.slice();
     const renderOpts = (filter = "") => {
       $opts.empty();
-      const f = (filter || "").toLowerCase();
-      let list = options.slice();
-      if (f) list = list.filter(o => String(o).toLowerCase().includes(f));
-      // 2026-06-05 FIX — selected options sort FIRST so the operator always
-      // sees (and can untick) what is currently chosen.
-      const sel = new Set(this[stateKey] || []);
-      list.sort((a, b) => (sel.has(b) ? 1 : 0) - (sel.has(a) ? 1 : 0));
-      if (!list.length) {
-        $opts.append(`<div class="wkp-ms-empty"><i class="fa fa-search-minus"></i> ${__("No matches")}</div>`);
+      currentList = options.slice();
+      if (filter) {
+        const f = filter.toLowerCase();
+        currentList = currentList.filter(o =>
+          String(o.label).toLowerCase().includes(f) ||
+          String(o.status).toLowerCase().includes(f) ||
+          String(o.workflow_state).toLowerCase().includes(f));
+      }
+      if (!currentList.length) {
+        $opts.append(`<div class="iss-multiselect-empty">
+            <i class="fa fa-search-minus"></i> ${__("No matching pairs")}
+        </div>`);
         return;
       }
-      list.forEach(v => {
-        const isSel = sel.has(v);
-        const pill = isWf(v)
-          ? `<span class="wkp-ms-pill wkp-ms-pill--wf">${_wkpEsc(v.replace("Workflow: ", ""))}</span>`
-          : `<span class="wkp-ms-pill wkp-ms-pill--status">${_wkpEsc(v)}</span>`;
+      currentList.forEach(opt => {
+        const isSel = (this[stateKey] || []).includes(opt.key);
+        const stHtml = opt.status
+          ? `<span class="iss-pair-pill iss-pair-pill--status">${_esc(opt.status)}</span>`
+          : `<span class="iss-pair-empty">—</span>`;
+        const wfHtml = opt.workflow_state
+          ? `<span class="iss-pair-pill iss-pair-pill--workflow">${_esc(opt.workflow_state)}</span>`
+          : `<span class="iss-pair-empty">—</span>`;
         const $o = $(`
-            <label class="wkp-ms-option ${isSel ? "selected" : ""}">
+            <label class="iss-multiselect-option iss-multiselect-option--pair ${isSel ? "selected" : ""}">
                 <input type="checkbox" ${isSel ? "checked" : ""}>
-                <span class="wkp-ms-option-text">${pill}</span>
+                <span class="iss-pair-cell">
+                    ${stHtml}
+                    <span class="iss-pair-sep">:</span>
+                    ${wfHtml}
+                </span>
             </label>`);
-        // 2026-06-05 FIX — selection driven by the checkbox `change` event,
-        // NOT a label click (that double-fires: label + synthetic input).
+        // 2026-06-05 FIX (from ISS) — drive selection off the checkbox `change`
+        // event, not a label `click` (a click on a <label> wrapping a checkbox
+        // double-fires). `change` fires once and the native tick is instant.
         $o.find("input").on("change", (e) => {
           e.stopPropagation();
           const checked = e.target.checked;
           const current = this[stateKey] || [];
-          if (checked && !current.includes(v)) this[stateKey] = [...current, v];
-          else if (!checked)                    this[stateKey] = current.filter(z => z !== v);
+          if (checked && !current.includes(opt.key)) {
+            this[stateKey] = [...current, opt.key];
+          } else if (!checked) {
+            this[stateKey] = current.filter(z => z !== opt.key);
+          }
           $o.toggleClass("selected", checked);
           renderChips();
           renderFoot();
@@ -2526,23 +2588,59 @@ class WOKittingPlanner {
       });
     };
 
-    $head.find(".wkp-ms-act-all").on("click", (e) => {
+    // Select-all-filtered / Clear actions
+    $head.find(".iss-msa-all").on("click", (e) => {
       e.stopPropagation();
-      const set = new Set([...(this[stateKey] || []), ...currentListVisible()]);
+      const merge = currentList.map(o => o.key);
+      const set = new Set([...(this[stateKey] || []), ...merge]);
       this[stateKey] = Array.from(set);
-      renderChips(); renderFoot(); renderOpts($search.val()); this._markLoadDirty();
+      renderChips();
+      renderFoot();
+      renderOpts($search.val());
+      this._markLoadDirty();
     });
-    const currentListVisible = () => {
-      const f = ($search.val() || "").toLowerCase();
-      return f ? options.filter(o => String(o).toLowerCase().includes(f)) : options.slice();
-    };
-    $head.find(".wkp-ms-act-clear").on("click", (e) => {
+    $head.find(".iss-msa-clear").on("click", (e) => {
       e.stopPropagation();
       this[stateKey] = [];
-      renderChips(); renderFoot(); renderOpts($search.val()); this._markLoadDirty();
+      renderChips();
+      renderFoot();
+      renderOpts($search.val());
+      this._markLoadDirty();
     });
 
-    this._wkpWireDropdown($ms, $drop, $search, () => { renderOpts(); renderFoot(); }, "pair-" + key);
+    // Open / close — fixed-position panel anchored to trigger (ISS pattern)
+    const reposition = () => positionWkpDropdownToTrigger($ms[0], $drop[0]);
+    const closeDrop = () => {
+      $drop.removeClass("open");
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+    $ms.on("click", (e) => {
+      if ($(e.target).hasClass("iss-chip-x")) return;
+      $(".iss-multiselect-dropdown.open").not($drop).removeClass("open");
+      const wasOpen = $drop.hasClass("open");
+      if (wasOpen) { closeDrop(); return; }
+      $search.val("");
+      renderOpts();
+      renderFoot();
+      if ($drop[0].parentNode !== document.body) {
+        document.body.appendChild($drop[0]);
+      }
+      $drop.addClass("open");
+      requestAnimationFrame(reposition);
+      window.addEventListener("scroll", reposition, true);
+      window.addEventListener("resize", reposition);
+      setTimeout(() => $search.focus(), 0);
+    });
+    $search.on("input", (e) => renderOpts(e.target.value));
+    $search.on("keydown", (e) => {
+      if (e.key === "Escape") closeDrop();
+    });
+    $(document).on("click.wkp-iss-pair-" + key, (e) => {
+      if ($drop[0].contains(e.target)) return;
+      if (!$g[0].contains(e.target)) closeDrop();
+    });
+
     renderChips();
   }
 
@@ -2856,16 +2954,23 @@ class WOKittingPlanner {
         this._filterUniverse = m;
         this._statusUniverse = m.statuses || {};
         const st = m.statuses || {};
-        // Seed selections from TOC Settings defaults (slice → own arrays).
-        this._selWo      = (st.wo_statuses || []).slice();
-        this._selSo      = (st.so_statuses || []).slice();
-        this._selPo      = (st.po_statuses || []).slice();
+        // Phase-A.2 (2026-06-05) — SO/WO/PO pickers now exact-match the
+        // item-short-surplus report: the status|workflow_state PAIR model.
+        // State stores arrays of pair KEYS ("status|workflow_state"); seed
+        // them from the ISS-sourced TOC-Settings pair defaults. The pair keys
+        // are converted to WKP's "Workflow: X" token list at each API-call
+        // boundary via _pairsToTokens (mirrors ISS _split_pairs), so the
+        // proven _wkp_*_status_clause SQL stays untouched.
+        this._selSo      = (m.so_pairs_default || []).slice();
+        this._selWo      = (m.wo_pairs_default || []).slice();
+        this._selPo      = (m.po_pairs_default || []).slice();
         this._selWh      = (m.wh_default || []).slice();
         this._selCompany = m.company_default || "";
-        // Mount the five pickers onto their (bare) HTML hosts.
-        this._wkpPairMulti(document.getElementById("wkp-so-ms"), "so", st.all_so_statuses || []);
-        this._wkpPairMulti(document.getElementById("wkp-wo-ms"), "wo", st.all_wo_statuses || []);
-        this._wkpPairMulti(document.getElementById("wkp-po-ms"), "po", st.all_po_statuses || []);
+        // Mount the SO/WO/PO pickers onto their (bare) HTML hosts using the
+        // verbatim ISS pair widget (pixel-identical look + behaviour).
+        this._wkpPairMultiISS(document.getElementById("wkp-so-ms"), "so_pairs", m.so_pairs || []);
+        this._wkpPairMultiISS(document.getElementById("wkp-wo-ms"), "wo_pairs", m.wo_pairs || []);
+        this._wkpPairMultiISS(document.getElementById("wkp-po-ms"), "po_pairs", m.po_pairs || []);
         // 2026-06-05 — Warehouse + Company are now SINGLE-selects in the
         //   filter row (changing them only marks Load dirty — explicit Load
         //   reloads with the new scope). The first data load is GATED behind
@@ -5348,8 +5453,8 @@ class WOKittingPlanner {
       method: "chaizup_toc.api.wo_kitting_api.get_item_wo_summary",
       args: {
         // WKP-034: thread the user-selected WO + SO statuses through.
-        wo_statuses : JSON.stringify(this._selWo || []),
-        so_statuses : JSON.stringify(this._selSo || []),
+        wo_statuses : JSON.stringify(this._pairsToTokens(this._selWo)),
+        so_statuses : JSON.stringify(this._pairsToTokens(this._selSo)),
         warehouses  : JSON.stringify(this._selWh || []),
         company     : this._selCompany || "",
       },
@@ -6186,9 +6291,9 @@ class WOKittingPlanner {
     const filters = {
       warehouses: this._selWh || [],
       company: this._selCompany || "",
-      wo_statuses: this._selWo || [],
-      so_statuses: this._selSo || [],
-      po_statuses: this._selPo || [],
+      wo_statuses: this._pairsToTokens(this._selWo),
+      so_statuses: this._pairsToTokens(this._selSo),
+      po_statuses: this._pairsToTokens(this._selPo),
       stock_mode: this.stockMode || "current_only",
       calc_mode: this.calcMode || "isolated",
       work_orders: (this.rows || []).map((r) => r.wo).filter(Boolean),
@@ -6523,8 +6628,8 @@ class WOKittingPlanner {
       args: {
         stock_mode  : this.stockMode,
         // WKP-034: thread the user-selected SO + PO statuses through.
-        so_statuses : JSON.stringify(this._selSo || []),
-        po_statuses : JSON.stringify(this._selPo || []),
+        so_statuses : JSON.stringify(this._pairsToTokens(this._selSo)),
+        po_statuses : JSON.stringify(this._pairsToTokens(this._selPo)),
         warehouses  : JSON.stringify(this._selWh || []),
         company     : this._selCompany || "",
       },
@@ -6983,9 +7088,9 @@ class WOKittingPlanner {
         item_code: item, metric,
         warehouses: JSON.stringify(this._selWh || []),
         company: this._selCompany || "",
-        wo_statuses: JSON.stringify(this._selWo || []),
-        so_statuses: JSON.stringify(this._selSo || []),
-        po_statuses: JSON.stringify(this._selPo || []),
+        wo_statuses: JSON.stringify(this._pairsToTokens(this._selWo)),
+        so_statuses: JSON.stringify(this._pairsToTokens(this._selSo)),
+        po_statuses: JSON.stringify(this._pairsToTokens(this._selPo)),
       },
       callback: (r) => this._renderQtyDrilldown(r && r.message),
     });

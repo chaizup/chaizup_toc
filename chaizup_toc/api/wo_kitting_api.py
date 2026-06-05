@@ -737,6 +737,17 @@ def wkp_get_filter_universe():
     """
     statuses = wkp_get_default_statuses()
 
+    # Phase-A.2 (2026-06-05): SO/WO/PO pickers now exact-match item-short-surplus
+    # (status|workflow_state pair model). Reuse ISS's single source of truth for
+    # the pair options + TOC-Settings pair defaults so the two reports never diverge.
+    try:
+        from chaizup_toc.api.item_short_surplus_api import get_filter_options as _iss_filter_options
+        _iss = _iss_filter_options() or {}
+    except Exception:
+        _iss = {}
+    iss_opts = (_iss.get("options") or {})
+    iss_def  = (_iss.get("defaults") or {})
+
     warehouses = frappe.get_all(
         "Warehouse",
         filters={"disabled": 0, "is_group": 0},
@@ -787,6 +798,16 @@ def wkp_get_filter_universe():
         "wh_single_default": wh_single_default,
         "companies": companies,
         "company_default": company_default,
+        # Phase-A.2 (2026-06-05) — ISS pair options + TOC-Settings pair defaults.
+        # The JS converts selected pair keys → WKP's "Workflow: X" token list at
+        # the call boundary (mirrors ISS _split_pairs), so the proven
+        # _wkp_*_status_clause SQL is reused unchanged.
+        "so_pairs":  iss_opts.get("so_pairs", []),
+        "wo_pairs":  iss_opts.get("wo_pairs", []),
+        "po_pairs":  iss_opts.get("po_pairs", []),
+        "so_pairs_default": iss_def.get("so_pairs", []),
+        "wo_pairs_default": iss_def.get("wo_pairs", []),
+        "po_pairs_default": iss_def.get("po_pairs", []),
     }
 
 

@@ -3912,3 +3912,327 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
 #wkp-scope-company { display: block; }
 #wkp-scope-apply,
 #wkp-scope-default { min-width: 92px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Phase-A.2 (2026-06-05) — SO/WO/PO status pickers exact-match the
+   item-short-surplus report. The `_wkpPairMultiISS` widget renders the
+   VERBATIM ISS `_mkPairMulti` markup (iss-multiselect* / iss-chip* /
+   iss-pair-* classes), so these rules are COPIED VERBATIM from
+   item_short_surplus.css to guarantee pixel-identical rendering. Do NOT
+   rename them. CSS vars that ISS relied on are kept with the same hex
+   fallbacks so they resolve on the WKP page too (no shared var sheet).
+
+   HOST INTEGRATION: the WKP filter row already has `.wkp-fr-label` above a
+   bare host `.wkp-ms#wkp-{so,wo,po}-ms`. The ISS widget mounts `.iss-multiselect`
+   + `.iss-multiselect-dropdown` INTO that host (dropping the ISS-internal
+   `.iss-filter-label`). So for these three hosts ONLY, `.wkp-ms` is a bare
+   wrapper — its trigger-box styling is suppressed and the inner
+   `.iss-multiselect` (styled below, mirroring ISS `.iss-filter-group
+   .iss-multiselect`) carries the border/background. Warehouse/Company
+   pickers keep the original `.wkp-ms` trigger styling (they use wkp-ms-*).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Suppress the host trigger box only where it now wraps an ISS multiselect. */
+.wkp-ms:has(.iss-multiselect) {
+    display: block;
+    min-height: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    cursor: default;
+}
+.wkp-ms:has(.iss-multiselect):hover,
+.wkp-ms:has(.iss-multiselect):focus { border: none; box-shadow: none; }
+
+/* Box treatment for the inner trigger — mirrors ISS `.iss-filter-group
+   .iss-multiselect` (the rule that gives the ISS trigger its border/bg). */
+.wkp-ms .iss-multiselect {
+    width: 100%;
+    min-height: 32px;
+    padding: 5px 9px;
+    padding-right: 22px;     /* room for the caret */
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-color, #0f172a);
+    background: #ffffff;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+}
+.wkp-ms .iss-multiselect:focus-within {
+    outline: none;
+    border-color: var(--primary-color, #2563eb);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+/* ───────────────────── Professional multi-select widget (ISS verbatim) ── */
+.iss-multiselect {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    cursor: pointer;
+    position: relative;
+    padding-right: 22px;     /* room for the caret */
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.iss-multiselect:hover {
+    border-color: var(--primary-color, #2563eb);
+}
+.iss-multiselect-caret {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted, #94a3b8);
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.iss-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px 2px 8px;
+    background: var(--primary-color, #2563eb);
+    color: #fff;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    font-weight: 500;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iss-chip-x {
+    cursor: pointer;
+    padding: 0 2px 0 4px;
+    margin-left: 2px;
+    font-weight: 700;
+    opacity: 0.85;
+    font-size: 13px;
+    line-height: 1;
+}
+.iss-chip-x:hover { opacity: 1; }
+.iss-chip-more {
+    background: var(--text-muted, #64748b) !important;
+    cursor: help;
+}
+.iss-multiselect-placeholder {
+    color: var(--text-muted, #94a3b8);
+    font-size: 13px;
+}
+
+/* Dropdown panel — fixed-position so it escapes any transformed/overflow
+   ancestor in Frappe's Desk layout. Coordinates set programmatically. */
+.iss-multiselect-dropdown {
+    position: fixed;
+    min-width: 280px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow:
+        0 12px 28px -4px rgba(15, 23, 42, 0.16),
+        0 4px 12px -2px rgba(15, 23, 42, 0.08),
+        0 0 0 1px rgba(15, 23, 42, 0.04);
+    z-index: 1050;          /* above Frappe navbar (~1030) but below modals (~1055) */
+    display: none;
+    overflow: hidden;
+    flex-direction: column;
+    max-height: 420px;
+    animation: iss-drop-in 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes iss-drop-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.iss-multiselect-dropdown.open { display: flex; }
+
+/* Sticky header (search + bulk actions) */
+.iss-multiselect-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--card-bg, #fff);
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.iss-multiselect-search-wrap {
+    position: relative;
+}
+.iss-multiselect-search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted, #94a3b8);
+    font-size: 11px;
+    pointer-events: none;
+}
+.iss-multiselect-search {
+    width: 100%;
+    padding: 6px 8px 6px 26px !important;
+    border: 1px solid var(--border-color, #e2e8f0) !important;
+    border-radius: 4px !important;
+    font-size: 12px !important;
+    background: var(--input-bg, #fff) !important;
+}
+.iss-multiselect-search:focus {
+    outline: none !important;
+    border-color: var(--primary-color, #2563eb) !important;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15) !important;
+}
+.iss-multiselect-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+.iss-msa {
+    border: 1px solid var(--border-color, #e2e8f0);
+    background: var(--bg-color, #f8fafc);
+    color: var(--text-color, #0f172a);
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 100ms ease;
+}
+.iss-msa:hover {
+    background: var(--primary-color, #2563eb);
+    color: #fff;
+    border-color: var(--primary-color, #2563eb);
+}
+/* Bulk-action modifier classes carried in the markup (iss-msa-all /
+   iss-msa-clear). They inherit the base .iss-msa look; declared explicitly so
+   every iss-* class used in the JS has a matching CSS rule (parity grep). */
+.iss-msa-all:hover {
+    background: var(--primary-color, #2563eb);
+    color: #fff;
+    border-color: var(--primary-color, #2563eb);
+}
+.iss-msa-clear:hover {
+    background: #fee2e2;
+    color: #b91c1c;
+    border-color: #fca5a5;
+}
+
+/* Scrollable option list */
+.iss-multiselect-opts {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+    max-height: 280px;
+}
+.iss-multiselect-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 80ms ease;
+    user-select: none;
+    margin: 0;
+}
+.iss-multiselect-option:hover { background: var(--bg-color, #f1f5f9); }
+.iss-multiselect-option.selected {
+    background: rgba(37, 99, 235, 0.06);
+    color: var(--primary-color, #1d4ed8);
+    font-weight: 500;
+}
+.iss-multiselect-option.disabled {
+    color: var(--text-muted, #94a3b8);
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+.iss-multiselect-option input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--primary-color, #2563eb);
+}
+.iss-multiselect-option-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.iss-multiselect-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    background: #fee2e2;
+    color: #c0392b;
+    border-radius: 8px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.iss-multiselect-empty {
+    padding: 18px;
+    text-align: center;
+    color: var(--text-muted, #94a3b8);
+    font-size: 12px;
+}
+.iss-multiselect-empty.iss-error { color: #c0392b; }
+
+/* ───────────────────── Combined pair multi-select (ISS verbatim) ────────── */
+.iss-chip-pair {
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    max-width: 200px;
+}
+.iss-multiselect-option--pair {
+    padding: 8px 12px;
+}
+.iss-pair-cell {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+}
+.iss-pair-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.iss-pair-pill--status   { background: rgba(37, 99, 235, 0.1); color: #1d4ed8; }
+.iss-pair-pill--workflow { background: rgba(124, 58, 237, 0.1); color: #6d28d9; }
+.iss-pair-sep {
+    color: #cbd5e1;
+    font-weight: 700;
+    padding: 0 2px;
+}
+.iss-pair-empty {
+    color: #cbd5e1;
+    font-size: 12px;
+    padding: 0 4px;
+}
+.iss-multiselect-option--pair.selected .iss-pair-pill--status {
+    background: rgba(37, 99, 235, 0.18);
+}
+.iss-multiselect-option--pair.selected .iss-pair-pill--workflow {
+    background: rgba(124, 58, 237, 0.18);
+}
+
+/* Sticky footer (counter) */
+.iss-multiselect-foot {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-color, #f8fafc);
+    border-top: 1px solid var(--border-color, #e2e8f0);
+    padding: 5px 10px;
+    font-size: 11px;
+    color: var(--text-muted, #64748b);
+    text-align: right;
+}
