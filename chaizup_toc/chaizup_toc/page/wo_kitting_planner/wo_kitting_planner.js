@@ -713,6 +713,24 @@ class WOKittingPlanner {
     this._popEl    = null;   // column help popover element
     this._tipTimer = null;
 
+    // ── Inline column sort (Task 7, 2026-06-05) ───────────────────────────
+    // CONTEXT: ported from item-short-surplus' iss-sortpicker. Unlike ISS
+    //   (one Tabulator), WKP renders a plain HTML <table> per tab/pane, so
+    //   the sort is a DOM-table sorter that operates ONLY on the ACTIVE
+    //   pane's already-rendered rows — it never refetches or re-renders data.
+    //   _sortColIdx  = column index (0-based) into the active table's header
+    //                  cells; null = no active sort.
+    //   _sortDir     = "asc" | "desc".
+    //   _sortColMap  = [{idx, title}] built from the active table's <thead>.
+    //   _sortOrigOrder = captured original tbody row order (an array of <tr>)
+    //                  the first time we sort a given table, so Clear can
+    //                  restore it. Reset whenever the active table changes.
+    this._sortColIdx    = null;
+    this._sortDir       = "desc";
+    this._sortColMap    = [];
+    this._sortOrigOrder = null;
+    this._sortTable     = null;  // the <table> the captured order belongs to
+
     // ── AI Advisor state ──────────────────────────────────────────────
     // Session ID: UUID persisted in sessionStorage so it survives tab
     // navigation within the same browser session but resets on full refresh.
@@ -1177,6 +1195,12 @@ class WOKittingPlanner {
     if (rdOverlay) rdOverlay.addEventListener("click", (e) => {
       if (e.target.id === "wkp-row-detail-modal") this._closeModal("wkp-row-detail-modal");
     });
+
+    // ── Inline column sort bar (Task 7) ────────────────────────────────
+    // Wires the #wkp-sort* widgets ported from item-short-surplus. The
+    // column list is sourced live from the ACTIVE pane's <table> header,
+    // re-populated on every tab switch via _refreshSortColumns().
+    this._initSortBar();
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -1451,6 +1475,20 @@ class WOKittingPlanner {
     this._bindSeqInput();
     if (this.calcMode === "sequential") this._bindDragDrop();
     this._setDragHandleState(this.calcMode === "sequential");
+
+    // Task 7 — a re-render replaces #wkp-tbody's rows, so any active inline
+    // sort (and its captured original-order snapshot of now-detached nodes)
+    // is stale. Drop the stale snapshot and reset the picker label so the
+    // sort bar reflects the freshly-rendered, unsorted table.
+    if (this._sortTable && this._sortTable.contains(tbody) && this._sortColIdx != null) {
+      this._sortColIdx    = null;
+      this._sortOrigOrder = null;
+      this._sortTable     = null;
+      const valueEl  = document.getElementById("wkp-sortpicker-value");
+      const clearBtn = document.getElementById("wkp-sortclear");
+      if (valueEl) valueEl.textContent = "—";
+      if (clearBtn) clearBtn.style.display = "none";
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -1923,6 +1961,338 @@ class WOKittingPlanner {
     const searchInput = document.getElementById("wkp-global-search");
     if (searchInput && searchInput.value) {
       this._applyGlobalSearch(searchInput.value);
+    }
+
+    // Task 7 — the sort bar is tab-scoped: a column from tab A may not
+    // exist on tab B, so clear any active sort and re-source the column
+    // list from the newly-active pane's table. This also resets the
+    // captured original-order snapshot (different table now).
+    this._refreshSortColumns();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  INLINE COLUMN SORT  (Task 7 — ported from item-short-surplus)
+  //
+  //  CONTEXT: item-short-surplus drives ONE Tabulator and calls
+  //    table.setSort(). WKP renders a plain HTML <table> per tab, so this
+  //    is a DOM-table sorter: it reorders the ACTIVE pane table's <tbody>
+  //    rows in place. It NEVER refetches or re-renders data — it only
+  //    re-appends already-rendered <tr> nodes.
+  //
+  //  RESTRICT:
+  //    - Reuses the #wkp-sort* IDs from Task 5's HTML. New CSS classes are
+  //      prefixed wkp-sort* (styled in Task 8).
+  //    - The searchable dropdown markup (filter input + option rows) is
+  //      injected into #wkp-sortpicker-opts at init time.
+  //    - Operates purely on the active pane's table; if no table is loaded
+  //      yet it no-ops gracefully (empty option list, disabled look).
+  // ─────────────────────────────────────────────────────────────────────
+
+  _initSortBar() {
+    const bar = document.getElementById("wkp-sortbar");
+    if (!bar) return;  // HTML not present — nothing to wire.
+
+    const picker   = document.getElementById("wkp-sortpicker");
+    const drop     = document.getElementById("wkp-sortpicker-dropdown");
+    const opts     = document.getElementById("wkp-sortpicker-opts");
+    const dirBtn   = document.getElementById("wkp-sortdir");
+    const clearBtn = document.getElementById("wkp-sortclear");
+    if (!picker || !drop || !opts) return;
+
+    // Inject the searchable filter input (ported from iss-sortpicker-search).
+    // The HTML ships only the empty #wkp-sortpicker-opts container, so we
+    // prepend a search box above it once, here.
+    if (!drop.querySelector(".wkp-sortpicker-search")) {
+      const search = document.createElement("input");
+      search.type        = "search";
+      search.className   = "wkp-sortpicker-search";
+      search.placeholder = __("Filter columns…");
+      search.setAttribute("aria-label", __("Filter sortable columns"));
+      drop.insertBefore(search, opts);
+      search.addEventListener("input", (e) => {
+        this._filterSortColumns(String(e.target.value || "").trim().toLowerCase());
+      });
+    }
+
+    const openDrop = () => {
+      this._refreshSortColumns();         // re-source columns from active table
+      drop.classList.add("wkp-sort-open");
+      picker.setAttribute("aria-expanded", "true");
+      const search = drop.querySelector(".wkp-sortpicker-search");
+      if (search) { search.value = ""; search.focus(); }
+      this._filterSortColumns("");
+    };
+    const closeDrop = () => {
+      drop.classList.remove("wkp-sort-open");
+      picker.setAttribute("aria-expanded", "false");
+    };
+    this._closeSortDrop = closeDrop;
+
+    picker.addEventListener("click", (e) => {
+      e.stopPropagation();
+      drop.classList.contains("wkp-sort-open") ? closeDrop() : openDrop();
+    });
+    picker.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDrop(); }
+      if (e.key === "Escape") closeDrop();
+    });
+    // Close on outside click (namespaced via a single document listener).
+    document.addEventListener("click", (e) => {
+      if (!bar.contains(e.target)) closeDrop();
+    });
+
+    // Direction toggle — flips asc/desc and re-applies the current sort.
+    if (dirBtn) {
+      dirBtn.addEventListener("click", () => {
+        this._sortDir = this._sortDir === "asc" ? "desc" : "asc";
+        this._renderSortDirLabel();
+        if (this._sortColIdx != null) this._applySort();
+      });
+    }
+
+    // Clear — restore the original DOM row order and reset the picker label.
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => this._clearSort());
+    }
+
+    this._renderSortDirLabel();
+    if (clearBtn) clearBtn.style.display = "none";
+
+    // Seed the column list from whatever pane is active at init.
+    this._refreshSortColumns();
+  }
+
+  // Find the active pane's primary data <table> (one with thead + tbody).
+  // Returns null for tabs with no table (emergency = cards, ai-chat = none)
+  // or tables not yet rendered.
+  _activeSortTable() {
+    const paneMap = {
+      "wo-plan"          : "wkp-pane-wo-plan",
+      "shortage-report"  : "wkp-pane-shortage",
+      "emergency"        : "wkp-pane-emergency",
+      "dispatch"         : "wkp-pane-dispatch",
+      "ai-chat"          : "wkp-pane-ai-chat",
+      "item-view"        : "wkp-pane-item-view",
+      "purchase-priority": "wkp-pane-purchase-priority",
+    };
+    const paneId = paneMap[this._activeTab];
+    if (!paneId) return null;
+    const pane = document.getElementById(paneId);
+    if (!pane) return null;
+    // Pick the first table that has both a header row and at least one
+    // body row — skips empty / placeholder tables.
+    const tables = pane.querySelectorAll("table");
+    for (const t of tables) {
+      const ths = t.querySelectorAll("thead th");
+      const trs = t.querySelectorAll("tbody tr");
+      if (ths.length && trs.length) return t;
+    }
+    return null;
+  }
+
+  _renderSortDirLabel() {
+    const asc   = this._sortDir === "asc";
+    const icon  = document.getElementById("wkp-sortdir-icon");
+    const label = document.getElementById("wkp-sortdir-label");
+    if (label) label.textContent = asc ? __("Low to High") : __("High to Low");
+    if (icon) {
+      icon.classList.toggle("fa-arrow-up",   asc);
+      icon.classList.toggle("fa-arrow-down", !asc);
+    }
+  }
+
+  // Re-source the sortable column list from the ACTIVE table's header and
+  // (re)build the dropdown options. Clears any active sort because columns
+  // differ between tabs. Called on init, on dropdown open, and at the end
+  // of _switchTab().
+  _refreshSortColumns() {
+    const opts = document.getElementById("wkp-sortpicker-opts");
+    const valueEl = document.getElementById("wkp-sortpicker-value");
+    const clearBtn = document.getElementById("wkp-sortclear");
+    const bar = document.getElementById("wkp-sortbar");
+    if (!opts) return;
+
+    const table = this._activeSortTable();
+
+    // Switching panes invalidates the captured original order and the
+    // active column index (a different table is now in play).
+    if (table !== this._sortTable) {
+      this._sortColIdx    = null;
+      this._sortOrigOrder = null;
+      this._sortTable     = null;
+      if (valueEl) valueEl.textContent = "—";  // em dash
+      if (clearBtn) clearBtn.style.display = "none";
+    }
+
+    opts.innerHTML = "";
+    this._sortColMap = [];
+
+    if (!table) {
+      // No table on this tab (or not loaded) — disabled-looking, no options.
+      if (bar) bar.classList.add("wkp-sort-disabled");
+      opts.innerHTML =
+        `<div class="wkp-sortpicker-opt wkp-sortpicker-opt--disabled">${__("No sortable columns")}</div>`;
+      return;
+    }
+    if (bar) bar.classList.remove("wkp-sort-disabled");
+
+    // Build {idx, title} for each header cell. Use the cell's text but strip
+    // the trailing "?" help glyph / whitespace so the option label is clean.
+    const ths = table.querySelectorAll("thead th");
+    ths.forEach((th, idx) => {
+      let title = (th.textContent || "").replace(/[?×✓]/g, "").trim();
+      if (!title) return;  // skip blank columns (drag handle, action col)
+      this._sortColMap.push({ idx, title });
+    });
+
+    this._sortColMap.forEach((col) => {
+      const isActive = col.idx === this._sortColIdx;
+      const opt = document.createElement("div");
+      opt.className = "wkp-sortpicker-opt" + (isActive ? " wkp-sortpicker-opt--active" : "");
+      opt.setAttribute("data-idx", String(col.idx));
+      opt.setAttribute("data-title", col.title);
+      opt.textContent = col.title;
+      opt.addEventListener("click", () => {
+        this._sortColIdx = col.idx;
+        if (valueEl) valueEl.textContent = col.title;
+        if (clearBtn) clearBtn.style.display = "";
+        if (this._closeSortDrop) this._closeSortDrop();
+        opts.querySelectorAll(".wkp-sortpicker-opt")
+            .forEach(o => o.classList.remove("wkp-sortpicker-opt--active"));
+        opt.classList.add("wkp-sortpicker-opt--active");
+        this._applySort();
+      });
+      opts.appendChild(opt);
+    });
+  }
+
+  _filterSortColumns(term) {
+    const opts = document.getElementById("wkp-sortpicker-opts");
+    if (!opts) return;
+    opts.querySelectorAll(".wkp-sortpicker-opt").forEach((o) => {
+      if (o.classList.contains("wkp-sortpicker-opt--disabled")) return;
+      const t = String(o.getAttribute("data-title") || "").toLowerCase();
+      o.style.display = (!term || t.includes(term)) ? "" : "none";
+    });
+  }
+
+  // Reorder the active table's <tbody> rows by the chosen column.
+  //
+  // Numeric-aware comparator: for each row read the chosen column's cell;
+  // if the cell carries a data-sort attribute use that, else parse the text
+  // stripping commas / spaces / units via replace(/[^0-9.\-]/g,""). If BOTH
+  // compared cells are non-numeric, fall back to a case-insensitive string
+  // compare. Detail / expand rows (.wkp-sr-detail-row, .wkp-pp-detail-row,
+  // .wkp-iv-detail-row) are NOT independently sorted — each stays attached
+  // immediately after its preceding "main" row so paired content never
+  // separates.
+  _applySort() {
+    const table = this._activeSortTable();
+    if (!table || this._sortColIdx == null) return;
+    const tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    const colIdx = this._sortColIdx;
+
+    // Capture the original row order once per table so Clear can restore it.
+    if (this._sortTable !== table || !this._sortOrigOrder) {
+      this._sortTable     = table;
+      this._sortOrigOrder = Array.from(tbody.children);
+    }
+
+    // Group rows: a "main" row plus any immediately-following detail rows
+    // travel together as one sortable unit.
+    const isDetail = (tr) =>
+      tr.classList && (
+        tr.classList.contains("wkp-sr-detail-row") ||
+        tr.classList.contains("wkp-pp-detail-row") ||
+        tr.classList.contains("wkp-iv-detail-row") ||
+        tr.classList.contains("wkp-detail-row")
+      );
+
+    const groups = [];
+    Array.from(tbody.children).forEach((tr) => {
+      if (isDetail(tr) && groups.length) {
+        groups[groups.length - 1].rows.push(tr);
+      } else {
+        groups.push({ main: tr, rows: [tr] });
+      }
+    });
+
+    const readCell = (tr) => {
+      const cell = tr.children[colIdx];
+      if (!cell) return { num: NaN, str: "" };
+      const dataSort = cell.getAttribute && cell.getAttribute("data-sort");
+      const raw = dataSort != null ? dataSort : (cell.textContent || "");
+      const num = parseFloat(String(raw).replace(/[^0-9.\-]/g, ""));
+      return { num, str: String(raw).trim().toLowerCase() };
+    };
+
+    const dir = this._sortDir === "asc" ? 1 : -1;
+    groups.sort((a, b) => {
+      const av = readCell(a.main);
+      const bv = readCell(b.main);
+      const aNum = !isNaN(av.num) && av.str !== "";
+      const bNum = !isNaN(bv.num) && bv.str !== "";
+      let cmp;
+      if (aNum && bNum) {
+        cmp = av.num - bv.num;
+      } else {
+        cmp = av.str < bv.str ? -1 : (av.str > bv.str ? 1 : 0);
+      }
+      return cmp * dir;
+    });
+
+    // Re-append rows in sorted order (moves existing nodes — no re-render).
+    groups.forEach((g) => g.rows.forEach((r) => tbody.appendChild(r)));
+
+    // Scroll the sorted column header into view horizontally.
+    this._scrollSortColIntoView(table, colIdx);
+  }
+
+  _scrollSortColIntoView(table, colIdx) {
+    try {
+      const th = table.querySelectorAll("thead th")[colIdx];
+      if (!th) return;
+      // Prefer a horizontal scroll on the table's scroll container so we
+      // don't yank the whole page vertically. Fall back to scrollIntoView.
+      const wrap = table.closest(".wkp-table-wrap") ||
+                   table.parentElement;
+      if (wrap && wrap.scrollWidth > wrap.clientWidth) {
+        const wrapRect = wrap.getBoundingClientRect();
+        const thRect   = th.getBoundingClientRect();
+        const target = thRect.left - wrapRect.left + wrap.scrollLeft
+                     - Math.max(0, (wrap.clientWidth - th.offsetWidth) / 2);
+        wrap.scrollLeft = Math.max(0, Math.min(target, wrap.scrollWidth - wrap.clientWidth));
+      } else {
+        th.scrollIntoView({ inline: "center", block: "nearest" });
+      }
+    } catch (e) { /* noop — scroll is a nicety, never fatal */ }
+  }
+
+  // Restore the captured original DOM row order and reset the picker label.
+  _clearSort() {
+    const valueEl  = document.getElementById("wkp-sortpicker-value");
+    const clearBtn = document.getElementById("wkp-sortclear");
+    const opts     = document.getElementById("wkp-sortpicker-opts");
+
+    if (this._sortTable && this._sortOrigOrder) {
+      const tbody = this._sortTable.querySelector("tbody");
+      if (tbody) {
+        // Only re-append rows that are still present (rows may have been
+        // removed by a re-render between sort and clear).
+        this._sortOrigOrder
+          .filter(r => r.parentNode === tbody)
+          .forEach(r => tbody.appendChild(r));
+      }
+    }
+    this._sortColIdx    = null;
+    this._sortOrigOrder = null;
+    this._sortTable     = null;
+    if (valueEl) valueEl.textContent = "—";
+    if (clearBtn) clearBtn.style.display = "none";
+    if (opts) {
+      opts.querySelectorAll(".wkp-sortpicker-opt--active")
+          .forEach(o => o.classList.remove("wkp-sortpicker-opt--active"));
     }
   }
 
