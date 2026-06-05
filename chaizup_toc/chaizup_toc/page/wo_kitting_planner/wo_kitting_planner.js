@@ -592,6 +592,58 @@ frappe.pages["wo-kitting-planner"].on_page_show = function (wrapper) {
   }
 };
 
+/* 2026-06-05 — close any orphaned filter dropdowns when navigating away.
+   Picker dropdowns are appended to <body> to escape Frappe's transformed
+   ancestors; without this cleanup, leaving the page leaves them open. */
+frappe.pages["wo-kitting-planner"].on_page_hide = function () {
+  document.querySelectorAll(".wkp-ms-dropdown.open")
+    .forEach(d => d.classList.remove("open"));
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FILTER-PICKER HELPERS (ported from item_short_surplus.js, 2026-06-05)
+//
+//  CONTEXT: Task 6 ports the proven Item Short / Surplus multiselect /
+//    link / single-link pickers into WKP. CSS prefix renamed iss- → wkp-ms-
+//    so the two pages' styles never collide (Task 8 adds the wkp-ms-* CSS).
+//    Behaviour is kept VERBATIM from the 2026-06-05 ISS fixes:
+//      - checkbox `change` event (NOT a label click — that double-fires),
+//      - currently-selected options sort FIRST in the dropdown,
+//      - fixed-position dropdown anchored to its trigger (Frappe Desk wraps
+//        the page in a transformed ancestor that breaks position:absolute).
+//  RESTRICT: do NOT regress these. Do NOT use position:absolute on the
+//    dropdown. Always escape dynamic values via _wkpEsc.
+// ═══════════════════════════════════════════════════════════════════════
+
+const _wkpEsc = (v) => frappe.utils.escape_html(String(v == null ? "" : v));
+
+/* Position a fixed-position dropdown panel relative to its trigger.
+   Ported verbatim from item_short_surplus.js positionDropdownToTrigger.
+   The panel is position:fixed (viewport coords); anchor under the trigger,
+   flip up if there's no room below, clamp to viewport edges. */
+function positionWkpDropdownToTrigger(triggerEl, dropdownEl) {
+  if (!triggerEl || !dropdownEl) return;
+  const rect = triggerEl.getBoundingClientRect();
+  const vpH = window.innerHeight;
+  const vpW = window.innerWidth;
+  const dropH = Math.min(420, dropdownEl.scrollHeight || 420);
+  const minW  = Math.max(280, rect.width);
+
+  let top  = rect.bottom + 4;
+  let left = rect.left;
+
+  if (top + dropH > vpH - 8 && rect.top > dropH + 8) {
+    top = rect.top - dropH - 4;
+  }
+  if (left + minW > vpW - 8) left = Math.max(8, vpW - minW - 8);
+  if (left < 8) left = 8;
+
+  dropdownEl.style.top   = `${top}px`;
+  dropdownEl.style.left  = `${left}px`;
+  dropdownEl.style.width = `${minW}px`;
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════
 //  MAIN CONTROLLER CLASS
@@ -615,6 +667,16 @@ class WOKittingPlanner {
     this._selWo            = [];        // selected WO statuses (subset of universe)
     this._selSo            = [];        // selected SO statuses (+ "Workflow: <state>")
     this._selPo            = [];        // selected PO statuses
+    // 2026-06-05 — Warehouse + Company filters (ported alongside SO/WO/PO).
+    //   _selWh      = []  → all Inventory warehouses (server falls back to
+    //                       TOC Settings default Inventory warehouses).
+    //   _selCompany = ""  → all companies (server falls back to Global Default).
+    //   _filterUniverse   → full payload from wkp_get_filter_universe (statuses
+    //                       universe + warehouse list + defaults). Seeded once
+    //                       on load; pickers read their option lists from it.
+    this._selWh            = [];        // selected warehouse names ([] = all warehouses)
+    this._selCompany       = "";        // selected company ("" = all)
+    this._filterUniverse   = null;      // last wkp_get_filter_universe response
     this._statusUniverse   = null;      // last wkp_get_default_statuses response
     this._statusFiltersDirty = false;   // true if user changed any after the last Load
 
@@ -669,12 +731,16 @@ class WOKittingPlanner {
     this._bindControls();
     this._bindTabs();
     this._bindFilterBar();
-    this._loadDynamicFilters();
     this._initHelpSystem();
     this._initAIPanel();
     this._setupFullHeight();
     this._updateHintBar();
-    this.load();
+    // 2026-06-05 (Task 6): _loadDynamicFilters() now seeds the five pickers
+    // from TOC Settings AND fires the first load() in its callback (after
+    // seeding) so the initial view honours warehouse/company defaults.
+    // The previously-separate this.load() here was removed to avoid a
+    // double-load that would have run before the pickers were seeded.
+    this._loadDynamicFilters();
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -990,6 +1056,13 @@ class WOKittingPlanner {
       this.load();
     });
 
+    // 2026-06-05 (Task 6): explicit Load button — applies the SO/WO/PO /
+    // warehouse / company picker selections and recomputes every tab. The
+    // pickers only mark this button dirty on change (WKP-034: heavy recompute
+    // is gated behind an explicit Load, never auto-run on selection).
+    const loadBtn = document.getElementById("wkp-load-btn");
+    if (loadBtn) loadBtn.addEventListener("click", () => { this._clearLoadDirty(); this.load(); });
+
     // ── WKP-038 (2026-05-14): Hide / Unhide controls bar ─────────────
     // sessionStorage key keeps the choice while the user navigates tabs
     // but resets on a hard refresh (so a teammate opening the page fresh
@@ -1258,6 +1331,8 @@ class WOKittingPlanner {
       args: {
         status_filter: this.statusFilter,
         wo_statuses  : JSON.stringify(this._selWo || []),
+        warehouses   : JSON.stringify(this._selWh || []),
+        company      : this._selCompany || "",
       },
       callback: r => {
         if (r.exc) {
@@ -1294,6 +1369,8 @@ class WOKittingPlanner {
         // WKP-034: supply pool calc honours the user-selected WO + PO statuses
         wo_statuses      : JSON.stringify(this._selWo || []),
         po_statuses      : JSON.stringify(this._selPo || []),
+        warehouses       : JSON.stringify(this._selWh || []),
+        company          : this._selCompany || "",
       },
       callback: r => {
         this._showLoader(false);
@@ -1910,23 +1987,456 @@ class WOKittingPlanner {
     if (groups.includes(current)) sel.value = current;
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  FILTER PICKERS (ported from item_short_surplus.js, 2026-06-05)
+  //  Task 6 — five editable pickers in the filter row:
+  //    SO / WO / PO status-pair multiselects  → _wkpPairMulti
+  //    Warehouses live Link multiselect        → _wkpLinkMulti
+  //    Company single Link picker              → _wkpSingleLink
+  //
+  //  State write-back is keyed via _wkpStateKey():
+  //    so→_selSo, wo→_selWo, po→_selPo, wh→_selWh ; company→_selCompany.
+  //
+  //  CRITICAL difference from the ISS source: changing a picker does NOT
+  //  auto-reload here. WKP recompute is heavy (every tab re-simulates), so
+  //  per WKP-034 the recompute is gated behind the explicit Load button —
+  //  a change only marks the Load button dirty via _markLoadDirty().
+  // ═══════════════════════════════════════════════════════════════════
+
+  // Map a picker key to the controller state field it writes.
+  _wkpStateKey(key) {
+    return ({ so: "_selSo", wo: "_selWo", po: "_selPo", wh: "_selWh" })[key];
+  }
+
+  /* SO/WO/PO status-pair multiselect (chips + checkbox dropdown).
+     Ported from ISS _mkPairMulti, but WKP's status universe is a flat
+     array of STRINGS (plain submitted statuses + "Workflow: <state>"
+     strings), not {key,label,...} objects — so options are strings here.
+     Mounts the trigger + dropdown INTO `host` (the bare #wkp-*-ms div). */
+  _wkpPairMulti(host, key, options) {
+    if (!host) return;
+    const stateKey = this._wkpStateKey(key);
+    const $ms   = $(host).empty().attr("tabindex", "0");
+    const $drop = $(`<div class="wkp-ms-dropdown"></div>`);
+    const $head = $(`
+        <div class="wkp-ms-head">
+            <div class="wkp-ms-search-wrap">
+                <i class="fa fa-search wkp-ms-search-icon"></i>
+                <input type="search" class="wkp-ms-search"
+                       placeholder="${_wkpEsc(__("Search status or workflow…"))}">
+            </div>
+            <div class="wkp-ms-actions">
+                <button class="wkp-ms-act wkp-ms-act-all">${__("Select all")}</button>
+                <button class="wkp-ms-act wkp-ms-act-clear">${__("Clear")}</button>
+            </div>
+        </div>`);
+    const $opts = $(`<div class="wkp-ms-opts"></div>`);
+    const $foot = $(`<div class="wkp-ms-foot"></div>`);
+    $drop.append($head).append($opts).append($foot);
+    const $search = $head.find(".wkp-ms-search");
+
+    const isWf = (s) => typeof s === "string" && s.indexOf("Workflow: ") === 0;
+
+    const renderChips = () => {
+      $ms.empty();
+      const arr = this[stateKey] || [];
+      if (!arr.length) {
+        $ms.append(`<span class="wkp-ms-placeholder">${__("Pick pending statuses…")}</span>`);
+        $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+        return;
+      }
+      const visible = arr.slice(0, 2);
+      visible.forEach(v => {
+        const $c = $(`<span class="wkp-ms-chip${isWf(v) ? " wf" : ""}" title="${_wkpEsc(v)}">${_wkpEsc(v)}<span class="wkp-ms-chip-x" title="${_wkpEsc(__("Remove"))}">&times;</span></span>`);
+        $c.find(".wkp-ms-chip-x").on("click", (e) => {
+          e.stopPropagation();
+          this[stateKey] = (this[stateKey] || []).filter(z => z !== v);
+          renderChips();
+          renderFoot();
+          this._markLoadDirty();
+        });
+        $ms.append($c);
+      });
+      if (arr.length > 2) {
+        $ms.append(`<span class="wkp-ms-chip wkp-ms-chip-more" title="${_wkpEsc(arr.slice(2).join(", "))}">+${arr.length - 2} ${__("more")}</span>`);
+      }
+      $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+    };
+
+    const renderFoot = () => {
+      const sel = (this[stateKey] || []).length;
+      $foot.text(__("{0} of {1} selected", [sel, options.length]));
+    };
+
+    let currentList = options.slice();
+    const renderOpts = (filter = "") => {
+      $opts.empty();
+      const f = (filter || "").toLowerCase();
+      let list = options.slice();
+      if (f) list = list.filter(o => String(o).toLowerCase().includes(f));
+      // 2026-06-05 FIX — selected options sort FIRST so the operator always
+      // sees (and can untick) what is currently chosen.
+      const sel = new Set(this[stateKey] || []);
+      list.sort((a, b) => (sel.has(b) ? 1 : 0) - (sel.has(a) ? 1 : 0));
+      if (!list.length) {
+        $opts.append(`<div class="wkp-ms-empty"><i class="fa fa-search-minus"></i> ${__("No matches")}</div>`);
+        return;
+      }
+      list.forEach(v => {
+        const isSel = sel.has(v);
+        const pill = isWf(v)
+          ? `<span class="wkp-ms-pill wkp-ms-pill--wf">${_wkpEsc(v.replace("Workflow: ", ""))}</span>`
+          : `<span class="wkp-ms-pill wkp-ms-pill--status">${_wkpEsc(v)}</span>`;
+        const $o = $(`
+            <label class="wkp-ms-option ${isSel ? "selected" : ""}">
+                <input type="checkbox" ${isSel ? "checked" : ""}>
+                <span class="wkp-ms-option-text">${pill}</span>
+            </label>`);
+        // 2026-06-05 FIX — selection driven by the checkbox `change` event,
+        // NOT a label click (that double-fires: label + synthetic input).
+        $o.find("input").on("change", (e) => {
+          e.stopPropagation();
+          const checked = e.target.checked;
+          const current = this[stateKey] || [];
+          if (checked && !current.includes(v)) this[stateKey] = [...current, v];
+          else if (!checked)                    this[stateKey] = current.filter(z => z !== v);
+          $o.toggleClass("selected", checked);
+          renderChips();
+          renderFoot();
+          this._markLoadDirty();
+        });
+        $o.on("click", (e) => { e.stopPropagation(); });
+        $opts.append($o);
+      });
+    };
+
+    $head.find(".wkp-ms-act-all").on("click", (e) => {
+      e.stopPropagation();
+      const set = new Set([...(this[stateKey] || []), ...currentListVisible()]);
+      this[stateKey] = Array.from(set);
+      renderChips(); renderFoot(); renderOpts($search.val()); this._markLoadDirty();
+    });
+    const currentListVisible = () => {
+      const f = ($search.val() || "").toLowerCase();
+      return f ? options.filter(o => String(o).toLowerCase().includes(f)) : options.slice();
+    };
+    $head.find(".wkp-ms-act-clear").on("click", (e) => {
+      e.stopPropagation();
+      this[stateKey] = [];
+      renderChips(); renderFoot(); renderOpts($search.val()); this._markLoadDirty();
+    });
+
+    this._wkpWireDropdown($ms, $drop, $search, () => { renderOpts(); renderFoot(); }, "pair-" + key);
+    renderChips();
+  }
+
+  /* Live Link-doctype multiselect (chips + dropdown, server-fetched).
+     Ported from ISS _mkLinkMulti (no title_field — warehouses use plain
+     name). Mounts into `host`. */
+  _wkpLinkMulti(host, key, doctype, opts = {}) {
+    if (!host) return;
+    const stateKey = this._wkpStateKey(key);
+    const $ms   = $(host).empty().attr("tabindex", "0");
+    const $drop = $(`<div class="wkp-ms-dropdown"></div>`);
+    const $head = $(`
+        <div class="wkp-ms-head">
+            <div class="wkp-ms-search-wrap">
+                <i class="fa fa-search wkp-ms-search-icon"></i>
+                <input type="search" class="wkp-ms-search"
+                       placeholder="${_wkpEsc(__("Search {0}…", [doctype]))}">
+            </div>
+            <div class="wkp-ms-actions">
+                <button class="wkp-ms-act wkp-ms-act-clear">${__("Clear")}</button>
+            </div>
+        </div>`);
+    const $opts = $(`<div class="wkp-ms-opts"></div>`);
+    const $foot = $(`<div class="wkp-ms-foot"></div>`);
+    $drop.append($head).append($opts).append($foot);
+    const $search = $head.find(".wkp-ms-search");
+
+    const renderChips = () => {
+      $ms.empty();
+      const arr = this[stateKey] || [];
+      if (!arr.length) {
+        $ms.append(`<span class="wkp-ms-placeholder">${__("All warehouses")}</span>`);
+        $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+        return;
+      }
+      arr.slice(0, 3).forEach(v => {
+        const $c = $(`<span class="wkp-ms-chip" title="${_wkpEsc(v)}">${_wkpEsc(v)}<span class="wkp-ms-chip-x" title="${_wkpEsc(__("Remove"))}">&times;</span></span>`);
+        $c.find(".wkp-ms-chip-x").on("click", (e) => {
+          e.stopPropagation();
+          this[stateKey] = (this[stateKey] || []).filter(z => z !== v);
+          renderChips(); renderFoot(); this._markLoadDirty();
+        });
+        $ms.append($c);
+      });
+      if (arr.length > 3) {
+        $ms.append(`<span class="wkp-ms-chip wkp-ms-chip-more" title="${_wkpEsc(arr.slice(3).join(", "))}">+${arr.length - 3} ${__("more")}</span>`);
+      }
+      $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+    };
+
+    const renderFoot = () => {
+      const sel = (this[stateKey] || []).length;
+      $foot.text(sel ? __("{0} selected", [sel]) : __("Type to search"));
+    };
+
+    const renderRow = (name) => {
+      const isSel = (this[stateKey] || []).includes(name);
+      const $o = $(`
+          <label class="wkp-ms-option ${isSel ? "selected" : ""}">
+              <input type="checkbox" ${isSel ? "checked" : ""}>
+              <span class="wkp-ms-option-text">${_wkpEsc(name)}</span>
+          </label>`);
+      $o.find("input").on("change", (e) => {
+        e.stopPropagation();
+        const checked = e.target.checked;
+        const current = this[stateKey] || [];
+        if (checked && !current.includes(name)) this[stateKey] = [...current, name];
+        else if (!checked)                       this[stateKey] = current.filter(z => z !== name);
+        $o.toggleClass("selected", checked);
+        renderChips(); renderFoot(); this._markLoadDirty();
+      });
+      $o.on("click", (e) => { e.stopPropagation(); });
+      return $o;
+    };
+
+    const fetchAndRender = (term = "") => {
+      $opts.html(`<div class="wkp-ms-empty"><i class="fa fa-spinner fa-spin"></i> ${__("Searching {0}…", [doctype])}</div>`);
+      frappe.db.get_list(doctype, {
+        filters: term ? [["name", "like", `%${term}%`]] : {},
+        fields: ["name"],
+        limit: 50,
+        order_by: "name asc",
+      }).then(rows => {
+        $opts.empty();
+        const termL = (term || "").toLowerCase();
+        const selAll = this[stateKey] || [];
+        // Selected items go FIRST (2026-06-05 fix) so they're always untickable.
+        const selMatch = selAll.filter(n => !termL || n.toLowerCase().includes(termL));
+        const selSet = new Set(selAll);
+        const others = (rows || []).filter(r => !selSet.has(r.name));
+        if (!selMatch.length && !others.length) {
+          $opts.append(`<div class="wkp-ms-empty"><i class="fa fa-search-minus"></i> ${__("No {0} found", [doctype])}</div>`);
+          return;
+        }
+        if (selMatch.length) {
+          $opts.append(`<div class="wkp-ms-section">${__("Selected")} (${selMatch.length})</div>`);
+          selMatch.forEach(n => $opts.append(renderRow(n)));
+          if (others.length) $opts.append(`<div class="wkp-ms-section">${__("More results")}</div>`);
+        }
+        others.forEach(r => $opts.append(renderRow(r.name)));
+      }).catch(() => {
+        $opts.html(`<div class="wkp-ms-empty wkp-ms-error"><i class="fa fa-exclamation-triangle"></i> ${__("Search failed")}</div>`);
+      });
+    };
+
+    let debounceTimer = null;
+    const debouncedFetch = (term) => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => fetchAndRender(term), 250);
+    };
+
+    $head.find(".wkp-ms-act-clear").on("click", (e) => {
+      e.stopPropagation();
+      this[stateKey] = [];
+      renderChips(); renderFoot(); fetchAndRender($search.val()); this._markLoadDirty();
+    });
+
+    this._wkpWireDropdown($ms, $drop, $search, () => { fetchAndRender(""); renderFoot(); }, "link-" + key,
+      (e) => debouncedFetch(e.target.value));
+    renderChips();
+  }
+
+  /* Single-value Link picker (Company). Ported from ISS _mkSingleLink.
+     Click selects exactly one option then closes. Writes _selCompany. */
+  _wkpSingleLink(host, key, doctype) {
+    if (!host) return;
+    const $ms   = $(host).empty().attr("tabindex", "0");
+    const $drop = $(`<div class="wkp-ms-dropdown"></div>`);
+    const $head = $(`
+        <div class="wkp-ms-head">
+            <div class="wkp-ms-search-wrap">
+                <i class="fa fa-search wkp-ms-search-icon"></i>
+                <input type="search" class="wkp-ms-search"
+                       placeholder="${_wkpEsc(__("Search {0}…", [doctype]))}">
+            </div>
+            <div class="wkp-ms-actions">
+                <button class="wkp-ms-act wkp-ms-act-clear">${__("Clear")}</button>
+            </div>
+        </div>`);
+    const $opts = $(`<div class="wkp-ms-opts"></div>`);
+    $drop.append($head).append($opts);
+    const $search = $head.find(".wkp-ms-search");
+
+    const renderChip = () => {
+      $ms.empty();
+      const v = this._selCompany;
+      if (!v) {
+        $ms.append(`<span class="wkp-ms-placeholder">${__("Any")}</span>`);
+      } else {
+        const $c = $(`<span class="wkp-ms-chip" title="${_wkpEsc(v)}">${_wkpEsc(v)}<span class="wkp-ms-chip-x" title="${_wkpEsc(__("Clear"))}">&times;</span></span>`);
+        $c.find(".wkp-ms-chip-x").on("click", (e) => {
+          e.stopPropagation();
+          this._selCompany = "";
+          renderChip(); this._markLoadDirty();
+        });
+        $ms.append($c);
+      }
+      $ms.append(`<i class="fa fa-caret-down wkp-ms-caret"></i>`);
+    };
+
+    // Company is a tiny list — seed from the universe payload, no live fetch.
+    const _seed = (doctype === "Company" && this._filterUniverse)
+      ? (this._filterUniverse.companies || [])
+      : null;
+
+    const fetchAndRender = (term = "") => {
+      const renderRows = (rows) => {
+        $opts.empty();
+        if (!rows.length) {
+          $opts.append(`<div class="wkp-ms-empty"><i class="fa fa-search-minus"></i> ${__("No matches")}</div>`);
+          return;
+        }
+        rows.forEach(name => {
+          const isSel = this._selCompany === name;
+          const $o = $(`
+              <label class="wkp-ms-option ${isSel ? "selected" : ""}">
+                  <span class="wkp-ms-option-text">${_wkpEsc(name)}</span>
+                  ${isSel ? `<i class="fa fa-check wkp-ms-check"></i>` : ""}
+              </label>`);
+          $o.on("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this._selCompany = isSel ? "" : name;
+            renderChip();
+            $drop.removeClass("open");
+            this._markLoadDirty();
+          });
+          $opts.append($o);
+        });
+      };
+      if (_seed) {
+        let list = _seed.slice();
+        if (term) {
+          const t = term.toLowerCase();
+          list = list.filter(x => String(x).toLowerCase().includes(t));
+        }
+        renderRows(list);
+        return;
+      }
+      $opts.html(`<div class="wkp-ms-empty"><i class="fa fa-spinner fa-spin"></i> ${__("Searching {0}…", [doctype])}</div>`);
+      frappe.db.get_list(doctype, {
+        filters: term ? [["name", "like", `%${term}%`]] : {},
+        fields: ["name"], limit: 50, order_by: "name asc",
+      }).then(rows => renderRows(rows.map(r => r.name)))
+        .catch(() => $opts.html(`<div class="wkp-ms-empty wkp-ms-error"><i class="fa fa-exclamation-triangle"></i> ${__("Search failed")}</div>`));
+    };
+
+    let debounceTimer = null;
+    const debouncedFetch = (term) => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => fetchAndRender(term), 250);
+    };
+
+    $head.find(".wkp-ms-act-clear").on("click", (e) => {
+      e.stopPropagation();
+      this._selCompany = "";
+      renderChip(); fetchAndRender($search.val()); this._markLoadDirty();
+    });
+
+    this._wkpWireDropdown($ms, $drop, $search, () => fetchAndRender(""), "single-" + key,
+      (e) => debouncedFetch(e.target.value));
+    renderChip();
+  }
+
+  /* Shared open/close + fixed-position wiring for all three pickers.
+     onOpen()    — (re)render the option list when the dropdown opens.
+     onSearch(e) — optional input handler (Link pickers debounce a fetch;
+                   the pair picker re-renders synchronously via onOpen's
+                   closure, so it passes its own input handler too). */
+  _wkpWireDropdown($ms, $drop, $search, onOpen, ns, onSearch) {
+    const reposition = () => positionWkpDropdownToTrigger($ms[0], $drop[0]);
+    const closeDrop = () => {
+      $drop.removeClass("open");
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+    $ms.on("click", (e) => {
+      if ($(e.target).hasClass("wkp-ms-chip-x")) return;
+      $(".wkp-ms-dropdown.open").not($drop).removeClass("open");
+      const wasOpen = $drop.hasClass("open");
+      if (wasOpen) { closeDrop(); return; }
+      $search.val("");
+      onOpen();
+      if ($drop[0].parentNode !== document.body) document.body.appendChild($drop[0]);
+      $drop.addClass("open");
+      requestAnimationFrame(reposition);
+      window.addEventListener("scroll", reposition, true);
+      window.addEventListener("resize", reposition);
+      setTimeout(() => $search.focus(), 0);
+    });
+    if (onSearch) {
+      $search.on("input", onSearch);
+    } else {
+      // Pair picker: re-render the (synchronous) option list on each keystroke.
+      $search.on("input", () => onOpen());
+    }
+    $search.on("keydown", (e) => { if (e.key === "Escape") closeDrop(); });
+    $(document).on("click.wkp-ms-" + ns, (e) => {
+      if ($drop[0].contains(e.target)) return;
+      if ($ms[0] && !$ms[0].contains(e.target)) closeDrop();
+    });
+  }
+
+  // Load-dirty helpers — a picker change marks the Load button so the user
+  // knows a recompute is pending. Load (and the seed on first paint) clears it.
+  _markLoadDirty() {
+    const b = document.getElementById("wkp-load-btn");
+    if (b) b.classList.add("wkp-load-dirty");
+  }
+  _clearLoadDirty() {
+    const b = document.getElementById("wkp-load-btn");
+    if (b) b.classList.remove("wkp-load-dirty");
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // _loadDynamicFilters — seed the five pickers from wkp_get_filter_universe.
+  //
+  // CONTEXT (2026-06-05, Task 6): replaces the old read-only TOC banner.
+  //   Pickers are SEEDED to today's TOC Settings defaults on load (so the
+  //   first view is "no surprise" — exactly what the engine treats as
+  //   pending now), but the operator can override any of them per session.
+  //   Recompute is EXPLICIT — changes only mark the Load button dirty; the
+  //   user clicks Load to apply. warehouses/company thread to the backend
+  //   on every data call. The very first load() runs here in the callback
+  //   (AFTER seeding) so it already honours the warehouse/company defaults —
+  //   init() no longer fires a separate first load (no double-load).
+  // ───────────────────────────────────────────────────────────────────
   _loadDynamicFilters() {
-    // TS-001 (2026-05-14): the WKP-034 per-report status pickers were
-    // removed. TOC Settings is the single source of truth. We now fetch
-    // the read-only "Active Pending Filter" payload from
-    // `chaizup_toc.api.wo_kitting_api.get_toc_pending_filters` and
-    // render it into the banner. The selections (`this._selWo`, etc.)
-    // are kept as empty arrays so every downstream `frappe.call` falls
-    // back to TOC Settings on the server side.
-    this._selWo = [];
-    this._selSo = [];
-    this._selPo = [];
     frappe.call({
-      method: "chaizup_toc.api.wo_kitting_api.get_toc_pending_filters",
-      callback: r => {
-        const m = r.message || {};
-        this._statusUniverse = m;
-        this._renderPendingBanner(m);
+      method: "chaizup_toc.api.wo_kitting_api.wkp_get_filter_universe",
+      callback: (r) => {
+        const m = (r && r.message) || {};
+        this._filterUniverse = m;
+        this._statusUniverse = m.statuses || {};
+        const st = m.statuses || {};
+        // Seed selections from TOC Settings defaults (slice → own arrays).
+        this._selWo      = (st.wo_statuses || []).slice();
+        this._selSo      = (st.so_statuses || []).slice();
+        this._selPo      = (st.po_statuses || []).slice();
+        this._selWh      = (m.wh_default || []).slice();
+        this._selCompany = m.company_default || "";
+        // Mount the five pickers onto their (bare) HTML hosts.
+        this._wkpPairMulti(document.getElementById("wkp-so-ms"), "so", st.all_so_statuses || []);
+        this._wkpPairMulti(document.getElementById("wkp-wo-ms"), "wo", st.all_wo_statuses || []);
+        this._wkpPairMulti(document.getElementById("wkp-po-ms"), "po", st.all_po_statuses || []);
+        this._wkpLinkMulti(document.getElementById("wkp-wh-ms"), "wh", "Warehouse", {});
+        this._wkpSingleLink(document.getElementById("wkp-company-ms"), "company", "Company");
+        this._clearLoadDirty();
+        // First load runs AFTER seeding so warehouse/company defaults apply.
+        this.load();
       },
     });
   }
@@ -4305,6 +4815,8 @@ class WOKittingPlanner {
         // WKP-034: thread the user-selected WO + SO statuses through.
         wo_statuses : JSON.stringify(this._selWo || []),
         so_statuses : JSON.stringify(this._selSo || []),
+        warehouses  : JSON.stringify(this._selWh || []),
+        company     : this._selCompany || "",
       },
       callback: r => {
         this._itemViewLoading = false;
@@ -5463,6 +5975,8 @@ class WOKittingPlanner {
         // WKP-034: thread the user-selected SO + PO statuses through.
         so_statuses : JSON.stringify(this._selSo || []),
         po_statuses : JSON.stringify(this._selPo || []),
+        warehouses  : JSON.stringify(this._selWh || []),
+        company     : this._selCompany || "",
       },
       callback: r => {
         this._dispatchLoading = false;
