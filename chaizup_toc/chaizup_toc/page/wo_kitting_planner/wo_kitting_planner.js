@@ -1518,6 +1518,24 @@ class WOKittingPlanner {
     }
   }
 
+  // 2026-06-05 (Phase B): single source of truth for a qty cell. Renders the
+  // stock value + UOM, and (when present) the higher-UOM line beneath. `higher`
+  // is the backend `<field>_higher` = {uom, qty} pair. `drill` (optional) =
+  // {item, metric} makes the cell click-to-drilldown (Task 6 binds the click).
+  // NEVER recompute higher here — it is shipped by the backend (= stock / factor).
+  _qtyCell(stockQty, stockUom, higher, drill) {
+    const sec = (higher && higher.uom && higher.qty != null)
+      ? `<div class="wkp-qty-secondary">${_fmt_num(higher.qty, 2)} ${_esc(higher.uom)}</div>`
+      : "";
+    const drillAttr = drill
+      ? ` data-drill-item="${_esc(drill.item)}" data-drill-metric="${_esc(drill.metric)}"`
+      : "";
+    const cls = drill ? "wkp-qty-clickable" : "";
+    return `<div class="wkp-qty-cell ${cls}"${drillAttr}>`
+         + `<div class="wkp-qty-primary">${_fmt_num(stockQty, 0)}</div>`
+         + `<div class="wkp-qty-uom">${_esc(stockUom || "")}</div>${sec}</div>`;
+  }
+
   _buildRow(row, idx) {
     const statusClass = {
       ok: "wkp-row-ok", partial: "wkp-row-warn",
@@ -1610,16 +1628,12 @@ class WOKittingPlanner {
   </td>
   <td class="ta-r"
       data-tip="Qty to Produce (Remaining)&#10;How many units still need to be manufactured.&#10;Formula: Work Order Planned Qty &minus; Already Produced Qty">
-    <div class="wkp-qty-primary">${_fmt_num(row.remaining_qty, 0)}</div>
-    <div class="wkp-qty-uom">${_esc(row.uom || "")}</div>
-    ${row.secondary_uom ? `<div class="wkp-qty-secondary">${_fmt_num(row.secondary_qty || (row.remaining_qty / (row.secondary_factor || 1)), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}
+    ${this._qtyCell(row.remaining_qty, row.uom, row.remaining_qty_higher, null)}
   </td>
-  <td class="ta-r"
+  <td class="ta-r wkp-text-ok"
       data-tip="Already Produced&#10;Qty already manufactured and received into Finished Goods warehouse.&#10;This stock is available for dispatch right now.&#10;Source: Work Order Produced Qty field in ERPNext.">
     ${(row.produced_qty || 0) > 0
-      ? `<div class="wkp-qty-primary wkp-text-ok">${_fmt_num(row.produced_qty, 0)}</div>
-         <div class="wkp-qty-uom">${_esc(row.uom || "")}</div>
-         ${row.secondary_uom ? `<div class="wkp-qty-secondary">${_fmt_num((row.produced_qty) / (row.secondary_factor || 1), 2)}\u00a0${_esc(row.secondary_uom)}</div>` : ""}`
+      ? this._qtyCell(row.produced_qty, row.uom, row.produced_qty_higher, null)
       : `<span style="color:var(--slate-300)">\u2014</span>`}
   </td>
   <td>
@@ -5243,15 +5257,12 @@ class WOKittingPlanner {
       const sf     = item.secondary_factor || 1;
       const secUom = item.secondary_uom || "";
 
-      // Dual UOM helper for table cells
-      const dualCell = (qty, uom, secUom2, sf2) => {
+      // Dual UOM helper for table cells \u2014 delegates to the shared _qtyCell so
+      // every tab renders qty identically. `higher` is the backend
+      // `<field>_higher` pair; `drill` (optional) makes it click-to-drilldown.
+      const dualCell = (qty, uom, higher, drill) => {
         if (!qty && qty !== 0) return "\u2014";
-        const prim = `<strong>${_fmt_num(qty, 0)}</strong>
-          <div style="font-size:10px;color:var(--stone-400)">${_esc(uom)}</div>`;
-        const sec2 = secUom2
-          ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(qty / (sf2 || 1), 2)}\u00a0${_esc(secUom2)}</div>`
-          : "";
-        return prim + sec2;
+        return this._qtyCell(qty, uom, higher, drill);
       };
 
       // Kit status badge cluster
@@ -5319,21 +5330,20 @@ class WOKittingPlanner {
     <div style="margin-top:2px">${woLinks}${woLinksExtra}</div>
   </td>
   <td class="ta-c">${kitBadges}</td>
-  <td class="ta-r">${dualCell(item.planned_qty,   item.stock_uom, secUom, sf)}</td>
-  <td class="ta-r">${dualCell(item.produced_qty,  item.stock_uom, secUom, sf)}</td>
-  <td class="ta-r">${dualCell(item.remaining_qty, item.stock_uom, secUom, sf)}</td>
+  <td class="ta-r">${dualCell(item.planned_qty,   item.stock_uom, item.planned_qty_higher,   null)}</td>
+  <td class="ta-r">${dualCell(item.produced_qty,  item.stock_uom, item.produced_qty_higher,  null)}</td>
+  <td class="ta-r">${dualCell(item.remaining_qty, item.stock_uom, item.remaining_qty_higher, null)}</td>
   <td class="ta-r">
     ${item.consumed_qty
-      ? `<strong>${_fmt_num(item.consumed_qty, 0)}</strong>
-         <div style="font-size:10px;color:var(--stone-400)">${_esc(item.stock_uom)}</div>
-         ${item.consumed_cost ? `<div style="font-size:10px;color:var(--stone-500)">\u20B9${_fmt_num(item.consumed_cost, 0)}</div>` : ""}`
+      ? this._qtyCell(item.consumed_qty, item.stock_uom, item.consumed_qty_higher, null)
+        + (item.consumed_cost ? `<div style="font-size:10px;color:var(--stone-500);text-align:right">\u20B9${_fmt_num(item.consumed_cost, 0)}</div>` : "")
       : `<span style="color:var(--stone-400)">\u2014</span>`}
   </td>
   <td class="ta-r">
     ${item.so_count
-      ? `<div style="font-weight:600;color:var(--amber-700)">${_fmt_num(item.so_pending_qty, 0)}</div>
-         <div style="font-size:10px;color:var(--stone-400)">${item.so_count} SO${item.so_count !== 1 ? "s" : ""}</div>
-         ${secUom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(item.so_pending_qty / sf, 2)}\u00a0${_esc(secUom)}</div>` : ""}`
+      ? this._qtyCell(item.so_pending_qty, item.stock_uom, item.so_pending_qty_higher,
+                      { item: item.item_code, metric: "pending_so" })
+        + `<div style="font-size:10px;color:var(--stone-400);text-align:right">${item.so_count} SO${item.so_count !== 1 ? "s" : ""}</div>`
       : `<span style="color:var(--stone-400)">\u2014</span>`}
   </td>
   <td class="ta-r"
@@ -6446,6 +6456,11 @@ class WOKittingPlanner {
         kit_statuses    : wo.kit_statuses,
         fg_stock,
         total_pending,
+        // Phase B: carry the backend `<field>_higher` pairs through the merge so
+        // the shared _qtyCell can render the higher-UOM line (only fg_stock and
+        // total_pending are decorated server-side; coverage/gap are client-derived).
+        fg_stock_higher     : d.fg_stock_higher,
+        total_pending_higher: d.total_pending_higher,
         total_coverage,
         gap,
         dsp_status     : dspStatus,
@@ -6598,15 +6613,14 @@ class WOKittingPlanner {
   </td>
   <td class="ta-r"
       data-tip="Customer Orders (Pending Dispatch)&#10;Total qty across all open Sales Orders not yet delivered.&#10;Source: Sales Order Items where (qty - delivered_qty) &gt; 0">
-    <strong>${_fmt_num(item.total_pending, 0)}</strong>
-    <div style="font-size:10px;color:var(--stone-400)">${_esc(item.uom)}</div>
-    ${item.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(item.total_pending / item.secondary_factor, 2)}\u00a0${_esc(item.secondary_uom)}</div>` : ""}
+    ${this._qtyCell(item.total_pending, item.uom, item.total_pending_higher,
+                    { item: item.item_code, metric: "pending_so" })}
     ${overdueCount > 0 ? `<div class="wkp-dsp-overdue-note" data-tip="${overdueCount} order(s) with overdue delivery dates">\u26A0 ${overdueCount} overdue</div>` : ""}
   </td>
   <td class="ta-r"
       data-tip="FG In Stock&#10;Physical finished-good stock in all warehouses right now.&#10;Source: Bin.actual_qty (tabBin) for this item code.">
-    ${_fmt_num(item.fg_stock, 0)}
-    ${item.secondary_uom ? `<div style="font-size:10px;color:var(--stone-500)">${_fmt_num(item.fg_stock / item.secondary_factor, 2)}\u00a0${_esc(item.secondary_uom)}</div>` : ""}
+    ${this._qtyCell(item.fg_stock, item.uom, item.fg_stock_higher,
+                    { item: item.item_code, metric: "stock" })}
   </td>
   <td class="ta-r"
       data-tip="Will Be Produced&#10;Sum of remaining_qty (Planned - Produced) across all open Work Orders for this item.&#10;0 = no active Work Order for this item (customer order with no production plan yet).">

@@ -3764,3 +3764,11 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
     .wkp-sortpicker { flex:1 1 auto; min-width:0; }
     .wkp-sortpicker-dropdown { right:auto; left:0; }
 }
+
+/* 2026-06-05 (Phase B) — uniform dual-UOM qty cell + drill affordance */
+.wkp-qty-cell { display:flex; flex-direction:column; align-items:flex-end; gap:0; }
+.wkp-qty-primary { font-weight:600; line-height:1.15; }
+.wkp-qty-uom { font-size:10px; color:var(--stone-400,#a8a29e); line-height:1.1; }
+.wkp-qty-clickable { cursor:pointer; border-radius:6px; padding:2px 4px; margin:-2px -4px; transition:background .12s, box-shadow .12s; }
+.wkp-qty-clickable:hover { background:var(--indigo-50,#eef2ff); box-shadow:inset 0 0 0 1px var(--indigo-200,#c7d2fe); }
+.wkp-qty-secondary { font-size:10.5px; color:var(--slate-500,#64748b); }
