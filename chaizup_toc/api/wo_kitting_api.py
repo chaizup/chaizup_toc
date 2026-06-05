@@ -1027,6 +1027,25 @@ def simulate_kitting(work_orders_json, stock_mode="current_only",
             else:
                 comp["required_secondary"] = comp["available_secondary"] = comp["shortage_secondary"] = 0.0
 
+    # CONTEXT (Phase-B T2): ship additive, presentational dual-UOM pairs — each
+    # qty field gains a "<field>_higher" {"uom","qty"} companion. Reuses the
+    # sec_uom_map already computed above (no extra query). The legacy inline
+    # secondary_uom/secondary_factor/*_secondary fields are left untouched for
+    # back-compat; these _higher pairs are added ALONGSIDE them.
+    _decorate_qty_pairs(
+        results,
+        ["planned_qty", "produced_qty", "remaining_qty",
+         "prev_month_so", "curr_month_so", "total_pending_so"],
+        item_key="item_code", sec_map=sec_uom_map,
+    )
+    for row in results:
+        _decorate_qty_pairs(
+            row.get("shortage_items", []),
+            ["required", "available", "shortage",
+             "po_qty", "mr_qty", "received_qty_po", "consumed_qty"],
+            item_key="item_code", sec_map=sec_uom_map,
+        )
+
     return results
 
 
@@ -1407,6 +1426,16 @@ def get_item_wo_summary(wo_statuses=None, so_statuses=None,
             "last_cost_date"       : hist.get("completed_date", ""),
             "last_cost_qty"        : round(flt(hist.get("produced_qty",  0)), 2),
         })
+
+    # CONTEXT (Phase-B T2): ship additive, presentational dual-UOM pairs on each
+    # FG-item row. Reuses sec_uom_data computed above (no extra query). Purely
+    # additive ("<field>_higher" companions); existing fields are untouched.
+    _decorate_qty_pairs(
+        result,
+        ["planned_qty", "produced_qty", "remaining_qty",
+         "consumed_qty", "so_pending_qty", "last_cost_qty"],
+        item_key="item_code", sec_map=sec_uom_data,
+    )
 
     return result
 
@@ -2841,6 +2870,30 @@ def get_dispatch_bottleneck(stock_mode="current_only",
             "secondary_uom"   : sec.get("uom", ""),
             "secondary_factor": sec.get("factor", 1.0),
         }
+
+    # CONTEXT (Phase-B T2): ship additive, presentational dual-UOM pairs. NOTE
+    # this endpoint returns a DICT keyed by item_code (not a row list), and the
+    # per-item value carries no item_code field — so we decorate per item with a
+    # 1-row sec_map ({ic: sec}). The nested so_list rows carry no item_code and
+    # belong to the parent item, so they inherit the same parent sec. Reuses the
+    # sec_uom map computed above; purely additive ("<field>_higher" companions).
+    for ic, row in result.items():
+        ic_sec = {ic: sec_uom.get(ic, {})}
+        row["item_code"] = ic   # transient key so _decorate_qty_pairs can look up sec
+        _decorate_qty_pairs(
+            [row], ["fg_stock", "total_pending", "total_reserved"],
+            item_key="item_code", sec_map=ic_sec,
+        )
+        for so in row.get("so_list", []):
+            so["item_code"] = ic
+        _decorate_qty_pairs(
+            row.get("so_list", []),
+            ["qty", "delivered_qty", "pending_qty", "reserved_qty", "dn_qty"],
+            item_key="item_code", sec_map=ic_sec,
+        )
+        for so in row.get("so_list", []):
+            so.pop("item_code", None)   # remove transient key (so_list never carried it)
+        row.pop("item_code", None)      # remove transient key (value never carried it)
 
     return result
 
