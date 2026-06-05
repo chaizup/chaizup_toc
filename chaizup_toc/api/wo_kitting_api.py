@@ -2898,6 +2898,190 @@ def get_dispatch_bottleneck(stock_mode="current_only",
     return result
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  PER-VOUCHER QTY DRILL-DOWN  (Phase-B Task-3)
+# ═══════════════════════════════════════════════════════════════════════
+#  CONTEXT      : The WKP tabs render qty cells (stock / pending SO / WO / PO /
+#                 MR) per item. Clicking a cell must reveal WHICH vouchers make
+#                 up that number, in BOTH the stock UOM and the next-higher UOM
+#                 (g→kg, ml→litre, pcs→dozen). This endpoint is that backing
+#                 query — one item, one metric, returns the contributing rows.
+#  RECONCILE    : *** RULE ***  Each metric here MUST reuse the SAME SQL
+#                 WHERE / JOIN / COALESCE / status-clause / warehouse-scope
+#                 shapes as the table endpoint that feeds the cell, so the
+#                 drill-down TOTAL equals the cell value for that one item:
+#                   stock      ← _build_stock_pool Bin sub-query (per-warehouse)
+#                   pending_po ← _build_stock_pool PO inbound sub-query
+#                   pending_mr ← _build_stock_pool MR inbound sub-query
+#                   pending_wo ← _build_stock_pool / get_item_wo_summary WO scan
+#                   pending_so ← _get_open_so_detail / get_item_wo_summary SO scan
+#                 If a metric's source query ever changes, change it HERE too.
+#  CONVERSION   : FIXED — qty_higher = round(qty_stock / factor, 3); factor is
+#                 the next-higher UOM conversion (qty of stock_uom per 1 higher).
+#                 No factor (item has no higher UOM) ⇒ qty_higher = None.
+#  RESTRICT     : Do NOT invent parallel queries or alternate scoping. Unknown
+#                 metric ⇒ empty rows (never raise). Warehouse / company / status
+#                 scoping is threaded EXACTLY as the table queries thread it.
+# ───────────────────────────────────────────────────────────────────────
+@frappe.whitelist()
+def get_qty_drilldown(item_code, metric, warehouses=None, company=None,
+                      wo_statuses=None, so_statuses=None, po_statuses=None):
+    """Per-voucher breakdown for ONE item's ONE metric, in BOTH UOMs.
+
+    metric ∈ {"stock","pending_so","pending_wo","pending_po","pending_mr"}.
+    Unknown metric ⇒ empty rows (never errors).
+
+    Returns {item_code, item_name, metric, stock_uom, higher_uom, factor,
+             rows:[{voucher_type, voucher, party_or_wh, qty_stock, qty_higher}],
+             totals:{qty_stock, qty_higher}}.
+
+    Scoping (warehouse / company / status) reuses the SAME clauses the table
+    endpoints use so the total reconciles with the cell for that one item.
+    """
+    sec = _get_secondary_uom({item_code}).get(item_code) or {}
+    factor = flt(sec.get("factor")) or 0.0
+    higher_uom = sec.get("uom", "")
+    stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or ""
+    item_name = frappe.db.get_value("Item", item_code, "item_name") or item_code
+
+    def H(q):
+        # FIXED conversion: higher_qty = stock_qty / factor (see CONVERSION above)
+        return round(flt(q) / factor, 3) if factor else None
+
+    wh_scope, wh_active = _wkp_resolve_wh_scope(warehouses, company)
+    rows = []
+
+    if metric == "stock":
+        # MIRROR: _build_stock_pool Bin sub-query (same warehouse predicate),
+        # exploded per-warehouse so each Bin row is a voucher line.
+        wh_sql = " AND warehouse IN %(whs)s" if wh_active else ""
+        params = {"it": item_code}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
+        for r in frappe.db.sql(f"""
+            SELECT warehouse, actual_qty
+            FROM   `tabBin`
+            WHERE  item_code = %(it)s
+              AND  actual_qty != 0
+              {wh_sql}
+            ORDER BY actual_qty DESC
+        """, params, as_dict=True):
+            rows.append({"voucher_type": "Warehouse", "voucher": r.warehouse,
+                         "party_or_wh": r.warehouse, "qty_stock": flt(r.actual_qty),
+                         "qty_higher": H(r.actual_qty)})
+
+    elif metric == "pending_po":
+        # MIRROR: _build_stock_pool PO inbound sub-query — open PO Item lines,
+        # status-scoped via _wkp_po_status_clause, warehouse COALESCE(row, header).
+        po_statuses_eff = _wkp_parse_status_list(po_statuses, _toc_settings_po_statuses())
+        po_clause = _wkp_po_status_clause(po_statuses_eff)
+        po_wh_sql = (" AND COALESCE(NULLIF(poi.warehouse,''), NULLIF(po.set_warehouse,'')) IN %(whs)s"
+                     if wh_active else "")
+        params = {"it": item_code}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
+        for r in frappe.db.sql(f"""
+            SELECT po.name AS voucher,
+                   po.supplier AS party,
+                   (poi.qty - COALESCE(poi.received_qty, 0)) AS pending
+            FROM   `tabPurchase Order Item` poi
+            JOIN   `tabPurchase Order` po ON po.name = poi.parent
+            WHERE  poi.item_code = %(it)s
+              AND  {po_clause}
+              {po_wh_sql}
+              AND  (poi.qty - COALESCE(poi.received_qty, 0)) > 0
+            ORDER BY po.transaction_date ASC, po.name ASC
+        """, params, as_dict=True):
+            rows.append({"voucher_type": "Purchase Order", "voucher": r.voucher,
+                         "party_or_wh": r.party or "", "qty_stock": flt(r.pending),
+                         "qty_higher": H(r.pending)})
+
+    elif metric == "pending_so":
+        # MIRROR: _get_open_so_detail / get_item_wo_summary SO scan — open SO
+        # Item lines, status-scoped via _wkp_so_status_clause, warehouse
+        # COALESCE(row, header). pending = qty - delivered_qty.
+        so_statuses_eff = _wkp_parse_status_list(so_statuses, _toc_settings_so_statuses())
+        so_clause = _wkp_so_status_clause(so_statuses_eff)
+        so_wh_sql = (" AND COALESCE(NULLIF(soi.warehouse,''), NULLIF(so.set_warehouse,'')) IN %(whs)s"
+                     if wh_active else "")
+        params = {"it": item_code}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
+        for r in frappe.db.sql(f"""
+            SELECT so.name AS voucher,
+                   COALESCE(so.customer_name, so.customer) AS party,
+                   (soi.qty - COALESCE(soi.delivered_qty, 0)) AS pending
+            FROM   `tabSales Order Item` soi
+            JOIN   `tabSales Order` so ON so.name = soi.parent
+            WHERE  soi.item_code = %(it)s
+              AND  {so_clause}
+              {so_wh_sql}
+              AND  (soi.qty - COALESCE(soi.delivered_qty, 0)) > 0
+            ORDER BY so.delivery_date ASC, so.name ASC
+        """, params, as_dict=True):
+            rows.append({"voucher_type": "Sales Order", "voucher": r.voucher,
+                         "party_or_wh": r.party or "", "qty_stock": flt(r.pending),
+                         "qty_higher": H(r.pending)})
+
+    elif metric == "pending_wo":
+        # MIRROR: _build_stock_pool / get_item_wo_summary WO scan — submitted
+        # WOs status-scoped via _wkp_wo_status_clause, fg_warehouse scope.
+        # remaining = qty - produced_qty. NOTE: the source WO scan does not
+        # apply a >0 guard, so we list every scoped WO (a fully produced WO
+        # contributes 0 and the total still reconciles with the cell).
+        wo_statuses_eff = _wkp_parse_status_list(wo_statuses, _toc_settings_wo_statuses())
+        wo_clause = _wkp_wo_status_clause(wo_statuses_eff)
+        wo_wh_sql = " AND wo.fg_warehouse IN %(whs)s" if wh_active else ""
+        params = {"it": item_code}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
+        for r in frappe.db.sql(f"""
+            SELECT wo.name AS voucher,
+                   wo.production_item AS party,
+                   (wo.qty - COALESCE(wo.produced_qty, 0)) AS remaining
+            FROM   `tabWork Order` wo
+            WHERE  wo.production_item = %(it)s
+              AND  {wo_clause}
+              {wo_wh_sql}
+            ORDER BY wo.planned_start_date ASC, wo.name ASC
+        """, params, as_dict=True):
+            rows.append({"voucher_type": "Work Order", "voucher": r.voucher,
+                         "party_or_wh": r.party or "", "qty_stock": flt(r.remaining),
+                         "qty_higher": H(r.remaining)})
+
+    elif metric == "pending_mr":
+        # MIRROR: _build_stock_pool MR inbound sub-query — open Purchase MR Item
+        # lines (legacy NOT-IN status list, NOT the user status filter), warehouse
+        # COALESCE(row, header). pending = qty - ordered_qty.
+        mr_wh_sql = (" AND COALESCE(NULLIF(mri.warehouse,''), NULLIF(mr.set_warehouse,'')) IN %(whs)s"
+                     if wh_active else "")
+        params = {"it": item_code}
+        if wh_active:
+            params["whs"] = tuple(wh_scope)
+        for r in frappe.db.sql(f"""
+            SELECT mr.name AS voucher,
+                   (mri.qty - COALESCE(mri.ordered_qty, 0)) AS pending
+            FROM   `tabMaterial Request Item` mri
+            JOIN   `tabMaterial Request` mr ON mr.name = mri.parent
+            WHERE  mri.item_code = %(it)s
+              AND  mr.docstatus = 1
+              AND  mr.material_request_type = 'Purchase'
+              AND  mr.status NOT IN ('Cancelled', 'Stopped', 'Ordered')
+              {mr_wh_sql}
+              AND  (mri.qty - COALESCE(mri.ordered_qty, 0)) > 0
+            ORDER BY mr.transaction_date ASC, mr.name ASC
+        """, params, as_dict=True):
+            rows.append({"voucher_type": "Material Request", "voucher": r.voucher,
+                         "party_or_wh": "", "qty_stock": flt(r.pending),
+                         "qty_higher": H(r.pending)})
+
+    total_stock = round(sum(flt(r["qty_stock"]) for r in rows), 3)
+    return {"item_code": item_code, "item_name": item_name, "metric": metric,
+            "stock_uom": stock_uom, "higher_uom": higher_uom, "factor": factor,
+            "rows": rows,
+            "totals": {"qty_stock": total_stock, "qty_higher": H(total_stock)}}
+
+
 @frappe.whitelist()
 def get_item_bom_tree(item_code, max_depth=4):
     """
