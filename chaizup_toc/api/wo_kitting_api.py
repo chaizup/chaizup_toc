@@ -38,7 +38,7 @@ PUBLIC API (all @frappe.whitelist())
       Minimum Order Qty (MOQ) per item — used in MR confirmation dialog.
 
   chat_with_planner(message, session_id, context_json)
-      AI chat: DeepSeek-powered advisor with session memory and function calling.
+      AI chat: OpenAI-powered advisor with session memory and function calling.
 
   get_ai_auto_insight(context_json)
       Stateless AI briefing: called once after each simulation to summarise situation.
@@ -135,8 +135,8 @@ from frappe.utils import add_days, cint, flt, today
 # ═══════════════════════════════════════════════════════════════════════
 #  AI ADVISOR CONFIGURATION
 #  ══════════════════════════════════════════════════════════════════════
-#  🔑 SET YOUR DEEPSEEK API KEY HERE
-#     Get a key from: https://platform.deepseek.com/api_keys
+#  🔑 SET YOUR OPENAI API KEY HERE
+#     Get a key from: https://platform.openai.com/api-keys
 #     The key starts with "sk-"
 #
 #  ⚠️  DO NOT commit the real key to git. For production, store it in
@@ -144,48 +144,154 @@ from frappe.utils import add_days, cint, flt, today
 #     This file-level constant is for development convenience only.
 #
 #  FALLBACK HIERARCHY (first non-empty wins):
-#    1. DEEPSEEK_API_KEY constant below (edit this for dev)
-#    2. frappe.conf.deepseek_api_key  (set in site_config.json)
-#    3. TOC Settings → custom_deepseek_api_key field
+#    1. OPENAI_API_KEY constant below (edit this for dev)
+#    2. frappe.conf.openai_api_key  (set in site_config.json)
+#    3. TOC Settings → custom_openai_api_key field
 # ═══════════════════════════════════════════════════════════════════════
 
-DEEPSEEK_API_KEY  = "YOUR_DEEPSEEK_API_KEY_HERE"  # <-- SET THIS (or use site_config / TOC Settings)
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"    # DeepSeek canonical URL; /v1 prefix also works
-DEEPSEEK_MODEL    = "deepseek-chat"               # default model (fallback if caller doesn't specify)
+OPENAI_API_KEY  = "YOUR_OPENAI_API_KEY_HERE"   # <-- SET THIS (or use site_config / TOC Settings)
+OPENAI_BASE_URL = "https://api.openai.com/v1"  # OpenAI canonical base URL
+OPENAI_MODEL    = "gpt-4o-mini"                # default model (fallback if caller doesn't specify)
 
-# ── Available DeepSeek models with cost/capability profile ──────────────
+# ── Available OpenAI models with cost/capability profile ────────────────
 # JS passes model_id via chat_with_planner(model=...) / get_ai_auto_insight(model=...).
 # The "name" and "est_cost_per_call" fields are returned to JS for the model selector.
 # Costs are USD per call estimate (system + context + history + response).
 #
-# deepseek-chat     → DeepSeek-V3-0324. Fast, cheap, great for standard decisions.
-#                     $0.27/1M input · $1.10/1M output. ~1700 tokens/call ≈ $0.001
-# deepseek-reasoner → DeepSeek-R1. Slower, deep chain-of-thought reasoning.
-#                     $0.55/1M input · $2.19/1M output. ~3000 tokens/call ≈ $0.003
-#                     Use for: "explain WHY shortage is happening" or complex prioritization.
+# gpt-4o-mini → Fast, cheap, great for standard decisions. Function-calling.
+#               ~$0.15/1M input · ~$0.60/1M output. ~1700 tokens/call ≈ $0.0005
+# gpt-4o      → More capable, deeper analysis. Function-calling.
+#               ~$2.50/1M input · ~$10/1M output. ~3000 tokens/call ≈ $0.005
+#               Use for: "explain WHY shortage is happening" or complex prioritization.
 #
-DEEPSEEK_MODELS = {
-    "deepseek-chat": {
-        "name"              : "V3 Standard (Fast, Cheap)",
+# Each entry:
+#   advanced  → 0 = shown by default (the "4o" standard models);
+#               1 = grouped under "Advanced (latest)" in the model selector.
+#   reasoning → 1 = OpenAI o-series. These DON'T accept `temperature` and use
+#               `max_completion_tokens` instead of `max_tokens`. The chat call
+#               (_openai_chat) branches on this flag.
+OPENAI_MODELS = {
+    # ── Standard (default) — GPT-4o family ──────────────────────────────
+    "gpt-4o-mini": {
+        "name"              : "GPT-4o mini (Fast, Cheap)",
         "description"       : "Best for daily decisions — fast, accurate, low cost.",
+        "advanced"          : 0,
+        "reasoning"         : 0,
         "max_tokens"        : 700,
         "temperature"       : 0.25,
-        "input_cost_per_1m" : 0.27,    # USD
-        "output_cost_per_1m": 1.10,
+        "input_cost_per_1m" : 0.15,    # USD
+        "output_cost_per_1m": 0.60,
         "est_tokens_per_call": 1700,
-        "est_cost_per_call" : 0.001,   # USD
+        "est_cost_per_call" : 0.0005,  # USD
     },
-    "deepseek-reasoner": {
-        "name"              : "R1 Reasoning (Deep Analysis)",
-        "description"       : "Chain-of-thought reasoning for complex prioritization.",
+    "gpt-4o": {
+        "name"              : "GPT-4o (More Capable)",
+        "description"       : "Deeper analysis for complex prioritization.",
+        "advanced"          : 0,
+        "reasoning"         : 0,
         "max_tokens"        : 2000,
-        "temperature"       : 0.6,
-        "input_cost_per_1m" : 0.55,
-        "output_cost_per_1m": 2.19,
+        "temperature"       : 0.4,
+        "input_cost_per_1m" : 2.50,
+        "output_cost_per_1m": 10.00,
         "est_tokens_per_call": 3000,
-        "est_cost_per_call" : 0.003,
+        "est_cost_per_call" : 0.005,
+    },
+    # ── Advanced (latest) — newer GPT-4.1 + o-series reasoning ──────────
+    "gpt-4.1-mini": {
+        "name"              : "GPT-4.1 mini (Latest, Cheap)",
+        "description"       : "Newer mini model — strong + low cost.",
+        "advanced"          : 1,
+        "reasoning"         : 0,
+        "max_tokens"        : 900,
+        "temperature"       : 0.25,
+        "input_cost_per_1m" : 0.40,
+        "output_cost_per_1m": 1.60,
+        "est_tokens_per_call": 1800,
+        "est_cost_per_call" : 0.001,
+    },
+    "gpt-4.1": {
+        "name"              : "GPT-4.1 (Latest Flagship)",
+        "description"       : "Newest flagship GPT — best general capability.",
+        "advanced"          : 1,
+        "reasoning"         : 0,
+        "max_tokens"        : 2000,
+        "temperature"       : 0.4,
+        "input_cost_per_1m" : 2.00,
+        "output_cost_per_1m": 8.00,
+        "est_tokens_per_call": 3000,
+        "est_cost_per_call" : 0.004,
+    },
+    "o4-mini": {
+        "name"              : "o4-mini (Latest Reasoning, Cheap)",
+        "description"       : "Fast reasoning model — chain-of-thought, low cost.",
+        "advanced"          : 1,
+        "reasoning"         : 1,
+        "max_tokens"        : 2000,    # mapped to max_completion_tokens for o-series
+        "input_cost_per_1m" : 1.10,
+        "output_cost_per_1m": 4.40,
+        "est_tokens_per_call": 3500,
+        "est_cost_per_call" : 0.006,
+    },
+    "o3": {
+        "name"              : "o3 (Deep Reasoning)",
+        "description"       : "Strongest chain-of-thought reasoning for hard prioritization.",
+        "advanced"          : 1,
+        "reasoning"         : 1,
+        "max_tokens"        : 2500,    # mapped to max_completion_tokens for o-series
+        "input_cost_per_1m" : 2.00,
+        "output_cost_per_1m": 8.00,
+        "est_tokens_per_call": 4000,
+        "est_cost_per_call" : 0.010,
     },
 }
+
+# The two GPT-4o models shown by DEFAULT (everything else is "Advanced (latest)").
+_OPENAI_DEFAULT_MODELS = ("gpt-4o-mini", "gpt-4o")
+
+
+def _is_reasoning_model(model_id):
+    """o-series (o1 / o3 / o4 …) are reasoning models with different API params."""
+    import re as _re
+    return bool(_re.match(r"^o\d", model_id or ""))
+
+
+def _is_chat_model(model_id):
+    """True for text chat-completion models we can drive (gpt-* or o-series).
+
+    Excludes embeddings / audio / image / tts / whisper / moderation / realtime /
+    legacy `-instruct` completion models — none of which serve /chat/completions
+    the way the AI Advisor needs.
+    """
+    mid = (model_id or "").lower()
+    if not (mid.startswith("gpt-") or _is_reasoning_model(mid)):
+        return False
+    bad = ("embedding", "whisper", "tts", "audio", "realtime", "dall-e", "image",
+           "moderation", "search", "transcribe", "-instruct")
+    return not any(b in mid for b in bad)
+
+
+def _humanize_model(model_id):
+    """Turn 'gpt-4.1-mini' into 'GPT-4.1 Mini' for the dropdown label."""
+    parts = (model_id or "").replace("-", " ").split()
+    out = []
+    for p in parts:
+        out.append(p.upper() if p.lower().startswith("gpt") else p.capitalize())
+    return " ".join(out) or model_id
+
+
+def _resolve_model_cfg(model_id):
+    """Return the call config for ANY model id — the curated OPENAI_MODELS entry
+    when known, else a sensible derived default (so dynamically-fetched models
+    that aren't in the curated dict still run). Reasoning is detected by id."""
+    if model_id in OPENAI_MODELS:
+        return OPENAI_MODELS[model_id]
+    reasoning = 1 if _is_reasoning_model(model_id) else 0
+    cfg = {"reasoning": reasoning, "advanced": 1,
+           "max_tokens": 2000 if reasoning else 1200}
+    if not reasoning:
+        cfg["temperature"] = 0.3
+    return cfg
+
 
 # Chat session TTL in Redis cache (seconds). 2 hours.
 _AI_SESSION_TTL = 7200
@@ -3004,7 +3110,7 @@ def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  AI ADVISOR — DeepSeek Chat Integration
+#  AI ADVISOR — OpenAI Chat Integration
 #  ══════════════════════════════════════════════════════════════════════
 #
 #  PURPOSE
@@ -3025,21 +3131,21 @@ def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
 #  2. Chat (chat_with_planner): session-persistent Q&A. The user can ask
 #     follow-up questions; the AI uses function tools to fetch detail on demand.
 #
-#  DEEPSEEK API
+#  OPENAI API
 #  ────────────
-#  Model:    deepseek-chat  (DeepSeek-V3-0324)
-#  Base URL: https://api.deepseek.com  (canonical; /v1 prefix also works)
+#  Model:    gpt-4o-mini  (OpenAI-V3-0324)
+#  Base URL: https://api.openai.com/v1  (canonical; /v1 prefix also works)
 #  Endpoint: POST /chat/completions    (OpenAI-compatible)
 #  Auth:     Authorization: Bearer <api_key>
 #  Params:   temperature=0.25 (focused/factual), max_tokens=700, stream=False
-#  Docs:     https://api-docs.deepseek.com/
+#  Docs:     https://platform.openai.com/docs/
 #
 #  API KEY RESOLUTION (first non-empty wins)
 #  ─────────────────────────────────────────
-#  1. DEEPSEEK_API_KEY constant in this file  — dev/test only, never commit a real key
-#  2. frappe.conf.deepseek_api_key            — site_config.json (RECOMMENDED for production)
-#       Frappe Cloud: Site Config → Add Custom Key → Key=deepseek_api_key, Type=String
-#  3. TOC Settings → AI Advisor → DeepSeek API Key  — Password fieldtype, stored encrypted
+#  1. OPENAI_API_KEY constant in this file  — dev/test only, never commit a real key
+#  2. frappe.conf.openai_api_key            — site_config.json (RECOMMENDED for production)
+#       Frappe Cloud: Site Config → Add Custom Key → Key=openai_api_key, Type=String
+#  3. TOC Settings → AI Advisor → OpenAI API Key  — Password fieldtype, stored encrypted
 #       MUST read via frappe.utils.password.get_decrypted_password()
 #       DO NOT use frappe.db.get_single_value() — returns encrypted/masked value
 #
@@ -3051,21 +3157,21 @@ def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
 #    │  company, date, stock_mode, calc_mode, summary counts,           │
 #    │  critical_wos (top 5), dispatch_alerts (top 5),                  │
 #    │  top_shortages (top 5 materials by value)                        │
-#    │  → ~400 tokens total, fits comfortably in DeepSeek context       │
+#    │  → ~400 tokens total, fits comfortably in OpenAI context       │
 #    └──────────────────────────────────────────────────────────────────┘
 #    ┌─ TOOL DATA (NOT sent to LLM — kept in context dict only) ───────┐
 #    │  "rows"     — full simulation rows for all WOs (can be 300+ rows │
 #    │               each with shortage_items arrays — 100k+ tokens)    │
 #    │  "dispatch" — per-item dispatch data dict                        │
 #    │  → used exclusively by _execute_ai_tool() for function-call      │
-#    │    lookups when DeepSeek calls get_wo_shortage_detail() etc.     │
+#    │    lookups when OpenAI calls get_wo_shortage_detail() etc.     │
 #    └──────────────────────────────────────────────────────────────────┘
 #
 #  CRITICAL: chat_with_planner() and get_ai_auto_insight() MUST strip
 #  "rows" and "dispatch" before building the system message:
 #    context_for_ai = {k: v for k, v in context.items()
 #                      if k not in ("rows", "dispatch")}
-#  Sending "rows" to the LLM causes HTTP 400 from DeepSeek because the
+#  Sending "rows" to the LLM causes HTTP 400 from OpenAI because the
 #  payload exceeds the context window (306 WOs × ~10 shortage items each).
 #  The full context (with rows/dispatch) is still passed to
 #  _execute_chat_with_tools() so _execute_ai_tool() can look up detail.
@@ -3093,7 +3199,7 @@ def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
 #    HTTP calls; data comes directly from the context dict (rows/dispatch).
 #  - Tool results are JSON-serialised and appended as "tool" role messages.
 #
-#  TOKEN BUDGET PER CALL (DeepSeek-V3 ~$0.27/1M input tokens)
+#  TOKEN BUDGET PER CALL (OpenAI-V3 ~$0.27/1M input tokens)
 #  ────────────────────────────────────────────────────────────
 #  System prompt (static)    ~220 tokens
 #  Context summary           ~400 tokens
@@ -3106,27 +3212,27 @@ def _get_historical_wo_costs(item_code, exclude_wo, limit=5):
 #  ERROR HANDLING IN _execute_chat_with_tools()
 #  ─────────────────────────────────────────────
 #  Timeout (40s)    → user-friendly retry message
-#  ConnectionError  → "cannot reach api.deepseek.com" + logged as "WKP AI"
+#  ConnectionError  → "cannot reach api.openai.com" + logged as "WKP AI"
 #  HTTP 401         → "invalid API key" — check TOC Settings / site_config.json
-#  HTTP 402         → "insufficient balance" — top up at platform.deepseek.com
+#  HTTP 402         → "insufficient balance" — top up at platform.openai.com
 #  HTTP 429         → "rate limit reached" — wait and retry
 #  HTTP 400         → bad request — usually oversized payload (check context split)
-#  Other HTTP 4xx/5xx → logged to Error Log as "WKP AI DeepSeek Error"
+#  Other HTTP 4xx/5xx → logged to Error Log as "WKP AI OpenAI Error"
 #  Other exceptions → logged with full traceback as "WKP AI"
 #  All user-facing messages name the Error Log title for fast triage.
 #
 #  DIAGNOSTIC
 #  ──────────
-#  test_deepseek_connection() — whitelisted endpoint (System Manager / TOC Manager).
-#  Verifies key resolution + network + DeepSeek response without a full simulation.
+#  test_openai_connection() — whitelisted endpoint (System Manager / TOC Manager).
+#  Verifies key resolution + network + OpenAI response without a full simulation.
 #  Call from browser console:
-#    frappe.call({method: 'chaizup_toc.api.wo_kitting_api.test_deepseek_connection',
+#    frappe.call({method: 'chaizup_toc.api.wo_kitting_api.test_openai_connection',
 #                 callback: r => console.log(r.message)})
 #  Returns: {ok, message, model, base_url, key_source}
 #
 #  ERROR LOG TITLES
 #  ─────────────────
-#  "WKP AI DeepSeek Error"  — HTTP errors from DeepSeek (4xx/5xx), includes status + body
+#  "WKP AI OpenAI Error"  — HTTP errors from OpenAI (4xx/5xx), includes status + body
 #  "WKP AI"                 — Connection errors + unexpected exceptions, includes traceback
 #
 #  ══════════════════════════════════════════════════════════════════════
@@ -3205,18 +3311,18 @@ _AI_SYSTEM_PROMPT = (
     "   Zero actual_cost means no Stock Entry yet — WO hasn't started production.\n"
 )
 
-# ── Tool definitions for DeepSeek function calling ──
+# ── Tool definitions for OpenAI function calling ──
 #
-#  These JSON schemas are sent to DeepSeek in every chat_with_planner() call.
-#  DeepSeek decides autonomously whether to call a tool based on the user's message
+#  These JSON schemas are sent to OpenAI in every chat_with_planner() call.
+#  OpenAI decides autonomously whether to call a tool based on the user's message
 #  and the tool description. When it calls a tool:
-#    1. DeepSeek returns finish_reason="tool_calls" with a tool_calls list.
+#    1. OpenAI returns finish_reason="tool_calls" with a tool_calls list.
 #    2. _execute_chat_with_tools() detects this, calls _execute_ai_tool() server-side.
 #    3. The result is appended as a {"role": "tool", ...} message.
-#    4. DeepSeek is called again with the tool result; it produces the final reply.
+#    4. OpenAI is called again with the tool result; it produces the final reply.
 #
 #  HOW TO WRITE GOOD TOOL DESCRIPTIONS:
-#  - "description" is the only signal DeepSeek uses to decide WHEN to call the tool.
+#  - "description" is the only signal OpenAI uses to decide WHEN to call the tool.
 #    Be explicit about trigger phrases ("when the user asks about a specific WO name").
 #  - Parameter "description" fields guide argument extraction from natural language.
 #    Include a concrete example (e.g. "WO-00123").
@@ -3377,36 +3483,83 @@ _AI_TOOLS = [
 @frappe.whitelist()
 def get_available_ai_models():
     """
-    Return the list of available DeepSeek models with cost estimates.
-    Called by JS on AI panel init to populate the model selector.
+    Return the AI model list for the selector — fetched LIVE from OpenAI's
+    `/v1/models` endpoint so the dropdown reflects exactly what the configured
+    key can use. The two GPT-4o models are the default (advanced=0); everything
+    else is grouped under "Advanced (latest)" (advanced=1). Reasoning (o-series)
+    models are flagged so JS can badge them.
+
+    Falls back to the curated OPENAI_MODELS list when the key is missing or the
+    network call fails, so the panel never breaks.
 
     Returns:
-        list: [{"id": model_id, "name": str, "description": str,
-                "est_cost_per_call": float, "est_tokens_per_call": int}]
+        list: [{"id", "name", "description", "advanced", "reasoning",
+                "est_cost_per_call", "est_tokens_per_call"}]  (default first)
     """
-    return [
-        {
-            "id"                : model_id,
-            "name"              : cfg["name"],
-            "description"       : cfg["description"],
-            "est_cost_per_call" : cfg["est_cost_per_call"],
-            "est_tokens_per_call": cfg["est_tokens_per_call"],
-        }
-        for model_id, cfg in DEEPSEEK_MODELS.items()
-    ]
+    def _curated():
+        out = []
+        for model_id, cfg in OPENAI_MODELS.items():
+            out.append({
+                "id": model_id,
+                "name": cfg.get("name", _humanize_model(model_id)),
+                "description": cfg.get("description", ""),
+                "advanced": cfg.get("advanced", 0),
+                "reasoning": cfg.get("reasoning", 0),
+                "est_cost_per_call": cfg.get("est_cost_per_call"),
+                "est_tokens_per_call": cfg.get("est_tokens_per_call"),
+            })
+        out.sort(key=lambda m: (m["advanced"],
+                                _OPENAI_DEFAULT_MODELS.index(m["id"]) if m["id"] in _OPENAI_DEFAULT_MODELS else 99,
+                                m["id"]))
+        return out
+
+    api_key = _get_api_key()
+    if not api_key or api_key == "YOUR_OPENAI_API_KEY_HERE":
+        return _curated()
+
+    try:
+        client = _openai_client(api_key)
+        ids = [m.id for m in client.models.list() if getattr(m, "id", None)]
+        chat_ids = sorted(i for i in ids if _is_chat_model(i))
+        if not chat_ids:
+            return _curated()
+
+        out = []
+        for mid in chat_ids:
+            known = OPENAI_MODELS.get(mid, {})
+            advanced = known.get("advanced", 0 if mid in _OPENAI_DEFAULT_MODELS else 1)
+            out.append({
+                "id": mid,
+                "name": known.get("name", _humanize_model(mid)),
+                "description": known.get("description",
+                                         "Reasoning model." if _is_reasoning_model(mid)
+                                         else "OpenAI chat model."),
+                "advanced": advanced,
+                "reasoning": 1 if _is_reasoning_model(mid) else 0,
+                "est_cost_per_call": known.get("est_cost_per_call"),
+                "est_tokens_per_call": known.get("est_tokens_per_call"),
+            })
+        # Default GPT-4o models first (mini before full), then the rest.
+        out.sort(key=lambda m: (m["advanced"],
+                                _OPENAI_DEFAULT_MODELS.index(m["id"]) if m["id"] in _OPENAI_DEFAULT_MODELS else 99,
+                                m["id"]))
+        return out
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "WKP AI models fetch")
+        return _curated()
 
 
 @frappe.whitelist()
 def chat_with_planner(message, session_id, context_json, model=None):
     """
-    AI chat endpoint with session memory and DeepSeek function calling.
+    AI chat endpoint with session memory and OpenAI function calling.
 
     The client sends:
       message     str   User's plain-language question
       session_id  str   UUID generated by the browser (persisted in sessionStorage)
       context_json str  JSON with compressed simulation snapshot (from compress_context_for_ai)
-      model       str   Optional DeepSeek model ID (default: DEEPSEEK_MODEL constant)
-                        See DEEPSEEK_MODELS for valid IDs.
+      model       str   Optional OpenAI model ID (default: OPENAI_MODEL constant)
+                        See OPENAI_MODELS for valid IDs.
 
     Session is stored in Redis cache keyed per user+session_id. Older messages
     are pruned to _AI_MAX_HISTORY to keep token counts bounded.
@@ -3423,10 +3576,10 @@ def chat_with_planner(message, session_id, context_json, model=None):
         return {
             "reply": (
                 "<span class=\"wkp-ai-warn\">AI Advisor is not configured.</span> "
-                "Add your DeepSeek API key via: "
-                "<b>TOC Settings → AI Advisor → DeepSeek API Key</b>, "
-                "or in Frappe site_config.json as <code>deepseek_api_key</code>. "
-                "Get a key at <b>platform.deepseek.com/api_keys</b>."
+                "Add your OpenAI API key via: "
+                "<b>TOC Settings → AI Advisor → OpenAI API Key</b>, "
+                "or in Frappe site_config.json as <code>openai_api_key</code>. "
+                "Get a key at <b>platform.openai.com/api-keys</b>."
             ),
             "session_id": session_id,
             "is_html": True,
@@ -3449,7 +3602,7 @@ def chat_with_planner(message, session_id, context_json, model=None):
     messages = [system_msg] + history + [{"role": "user", "content": str(message)}]
 
     # Resolve model (caller-specified → constant default)
-    effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
+    effective_model = model if model and model in OPENAI_MODELS else OPENAI_MODEL
 
     # Run with function-calling loop
     reply_text, updated_messages, tools_used = _execute_chat_with_tools(
@@ -3483,8 +3636,8 @@ def get_ai_auto_insight(context_json, model=None):
 
     Args:
         context_json (str): Compressed simulation context from compress_context_for_ai()
-        model (str): Optional DeepSeek model ID. Defaults to DEEPSEEK_MODEL.
-                     Use "deepseek-reasoner" for deeper analysis.
+        model (str): Optional OpenAI model ID. Defaults to OPENAI_MODEL.
+                     Use "gpt-4o" for deeper analysis.
 
     Returns:
         dict: {insight: str (HTML-formatted), is_html: bool}
@@ -3494,8 +3647,8 @@ def get_ai_auto_insight(context_json, model=None):
         return {
             "insight": (
                 "<span class=\"wkp-ai-warn\">AI Advisor not configured.</span> "
-                "Add your DeepSeek API key in TOC Settings → AI Advisor, "
-                "or as <code>deepseek_api_key</code> in site_config.json."
+                "Add your OpenAI API key in TOC Settings → AI Advisor, "
+                "or as <code>openai_api_key</code> in site_config.json."
             ),
             "is_html": True,
         }
@@ -3503,7 +3656,7 @@ def get_ai_auto_insight(context_json, model=None):
     context = frappe.parse_json(context_json) if isinstance(context_json, str) else (context_json or {})
 
     # Resolve model
-    effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
+    effective_model = model if model and model in OPENAI_MODELS else OPENAI_MODEL
 
     # Auto-insight prompt — compact HTML, 13-inch laptop chat window target.
     # Rules: no preamble, top 3 WORST issues (highest value/urgency), 3 action steps.
@@ -3542,7 +3695,7 @@ def get_ai_auto_insight(context_json, model=None):
 
     # Auto-insight: no function calling (pure analysis, faster)
     try:
-        result = _call_deepseek(messages, tools=None, api_key=api_key, model=effective_model)
+        result = _call_openai(messages, tools=None, api_key=api_key, model=effective_model)
         reply  = result["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         frappe.log_error(f"WKP AI auto-insight error: {exc}", "WKP AI")
@@ -3552,12 +3705,12 @@ def get_ai_auto_insight(context_json, model=None):
 
 
 @frappe.whitelist()
-def test_deepseek_connection():
+def test_openai_connection():
     """
-    Diagnostic endpoint: verify API key resolution and DeepSeek connectivity.
+    Diagnostic endpoint: verify API key resolution and OpenAI connectivity.
 
     Call from browser console:
-        frappe.call({method: 'chaizup_toc.api.wo_kitting_api.test_deepseek_connection',
+        frappe.call({method: 'chaizup_toc.api.wo_kitting_api.test_openai_connection',
                      callback: r => console.log(r.message)})
 
     Returns:
@@ -3569,87 +3722,75 @@ def test_deepseek_connection():
     key_source = "none"
     api_key = None
 
-    if DEEPSEEK_API_KEY and not DEEPSEEK_API_KEY.startswith("YOUR_"):
-        api_key = DEEPSEEK_API_KEY
-        key_source = "DEEPSEEK_API_KEY constant (file)"
-    elif getattr(frappe.conf, "deepseek_api_key", None):
-        api_key = frappe.conf.deepseek_api_key
-        key_source = "site_config.json (frappe.conf.deepseek_api_key)"
+    if OPENAI_API_KEY and not OPENAI_API_KEY.startswith("YOUR_"):
+        api_key = OPENAI_API_KEY
+        key_source = "OPENAI_API_KEY constant (file)"
+    elif getattr(frappe.conf, "openai_api_key", None):
+        api_key = frappe.conf.openai_api_key
+        key_source = "site_config.json (frappe.conf.openai_api_key)"
     else:
         try:
             from frappe.utils.password import get_decrypted_password
             k = get_decrypted_password(
-                "TOC Settings", "TOC Settings", "custom_deepseek_api_key", raise_exception=False
+                "TOC Settings", "TOC Settings", "custom_openai_api_key", raise_exception=False
             )
             if k:
                 api_key = k
-                key_source = "TOC Settings → DeepSeek API Key"
+                key_source = "TOC Settings → OpenAI API Key"
         except Exception:
             pass
 
     if not api_key or api_key.startswith("YOUR_"):
         return {"ok": False, "message": "No API key configured.", "key_source": key_source}
 
-    # 2. Send a minimal test call to DeepSeek
+    # 2. Send a minimal test call to OpenAI via the SDK.
     try:
-        result = _requests.post(
-            f"{DEEPSEEK_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": DEEPSEEK_MODEL,
-                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                "max_tokens": 5,
-                "temperature": 0,
-            },
-            timeout=15,
+        client = _openai_client(api_key)
+        completion = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": "Reply with exactly: OK"}],
+            max_tokens=5,
+            temperature=0,
         )
-        if not result.ok:
-            try:
-                err = result.json().get("error", {}).get("message", result.text[:200])
-            except Exception:
-                err = result.text[:200]
-            return {
-                "ok": False,
-                "message": f"DeepSeek returned HTTP {result.status_code}: {err}",
-                "key_source": key_source,
-            }
-        content = result.json()["choices"][0]["message"]["content"]
+        content = completion.choices[0].message.content
         return {
             "ok": True,
-            "message": f"Connection OK. DeepSeek replied: {content!r}",
-            "model": DEEPSEEK_MODEL,
-            "base_url": DEEPSEEK_BASE_URL,
+            "message": f"Connection OK. OpenAI replied: {content!r}",
+            "model": OPENAI_MODEL,
+            "base_url": OPENAI_BASE_URL,
             "key_source": key_source,
         }
-    except _requests.exceptions.ConnectionError as exc:
-        return {"ok": False, "message": f"Connection failed: {exc}", "key_source": key_source}
-    except _requests.exceptions.Timeout:
-        return {"ok": False, "message": "Connection timed out (15s).", "key_source": key_source}
     except Exception as exc:
-        return {"ok": False, "message": f"Unexpected error: {exc}", "key_source": key_source}
+        return {
+            "ok": False,
+            "message": f"OpenAI call failed: {exc}",
+            "model": OPENAI_MODEL,
+            "base_url": OPENAI_BASE_URL,
+            "key_source": key_source,
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  PRIVATE: DeepSeek caller + function-call execution loop
+#  PRIVATE: OpenAI caller + function-call execution loop
 # ─────────────────────────────────────────────────────────────────────
 
 def _is_valid_api_key(key):
     """
     POR-017 (2026-05-06): Reject placeholder values from ANY source.
 
-    History — production_overview AI was returning "DeepSeek API error
-    (HTTP 400/401)" because `frappe.conf.deepseek_api_key` and
-    `TOC Settings.custom_deepseek_api_key` could legitimately contain
+    History — production_overview AI was returning "OpenAI API error
+    (HTTP 400/401)" because `frappe.conf.openai_api_key` and
+    `TOC Settings.custom_openai_api_key` could legitimately contain
     placeholder strings like "YOUR_KEY_HERE" / "" / whitespace, which
-    the previous _get_api_key() returned as-is. DeepSeek then either
+    the previous _get_api_key() returned as-is. OpenAI then either
     rejected the malformed bearer token (400) or flagged auth failure
-    (401). The user-visible error log titled "WKP AI DeepSeek Error"
+    (401). The user-visible error log titled "WKP AI OpenAI Error"
     was misleading — the call should have been short-circuited.
 
     Validation rules (all must pass):
       - Not None / empty / whitespace-only
       - Does NOT start with "YOUR_" (case-insensitive)
-      - Length >= 16 (DeepSeek keys are typically `sk-` + 32 hex chars)
+      - Length >= 16 (OpenAI keys are typically `sk-` + 32 hex chars)
 
     DO NOT relax these rules without testing — a placeholder key
     leaking through reproduces the original bug instantly.
@@ -3668,26 +3809,26 @@ def _is_valid_api_key(key):
 
 def _get_api_key():
     """
-    Resolve DeepSeek API key via fallback hierarchy:
-      1. DEEPSEEK_API_KEY constant (this file)
-      2. frappe.conf.deepseek_api_key (site_config.json)
-      3. TOC Settings custom_deepseek_api_key field (Password fieldtype — use get_decrypted_password)
+    Resolve OpenAI API key via fallback hierarchy:
+      1. OPENAI_API_KEY constant (this file)
+      2. frappe.conf.openai_api_key (site_config.json)
+      3. TOC Settings custom_openai_api_key field (Password fieldtype — use get_decrypted_password)
 
     POR-017 (2026-05-06): every source is now run through
     `_is_valid_api_key()` so placeholder strings (e.g. literal
-    "YOUR_KEY_HERE") never get sent to DeepSeek. Returns None if no
+    "YOUR_KEY_HERE") never get sent to OpenAI. Returns None if no
     valid key is found; callers must surface a configuration message
     rather than attempting the call.
     """
-    if _is_valid_api_key(DEEPSEEK_API_KEY):
-        return str(DEEPSEEK_API_KEY).strip()
-    key = getattr(frappe.conf, "deepseek_api_key", None)
+    if _is_valid_api_key(OPENAI_API_KEY):
+        return str(OPENAI_API_KEY).strip()
+    key = getattr(frappe.conf, "openai_api_key", None)
     if _is_valid_api_key(key):
         return str(key).strip()
     try:
         from frappe.utils.password import get_decrypted_password
         key = get_decrypted_password(
-            "TOC Settings", "TOC Settings", "custom_deepseek_api_key", raise_exception=False
+            "TOC Settings", "TOC Settings", "custom_openai_api_key", raise_exception=False
         )
         if _is_valid_api_key(key):
             return str(key).strip()
@@ -3696,70 +3837,73 @@ def _get_api_key():
     return None
 
 
-def _call_deepseek(messages, tools=None, api_key=None, model=None):
+def _openai_client(api_key):
+    """Build an OpenAI SDK client pointed at OPENAI_BASE_URL.
+
+    Uses the official `openai` package (declared in chaizup_toc/pyproject.toml so
+    Frappe Cloud installs it). base_url is kept configurable so an OpenAI-
+    compatible gateway can be swapped in without code changes.
     """
-    Low-level DeepSeek chat completion call via requests.
+    from openai import OpenAI
+    return OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL, timeout=40)
+
+
+def _call_openai(messages, tools=None, api_key=None, model=None):
+    """
+    Low-level OpenAI chat completion via the official SDK.
 
     Args:
         messages  list  Full message list (system + history + user)
         tools     list  Optional tool definitions for function calling
-        api_key   str   DeepSeek API key
-        model     str   Model ID (see DEEPSEEK_MODELS). Defaults to DEEPSEEK_MODEL.
+        api_key   str   OpenAI API key
+        model     str   Model ID (see OPENAI_MODELS). Defaults to OPENAI_MODEL.
 
-    The model controls max_tokens and temperature via DEEPSEEK_MODELS config:
-        deepseek-chat     → max_tokens=700,  temperature=0.25  (fast, factual)
-        deepseek-reasoner → max_tokens=2000, temperature=0.6   (deep reasoning)
+    The model controls max_tokens and temperature via _resolve_model_cfg:
+        gpt-4o-mini → max_tokens=700,  temperature=0.25  (fast, factual)
+        gpt-4o      → max_tokens=2000, temperature=0.4   (deeper analysis)
+
+    REASONING MODELS (o-series: o3 / o4-mini, cfg["reasoning"]=1) differ on the
+    OpenAI API: they DO NOT accept `temperature` and use `max_completion_tokens`
+    instead of `max_tokens`. We branch the kwargs on the `reasoning` flag so the
+    same code path serves both GPT-4o/4.1 chat models and the o-series.
 
     Returns:
-        dict: Raw DeepSeek API response JSON
+        dict: the completion as a plain dict (`completion.model_dump()`) — SAME
+        `{"choices": [{"message": {...}}], ...}` shape the previous requests-based
+        implementation returned, so every caller stays unchanged.
     """
-    effective_model = model if model and model in DEEPSEEK_MODELS else DEEPSEEK_MODEL
-    model_cfg       = DEEPSEEK_MODELS.get(effective_model, DEEPSEEK_MODELS[DEEPSEEK_MODEL])
+    # Accept ANY model id the OpenAI key offers (dynamic list), not only the
+    # curated OPENAI_MODELS. _resolve_model_cfg derives params for unknown ids.
+    effective_model = model or OPENAI_MODEL
+    model_cfg       = _resolve_model_cfg(effective_model)
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model"       : effective_model,
-        "messages"    : messages,
-        "max_tokens"  : model_cfg["max_tokens"],
-        "temperature" : model_cfg["temperature"],
-        "stream"      : False,
-    }
+    kwargs = {"model": effective_model, "messages": messages}
+    if model_cfg.get("reasoning"):
+        # o-series: max_completion_tokens, NO temperature (API rejects it).
+        kwargs["max_completion_tokens"] = model_cfg["max_tokens"]
+    else:
+        kwargs["max_tokens"]  = model_cfg["max_tokens"]
+        kwargs["temperature"] = model_cfg["temperature"]
     if tools:
-        payload["tools"]       = tools
-        payload["tool_choice"] = "auto"
+        kwargs["tools"]       = tools
+        kwargs["tool_choice"] = "auto"
 
-    resp = _requests.post(
-        f"{DEEPSEEK_BASE_URL}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=40,
-    )
-    if not resp.ok:
-        # POR-017 (2026-05-06): expand the logged error so triage doesn't
-        # require enabling debug mode. We log: status, error body, model,
-        # message-count, total chars (proxy for token count), and tool
-        # presence. Truncate the body to 1500 chars to keep the log row
-        # manageable but still useful for HTTP 400 oversized-payload
-        # diagnosis.
-        try:
-            err_body = resp.json().get("error", {})
-            err_msg  = err_body.get("message", resp.text[:1500])
-        except Exception:
-            err_msg = resp.text[:1500]
+    try:
+        client = _openai_client(api_key)
+        completion = client.chat.completions.create(**kwargs)
+        return completion.model_dump()
+    except Exception as e:
+        # Mirror the old expanded diagnostics so triage doesn't need debug mode.
         total_chars = sum(len(str(m.get("content") or "")) for m in messages)
         frappe.log_error(
             (
-                f"DeepSeek API {resp.status_code}: {err_msg}\n\n"
+                f"OpenAI API error: {e}\n\n"
                 f"model={effective_model}  messages={len(messages)}  "
                 f"chars={total_chars}  has_tools={bool(tools)}"
             ),
-            "WKP AI DeepSeek Error",
+            "WKP AI OpenAI Error",
         )
-    resp.raise_for_status()
-    return resp.json()
+        raise
 
 
 def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None):
@@ -3770,8 +3914,8 @@ def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None)
     Args:
         messages list   Full message list to send
         context  dict   Compressed simulation context (for tool data lookup)
-        api_key  str    DeepSeek API key
-        model    str    Optional model override (see DEEPSEEK_MODELS)
+        api_key  str    OpenAI API key
+        model    str    Optional model override (see OPENAI_MODELS)
         tools    list   Optional tool schema. Defaults to `_AI_TOOLS` (WKP
                         kitting tools). POR-017 (2026-05-06): callers from
                         Production Overview pass `tools=[]` because the WKP
@@ -3793,7 +3937,7 @@ def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None)
 
     try:
         while tool_calls_made <= _AI_MAX_TOOL_CALLS:
-            result   = _call_deepseek(messages, effective_tools or None, api_key, model=model)
+            result   = _call_openai(messages, effective_tools or None, api_key, model=model)
             choice   = result["choices"][0]
             msg      = choice["message"]
             finish   = choice.get("finish_reason", "stop")
@@ -3822,14 +3966,14 @@ def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None)
     except _requests.exceptions.Timeout:
         return (
             "<span class=\"wkp-ai-warn\">AI response timed out (40s). "
-            "DeepSeek may be under load — please try again in a moment.</span>",
+            "OpenAI may be under load — please try again in a moment.</span>",
             messages, tools_used,
         )
     except _requests.exceptions.ConnectionError as exc:
         frappe.log_error(f"WKP AI connection error: {exc}", "WKP AI")
         return (
-            "<span class=\"wkp-ai-err\">Cannot reach DeepSeek API.</span> "
-            "Check that your server can access <code>api.deepseek.com</code> "
+            "<span class=\"wkp-ai-err\">Cannot reach OpenAI API.</span> "
+            "Check that your server can access <code>api.openai.com</code> "
             "(outbound HTTPS port 443). See Error Log for details.",
             messages, tools_used,
         )
@@ -3838,39 +3982,39 @@ def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None)
         if status == 400:
             # POR-017 (2026-05-06): 400 = malformed request. Most common
             # causes here are oversized context payload or a placeholder
-            # API key that DeepSeek rejects pre-auth. Show actionable
+            # API key that OpenAI rejects pre-auth. Show actionable
             # guidance instead of the generic "see Error Log" line.
             return (
-                "<span class=\"wkp-ai-err\">DeepSeek API rejected the request (HTTP 400).</span> "
+                "<span class=\"wkp-ai-err\">OpenAI API rejected the request (HTTP 400).</span> "
                 "Common causes: invalid / placeholder API key, or context "
                 "payload too large. Check <b>TOC Settings → AI Advisor → "
-                "DeepSeek API Key</b>, then see <b>Error Log → WKP AI "
-                "DeepSeek Error</b> for the body returned by the API.",
+                "OpenAI API Key</b>, then see <b>Error Log → WKP AI "
+                "OpenAI Error</b> for the body returned by the API.",
                 messages, tools_used,
             )
         if status == 401:
             return (
-                "<span class=\"wkp-ai-err\">Invalid or expired DeepSeek API key.</span> "
-                "Update it in <b>TOC Settings → AI Advisor → DeepSeek API Key</b> "
-                "or in site_config.json (<code>deepseek_api_key</code>).",
+                "<span class=\"wkp-ai-err\">Invalid or expired OpenAI API key.</span> "
+                "Update it in <b>TOC Settings → AI Advisor → OpenAI API Key</b> "
+                "or in site_config.json (<code>openai_api_key</code>).",
                 messages, tools_used,
             )
         if status == 402:
             return (
-                "<span class=\"wkp-ai-err\">DeepSeek account has insufficient balance.</span> "
-                "Top up at <b>platform.deepseek.com</b>.",
+                "<span class=\"wkp-ai-err\">OpenAI account has insufficient balance.</span> "
+                "Top up at <b>platform.openai.com</b>.",
                 messages, tools_used,
             )
         if status == 429:
             return (
-                "<span class=\"wkp-ai-warn\">DeepSeek rate limit reached.</span> "
+                "<span class=\"wkp-ai-warn\">OpenAI rate limit reached.</span> "
                 "Wait a moment and try again.",
                 messages, tools_used,
             )
-        frappe.log_error(f"WKP AI HTTP error {status}: {exc}", "WKP AI DeepSeek Error")
+        frappe.log_error(f"WKP AI HTTP error {status}: {exc}", "WKP AI OpenAI Error")
         return (
-            f"<span class=\"wkp-ai-warn\">DeepSeek API error (HTTP {status}).</span> "
-            "See <b>Error Log → WKP AI DeepSeek Error</b> for details.",
+            f"<span class=\"wkp-ai-warn\">OpenAI API error (HTTP {status}).</span> "
+            "See <b>Error Log → WKP AI OpenAI Error</b> for details.",
             messages, tools_used,
         )
     except Exception as exc:
@@ -3887,12 +4031,12 @@ def _execute_chat_with_tools(messages, context, api_key, model=None, tools=None)
 
 def _execute_ai_tool(fn_name, fn_args, context):
     """
-    Execute a DeepSeek function-call tool and return data for the AI's next message.
+    Execute a OpenAI function-call tool and return data for the AI's next message.
 
-    Called by _execute_chat_with_tools() whenever DeepSeek returns
+    Called by _execute_chat_with_tools() whenever OpenAI returns
     finish_reason="tool_calls". The result is JSON-serialised and appended
     as a {"role": "tool", "tool_call_id": ..., "content": ...} message so
-    DeepSeek can incorporate the detail into its final reply.
+    OpenAI can incorporate the detail into its final reply.
 
     This function receives the FULL context dict (including "rows" and "dispatch")
     because it needs them for data lookup. This is intentional — these keys are
@@ -3909,11 +4053,11 @@ def _execute_ai_tool(fn_name, fn_args, context):
     Args:
         fn_name  str   One of: get_wo_shortage_detail, get_dispatch_detail,
                                get_top_shortage_items
-        fn_args  dict  Arguments extracted by DeepSeek from the user's message
+        fn_args  dict  Arguments extracted by OpenAI from the user's message
         context  dict  Full compress_context_for_ai() result (rows + dispatch included)
 
     Returns:
-        dict: Structured result (serialised to JSON string before sending to DeepSeek)
+        dict: Structured result (serialised to JSON string before sending to OpenAI)
     """
     try:
         if fn_name == "get_wo_shortage_detail":
@@ -4225,7 +4369,7 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
 
     WHY THE SPLIT?
     Sending "rows" (300+ WOs × ~10 shortage items) in the system message
-    causes HTTP 400 from DeepSeek — the payload exceeds the context window.
+    causes HTTP 400 from OpenAI — the payload exceeds the context window.
     chat_with_planner() and get_ai_auto_insight() must ALWAYS strip rows/dispatch
     from context before building the system message:
         context_for_ai = {k: v for k, v in context.items()

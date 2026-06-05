@@ -9,6 +9,10 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
+    # 2026-06-05 — Official OpenAI SDK for the AI Advisor (WO Kitting Planner +
+    # Production Overview AI tabs). Frappe Cloud pip-installs app dependencies
+    # declared here when the bench is built/deployed.
+    "openai>=1.40",
 ]
 
 [build-system]

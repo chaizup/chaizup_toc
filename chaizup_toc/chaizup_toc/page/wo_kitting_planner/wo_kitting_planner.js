@@ -173,7 +173,7 @@
  *          Scenario B drag-reorder. Using rows directly resets priority to original WO order.
  *
  * WKP-006: AI context: NEVER send rows or dispatch keys to the LLM.
- *          These are 300+ WOs × 10 shortage items each — HTTP 400 from DeepSeek.
+ *          These are 300+ WOs × 10 shortage items each — HTTP 400 from OpenAI.
  *          Always strip: context_for_ai = {k: v for k, v in ctx.items() if k not in ("rows","dispatch")}
  *
  * WKP-012: WO Kitting tab column order must stay in sync between HTML <th> and JS _buildRow() <td>.
@@ -3837,7 +3837,7 @@ class WOKittingPlanner {
   // ─────────────────────────────────────────────────────────────────────
   //  AI ADVISOR TAB (§9)
   //
-  //  PURPOSE: Plain-language production decision support via DeepSeek AI.
+  //  PURPOSE: Plain-language production decision support via OpenAI AI.
   //    1. Auto-insight: generated after every simulation (stateless call)
   //    2. Chat: session-persistent Q&A about production/purchase/dispatch
   //
@@ -3884,10 +3884,10 @@ class WOKittingPlanner {
 
   _initAIPanel() {
     // ── Model selector: load available models from server ──────────────────
-    // Calls get_available_ai_models() which returns DEEPSEEK_MODELS config.
+    // Calls get_available_ai_models() which returns OPENAI_MODELS config.
     // Each model entry: {id, name, description, est_cost_per_call}
     // The selector value is stored in this._aiModel for use in all API calls.
-    // Default = first model (deepseek-chat, V3 Standard — fast and cheap).
+    // Default = first model (gpt-4o-mini, V3 Standard — fast and cheap).
     frappe.call({
       method: "chaizup_toc.api.wo_kitting_api.get_available_ai_models",
       args: {},
@@ -3895,12 +3895,20 @@ class WOKittingPlanner {
         const models = (r && r.message) || [];
         const sel = document.getElementById("wkp-ai-model-select");
         if (sel && models.length) {
-          sel.innerHTML = models.map(m =>
-            `<option value="${_esc(m.id)}" title="${_esc(m.description)}">`
-            + `${_esc(m.name)} (~$${m.est_cost_per_call.toFixed(3)}/chat)`
-            + `</option>`
-          ).join("");
-          this._aiModel = models[0].id;
+          const costStr = (m) =>
+            (m && m.est_cost_per_call != null) ? ` (~$${m.est_cost_per_call.toFixed(3)}/chat)` : "";
+          const optHtml = (m) =>
+            `<option value="${_esc(m.id)}" title="${_esc(m.description || "")}">`
+            + `${_esc(m.name)}${m.reasoning ? " \u00b7 reasoning" : ""}${costStr(m)}`
+            + `</option>`;
+          const std = models.filter(m => !m.advanced).map(optHtml).join("");
+          const adv = models.filter(m =>  m.advanced).map(optHtml).join("");
+          sel.innerHTML =
+            (std ? `<optgroup label="Standard">${std}</optgroup>` : "")
+            + (adv ? `<optgroup label="Advanced (latest)">${adv}</optgroup>` : "");
+          const first = models.find(m => !m.advanced) || models[0];
+          this._aiModel = first.id;
+          sel.value = first.id;
           sel.addEventListener("change", () => { this._aiModel = sel.value; });
         }
         const costEl = document.getElementById("wkp-ai-cost-hint");
@@ -3908,7 +3916,8 @@ class WOKittingPlanner {
           const updateCost = () => {
             const m = models.find(x => x.id === this._aiModel);
             if (m) costEl.textContent =
-              "Model: " + m.name + " \u00b7 Est. ~$" + m.est_cost_per_call.toFixed(3) + " per message";
+              "Model: " + m.name + (m.est_cost_per_call != null
+                ? " \u00b7 Est. ~$" + m.est_cost_per_call.toFixed(3) + " per message" : "");
           };
           updateCost();
           if (sel) sel.addEventListener("change", updateCost);
@@ -5951,7 +5960,7 @@ function _escHtml(val) {
  * Allows safe formatting tags and our custom CSS classes.
  * Strips <script>, event handlers (on*=), javascript: hrefs, and iframes.
  *
- * This is a defence-in-depth measure — DeepSeek is trusted but we still
+ * This is a defence-in-depth measure — OpenAI is trusted but we still
  * sanitise to prevent accidental XSS from unexpected model output.
  *
  * SAFE tags: table, thead, tbody, tr, th, td, ul, ol, li, p, br, strong,

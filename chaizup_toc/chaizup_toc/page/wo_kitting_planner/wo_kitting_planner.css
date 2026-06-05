@@ -1791,7 +1791,7 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
      wkp-ai-card-title      — Card title ("Production Briefing")
      wkp-ai-card-sub        — Subtitle / refresh note
      wkp-ai-bot-avatar      — Robot emoji display
-     wkp-ai-model-badge     — "DeepSeek AI" pill
+     wkp-ai-model-badge     — "OpenAI AI" pill
      wkp-ai-insight-body    — Insight card body (innerHTML injected by JS)
      wkp-ai-chat-section    — Chat Q&A panel below the insight card
      wkp-ai-chat-header     — Header: "Ask the AI" + Clear button

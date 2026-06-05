@@ -3,7 +3,7 @@
 #   Serves the 3-tab Production Overview page:
 #   Tab 1 → item-level production metrics (plan vs actual, orders, dispatch,
 #            sales projection, shortage check, possible qty, cost breakup).
-#   Tab 2 → DeepSeek AI advisor (same key hierarchy as wo_kitting_api).
+#   Tab 2 → OpenAI AI advisor (same key hierarchy as wo_kitting_api).
 #   Tab 3 → Chart data (aggregated summaries for pie + bar charts).
 #
 # MEMORY: app_chaizup_toc.md § Production Overview Page
@@ -16,7 +16,7 @@
 #   - Projection month uses string names ("April") matching Sales Projection.projection_month.
 #   - "Sub Assembly" = appears as component in any active BOM (tabBOM Item).
 #   - Cost breakup = BOM standard vs actual STE consumed vs 6-month historical avg.
-#   - AI: shares DEEPSEEK_API_KEY + helper functions from wo_kitting_api.
+#   - AI: shares OPENAI_API_KEY + helper functions from wo_kitting_api.
 #   - Session Redis key prefix: "por:chat:" (distinct from wkp: prefix).
 #
 # DANGER ZONE:
@@ -94,12 +94,12 @@ def _por_default_po_statuses():
     out = _toc_settings_po_statuses()
     return [s for s in out if not (isinstance(s, str) and s.startswith("Workflow: "))] or list(_DEFAULT_PO_STATUSES)
 
-# ── Shared DeepSeek helpers (imported from existing integration) ──
+# ── Shared OpenAI helpers (imported from existing integration) ──
 from chaizup_toc.api.wo_kitting_api import (   # noqa: E402
     _get_api_key,
-    _call_deepseek,
+    _call_openai,
     _execute_chat_with_tools,
-    DEEPSEEK_MODELS,
+    OPENAI_MODELS,
     _AI_SESSION_TTL,
     _AI_MAX_HISTORY,
 )
@@ -2415,7 +2415,7 @@ def get_chart_data(company=None, month=None, year=None, warehouses=None,
 
 
 # =============================================================================
-# AI ADVISOR (Tab 2) — DeepSeek Integration
+# AI ADVISOR (Tab 2) — OpenAI Integration
 # =============================================================================
 
 _POR_AI_SYSTEM_PROMPT = (
@@ -2459,15 +2459,15 @@ _POR_AI_SYSTEM_PROMPT = (
 
 
 @frappe.whitelist()
-def get_deepseek_models_por():
-    """Return available DeepSeek models for the model selector."""
+def get_openai_models_por():
+    """Return available OpenAI models for the model selector."""
     return {
         model_id: {
             "name":             cfg["name"],
             "description":      cfg["description"],
             "est_cost_per_call":cfg["est_cost_per_call"],
         }
-        for model_id, cfg in DEEPSEEK_MODELS.items()
+        for model_id, cfg in OPENAI_MODELS.items()
     }
 
 
@@ -2485,8 +2485,8 @@ def get_ai_overview_insight(context_json, model=None):
     api_key = _get_api_key()
     if not api_key:
         return {
-            "insight": "<span class='por-ai-warn'>DeepSeek API key not configured. "
-                       "Set it in TOC Settings → AI Advisor → DeepSeek API Key.</span>",
+            "insight": "<span class='por-ai-warn'>OpenAI API key not configured. "
+                       "Set it in TOC Settings → AI Advisor → OpenAI API Key.</span>",
             "is_html": True,
         }
 
@@ -2496,7 +2496,7 @@ def get_ai_overview_insight(context_json, model=None):
     # down to the fields the LLM actually reasons about. Some sites
     # have items with `description`, `cost_summary`, `shortage_components`,
     # `wo_pp_names`, `sub_assembly_wos`, etc. populated — sending them
-    # verbatim ballooned the request body past DeepSeek's per-call
+    # verbatim ballooned the request body past OpenAI's per-call
     # max_input_tokens and triggered HTTP 400. Keep this list short.
     _AI_FIELDS = (
         "item_code", "item_name", "item_group", "stock_uom",
@@ -2529,7 +2529,7 @@ def get_ai_overview_insight(context_json, model=None):
     ]
 
     try:
-        resp   = _call_deepseek(messages, api_key=api_key, model=model)
+        resp   = _call_openai(messages, api_key=api_key, model=model)
         reply  = resp["choices"][0]["message"]["content"] or ""
     except Exception as exc:
         frappe.log_error(str(exc), "POR AI Auto-Insight")
@@ -2552,7 +2552,7 @@ def chat_with_overview_advisor(message, session_id, context_json, model=None):
     api_key = _get_api_key()
     if not api_key:
         return {
-            "reply":      "<span class='por-ai-warn'>DeepSeek API key not configured.</span>",
+            "reply":      "<span class='por-ai-warn'>OpenAI API key not configured.</span>",
             "session_id": session_id,
             "is_html":    True,
         }
@@ -2568,7 +2568,7 @@ def chat_with_overview_advisor(message, session_id, context_json, model=None):
     # POR-017 (2026-05-06): the previous strip removed only "items" and
     # "raw_rows" — but `summary{}` plus `period{}`, `filters{}` and any
     # nested arrays in summary (e.g. `total_planned_qty_per_uom`) could
-    # still push the JSON over DeepSeek's input window. We now also cap
+    # still push the JSON over OpenAI's input window. We now also cap
     # the encoded JSON at 12,000 chars (≈ 3k tokens) and truncate with
     # a clear marker so the LLM sees the truncation. If a future feature
     # adds a large key to `context`, add it to the strip list here, not
@@ -2611,17 +2611,17 @@ def chat_with_overview_advisor(message, session_id, context_json, model=None):
 
 @frappe.whitelist()
 def test_ai_connection_por():
-    """Diagnostic: verify API key and DeepSeek connectivity."""
+    """Diagnostic: verify API key and OpenAI connectivity."""
     api_key = _get_api_key()
     if not api_key:
         return {"ok": False, "message": "No API key found. Configure in TOC Settings."}
     try:
-        resp = _call_deepseek(
+        resp = _call_openai(
             [{"role": "user", "content": "Reply: ok"}],
-            api_key=api_key, model="deepseek-chat"
+            api_key=api_key, model="gpt-4o-mini"
         )
         reply = resp["choices"][0]["message"]["content"]
-        return {"ok": True, "message": reply, "model": "deepseek-chat"}
+        return {"ok": True, "message": reply, "model": "gpt-4o-mini"}
     except Exception as exc:
         return {"ok": False, "message": str(exc)}
 

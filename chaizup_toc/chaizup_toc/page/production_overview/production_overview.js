@@ -77,7 +77,7 @@ class ProductionOverview {
         this._filterNoWO     = false;  // "No WO"          pill (POR-014, 2026-05-06)
         this._filterHasPP    = false;  // "In PP"          pill
         // AI state
-        this._aiModel   = "deepseek-chat";
+        this._aiModel   = "gpt-4o-mini";
         this._aiContext = null;
         // Chart state
         this._charts    = {};
@@ -2140,7 +2140,7 @@ Warehouse-scoped to your filter.`;
 
         // Load model list
         frappe.call({
-            method: "chaizup_toc.api.production_overview_api.get_deepseek_models_por",
+            method: "chaizup_toc.api.production_overview_api.get_openai_models_por",
             callback: (r) => {
                 if (!r.message) return;
                 const models = r.message;

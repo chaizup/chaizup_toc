@@ -11,7 +11,7 @@ answer in one view:
 - *Will we ship?* (Stock + Planned − Pending SO)
 - *Is anything blocked?* (Shortage components + open MRs/POs)
 - *Are costs drifting?* (BOM standard vs STE actual)
-- *What does the AI think we should fix today?* (DeepSeek summary)
+- *What does the AI think we should fix today?* (OpenAI summary)
 
 ### Real-world scenarios
 
@@ -45,7 +45,7 @@ api/production_overview_api.py   ← 1424 lines, 13 @whitelisted endpoints
 | Tab | Pane id | Source endpoint | Notes |
 |-----|---------|----------------|-------|
 | Overview | `#por-pane-overview` | `get_production_overview` | 18-column item table; row click → detail modal |
-| AI Advisor | `#por-pane-ai` | `get_ai_overview_insight` + `chat_with_overview_advisor` | DeepSeek; session key `por:chat:{user}:{session_id}` (distinct from `wkp:`) |
+| AI Advisor | `#por-pane-ai` | `get_ai_overview_insight` + `chat_with_overview_advisor` | OpenAI; session key `por:chat:{user}:{session_id}` (distinct from `wkp:`) |
 | Charts | `#por-pane-charts` | `get_chart_data` | Pie + bar (Chart.js loaded from CDN) |
 
 ## API Endpoints (13 total)
@@ -81,7 +81,7 @@ get_chart_data(...)
   # Pie: items by item_type (FG/SFG/RM/PM/Other). Bar: planned vs actual top-N.
 
 # ─── AI tab ───────────────────────────────────────────────────────────────
-get_deepseek_models_por()         # Reuses DEEPSEEK_MODELS from wo_kitting_api
+get_openai_models_por()         # Reuses OPENAI_MODELS from wo_kitting_api
 get_ai_overview_insight(context_json, model)         # Stateless auto-insight
 chat_with_overview_advisor(message, session_id,      # Persistent (Redis 2h TTL)
                             context_json, model)
@@ -92,7 +92,7 @@ test_ai_connection_por()
 
 | Source | Why |
 |--------|-----|
-| `chaizup_toc.api.wo_kitting_api` | Reuses `_get_api_key`, `_call_deepseek`, `_execute_chat_with_tools`, `DEEPSEEK_MODELS`, `_AI_SESSION_TTL`, `_AI_MAX_HISTORY` (single source of truth for DeepSeek integration). |
+| `chaizup_toc.api.wo_kitting_api` | Reuses `_get_api_key`, `_call_openai`, `_execute_chat_with_tools`, `OPENAI_MODELS`, `_AI_SESSION_TTL`, `_AI_MAX_HISTORY` (single source of truth for OpenAI integration). |
 | ERPNext: `Work Order`, `BOM`, `BOM Item`, `Bin`, `Stock Entry`, `Stock Entry Detail` | Production data |
 | ERPNext: `Sales Order`, `Sales Order Item`, `Delivery Note`, `Delivery Note Item` | Demand + dispatch |
 | Custom: `Sales Projection`, `Sales Projected Items` | Forecast for current month |
@@ -120,7 +120,7 @@ this._period       = null;     // {month, year, ...}
 this._selWh        = [];       // [] = all
 this._selWo / _selSo = [];     // status filters (populated from get_default_statuses)
 this._planMode     = false;    // Y/N stock_mode toggle
-this._aiModel      = "deepseek-chat";
+this._aiModel      = "gpt-4o-mini";
 this._aiContext    = null;     // last summary fed to AI
 this._charts       = {};       // Chart.js instances by id
 this._chartsLoaded = false;    // lazy
@@ -173,7 +173,7 @@ Use this table when triaging "is X covered?" questions.
 | Cost breakup 3-way (BOM std vs actual vs hist) | `get_cost_breakup` |
 | Cost per default UOM AND all available UOMs | `cost_per_uom` (NEW field on `get_cost_breakup`) |
 | Item click modal: WO + sub-asm chain + batch + cost | `get_item_detail` + `_buildItemDetailHtml` |
-| AI Advisor (DeepSeek + model selector) | `chat_with_overview_advisor` + `get_deepseek_models_por` |
+| AI Advisor (OpenAI + model selector) | `chat_with_overview_advisor` + `get_openai_models_por` |
 | AI no greetings, no preamble, HTML output, scroll tables | `_POR_AI_SYSTEM_PROMPT` enforces strict rules; `.por-ai-tablewrap` CSS |
 | AI FAQ chips | `.por-faq-chip` panel in HTML |
 | AI captures filter changes | `_buildAIContext` includes period + stock_mode + filters |
@@ -214,8 +214,8 @@ Use this table when triaging "is X covered?" questions.
 
 - Page is auto-loaded from `chaizup_toc/page/production_overview/`. No migration required.
 - Chart.js loads from CDN — page is **not** offline-capable.
-- DeepSeek API key resolution order matches `wo_kitting_api`:
-  `DEEPSEEK_API_KEY` constant → `frappe.conf.deepseek_api_key` → `TOC Settings.custom_deepseek_api_key`.
+- OpenAI API key resolution order matches `wo_kitting_api`:
+  `OPENAI_API_KEY` constant → `frappe.conf.openai_api_key` → `TOC Settings.custom_openai_api_key`.
 - After any HTML/JS change: `redis-cli -h redis-cache -p 6379 FLUSHALL`.
 
 ## Sync Block — Session 2026-05-01 #9 (Cover Sheet Filter Display Fix)
@@ -1165,22 +1165,22 @@ handle for fine moves and Enter-to-jump for big moves.
   (`::-webkit-*-spin-button`) rules are needed; removing either
   re-introduces the spinner on the affected engine.
 
-### POR-017 — DeepSeek API HTTP 400 error fix
+### POR-017 — OpenAI API HTTP 400 error fix
 
-**Symptom**: AI Advisor showed "DeepSeek API error (HTTP 400). See
-Error Log → WKP AI DeepSeek Error for details." even when the user
+**Symptom**: AI Advisor showed "OpenAI API error (HTTP 400). See
+Error Log → WKP AI OpenAI Error for details." even when the user
 had not configured a real API key.
 
 **Root cause** (compounding):
 1. `_get_api_key()` only filtered the in-file constant placeholder
    (`startswith("YOUR_")`). Site-config and TOC Settings values were
    returned verbatim. Sites with a placeholder-shaped value in
-   `site_config.json:deepseek_api_key` (e.g. `"YOUR_KEY_HERE"`) sent
-   that string as the bearer token. DeepSeek answered with 401 on
+   `site_config.json:openai_api_key` (e.g. `"YOUR_KEY_HERE"`) sent
+   that string as the bearer token. OpenAI answered with 401 on
    recent versions and 400 on others. The frontend rendered "HTTP 400".
 2. The chat endpoint passed the WKP `_AI_TOOLS` schema unconditionally.
    Those tools depend on `context["rows"]/["dispatch"]` — keys the
-   Production Overview context never sets. DeepSeek would attempt
+   Production Overview context never sets. OpenAI would attempt
    tool calls that returned `{"error": ...}` and the inflated payload
    could push subsequent calls past the model input window (→ 400).
 3. The system context dict could include a large `summary{}` /
@@ -1194,7 +1194,7 @@ had not configured a real API key.
 - `_get_api_key()` runs every source through `_is_valid_api_key()`.
   Returns None when no valid key exists; callers surface the friendly
   "API key not configured" message instead of attempting the call.
-- `_call_deepseek()` log expanded with `model`, `messages count`,
+- `_call_openai()` log expanded with `model`, `messages count`,
   `chars` and `has_tools` so future 400 triage is debuggable from the
   Error Log alone.
 - `_execute_chat_with_tools()` accepts a new `tools` kwarg. `tools=None`
@@ -1221,7 +1221,7 @@ had not configured a real API key.
   system prompt or user message. If a future feature genuinely needs
   larger context, prefer pruning keys via the strip-list before
   raising the cap.
-- Logging expansion in `_call_deepseek` includes `chars` (sum of
+- Logging expansion in `_call_openai` includes `chars` (sum of
   message content lengths). Don't change to token-count without
   pulling in tiktoken — char count is a stable proxy.
 
@@ -1283,7 +1283,7 @@ had not configured a real API key.
 
 - `chaizup_toc/api/wo_kitting_api.py`
   - New `_is_valid_api_key`. Hardened `_get_api_key`.
-  - `_call_deepseek` log expanded.
+  - `_call_openai` log expanded.
   - `_execute_chat_with_tools` accepts `tools` kwarg.
   - 400-specific error branch added.
 - `chaizup_toc/api/production_overview_api.py`

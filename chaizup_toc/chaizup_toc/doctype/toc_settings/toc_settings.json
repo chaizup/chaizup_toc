@@ -33,7 +33,7 @@
   "inventory_classification_section",
   "warehouse_rules",
   "ai_section",
-  "custom_deepseek_api_key",
+  "custom_openai_api_key",
   "section_break_oosi",
   "projection_notification_users",
   "demo_section",
@@ -242,16 +242,16 @@
   },
   {
    "collapsible": 1,
-   "description": "DeepSeek API key for the AI Advisor tab in WO Kitting Planner. Get a key at https://platform.deepseek.com/api_keys",
+   "description": "OpenAI API key for the AI Advisor tab in WO Kitting Planner. Get a key at https://platform.openai.com/api-keys",
    "fieldname": "ai_section",
    "fieldtype": "Section Break",
-   "label": "AI Advisor (DeepSeek)"
+   "label": "AI Advisor (OpenAI)"
   },
   {
-   "description": "Starts with sk-. Stored encrypted. Used by wo_kitting_planner AI Advisor tab. Fallback: site_config.json deepseek_api_key key.",
-   "fieldname": "custom_deepseek_api_key",
+   "description": "Starts with sk-. Stored encrypted. Used by wo_kitting_planner AI Advisor tab. Fallback: site_config.json openai_api_key key.",
+   "fieldname": "custom_openai_api_key",
    "fieldtype": "Password",
-   "label": "DeepSeek API Key"
+   "label": "OpenAI API Key"
   },
   {
    "description": "<!--Do Not change the format if need to add more description follow the existing format-->\n<div style=\"background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;color:#1f2937;font-family:sans-serif;line-height:1.5\">\n    \n    <div style=\"display:flex;align-items:center;margin-bottom:12px;border-bottom:2px solid #3b82f6;padding-bottom:8px\">\n        <span style=\"font-size:1.2rem;margin-right:8px\">\ud83d\udccb</span>\n        <strong style=\"font-size:1.1rem;color:#1e40af\">Production Automation Guide</strong>\n    </div>\n\n    <p style=\"margin-bottom:16px;font-size:0.95rem\">\n        Each month your sales team submits a <b>Sales Projection</b>. This section allows the system to automatically generate <b>Work Orders</b> to fulfill those specific production targets.\n    </p>\n\n    <div style=\"background-color:#ffffff;border-left:4px solid #3b82f6;padding:12px;border-radius:4px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0, 0, 0, 0.05)\">\n        <h5 style=\"margin-top:0;color:#3b82f6;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em\">\u25b6 How it Works</h5>\n        <ol style=\"margin:0;padding-left:20px;font-size:0.9rem\">\n            <li style=\"margin-bottom:8px\"><b>Schedule:</b> Every day at <b>06:00 AM</b>, the system checks for a SUBMITTED Sales Projection for the current month.</li>\n            <li style=\"margin-bottom:8px\">\n                <b>Calculation:</b> For each item, the system calculates demand using the following logic:\n                <div style=\"background-color:#f1f5f9;padding:10px;border-radius:6px;margin:8px 0;font-family:monospace;font-size:0.85rem;border:1px solid #cbd5e1\">\n                    Net Required = (Projected Qty + Carryover Pending SOs) \u2212 Current Month Pending SOs \u2212 (Current Stock + Open WO Qty)\n                </div>\n                <ul style=\"list-style-type:circle;padding-left:20px;font-size:0.85rem;color:#4b5563\">\n                    <li><b>Carryover Pending SOs:</b> Unfulfilled orders due <i>before</i> this month.</li>\n                    <li><b>Open WO Qty:</b> Quantity in open/draft orders (prevents double-ordering).</li>\n                </ul>\n            </li>\n            <li style=\"margin-bottom:8px\"><b>Execution:</b> If Net Required &gt; 0 and <b>Production Capacity</b> is set, a <b>Draft Work Order</b> is created.</li>\n            <li style=\"margin-bottom:8px\"><b>Recursive BOM:</b> Sub-assemblies are automatically triggered for the full BOM tree.</li>\n        </ol>\n    </div>\n\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;margin-bottom:16px\">\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">\u26a0\ufe0f Capacity Gate</strong><br>\n            If Capacity is 0 or blank, no Work Order is created. You will be notified via email.\n        </div>\n        <div style=\"background-color:#fff7ed;border:1px solid #fed7aa;padding:10px;border-radius:6px;font-size:0.85rem\">\n            <strong style=\"color:#c2410c\">\u26a0\ufe0f BOM Gate</strong><br>\n            If no active Default BOM is found, the system skips the item and sends an email alert.\n        </div>\n    </div>\n\n    <div style=\"font-size:0.85rem;border-top:1px dashed #cbd5e1;padding-top:10px;color:#64748b\">\n        <span><b>Manual Trigger:</b> Use the 'Run Projection Automation' button on any submitted Projection.</span><br>\n        <span style=\"color:#059669\"><b>\u2713 Safe by Design:</b> The system accounts for existing orders; running it twice will not create duplicates.</span>\n    </div>\n</div>",

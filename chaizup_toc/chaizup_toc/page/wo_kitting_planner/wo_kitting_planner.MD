@@ -6,7 +6,7 @@ The WO Kitting Planner is a production planning tool for Frappe/ERPNext, designe
 ### Key Features
 - **Simulation Engine**: Supports "Current Stock Only" and "Current & Expected" (including POs/MRs/WOs) modes.
 - **Calculation Modes**: "Isolated" (each WO checked against full stock) and "Sequential" (WOs consume stock in priority order).
-- **AI Advisor**: Powered by DeepSeek (V3/R1), providing automated insights and a persistent chat interface for production support.
+- **AI Advisor**: Powered by OpenAI (V3/R1), providing automated insights and a persistent chat interface for production support.
 - **Dispatch Bottleneck Analysis**: Compares FG stock and production plan against Sales Order demand.
 - **Item View**: FG-wise summary of all items with active WOs or pending SOs.
 - **Cost Audit**: 360-degree audit comparing BOM standard cost vs. actual consumed cost.

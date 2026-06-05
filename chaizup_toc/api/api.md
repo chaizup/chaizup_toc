@@ -7,7 +7,7 @@ api/
 ├── toc_api.py                 ← Core buffer queries, DAF management, Number Cards
 ├── kitting_api.py             ← Kitting report — demand/supply/BOM analysis + one-click actions
 ├── pipeline_api.py            ← Supply Chain Tracker — 7-stage pipeline + tracker views
-├── wo_kitting_api.py          ← WO Kitting Planner — 17 endpoints + DeepSeek AI integration
+├── wo_kitting_api.py          ← WO Kitting Planner — 17 endpoints + OpenAI AI integration
 ├── production_overview_api.py ← Production Overview page — 13 endpoints (overview/AI/charts)
 ├── permissions.py             ← App-level and DocType-level permission helpers
 └── demo_data.py               ← Admin-only test data creation/deletion

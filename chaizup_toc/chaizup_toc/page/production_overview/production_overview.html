@@ -1,7 +1,7 @@
 <!-- =============================================================================
   CONTEXT: Production Overview Page — 3-tab production planning dashboard.
     Tab 1 "Overview":  Item-level table (18 cols) with filters, modals, export.
-    Tab 2 "AI Advisor": DeepSeek chat + auto-insight.
+    Tab 2 "AI Advisor": OpenAI chat + auto-insight.
     Tab 3 "Charts":    Pie + bar summaries of loaded data.
   MEMORY: app_chaizup_toc.md § Production Overview Page
   INSTRUCTIONS:
@@ -1483,8 +1483,8 @@ Plus a per-UOM cost table — rupees per stock UOM AND per every available UOM c
         <div class="por-ai-card por-ai-chat">
           <div class="por-ai-model-row">
             <span class="por-ai-model-lbl"><i class="fa-solid fa-microchip"></i> Model</span>
-            <select id="por-ai-model" title="DeepSeek model to use">
-              <option value="deepseek-chat">Loading…</option>
+            <select id="por-ai-model" title="OpenAI model to use">
+              <option value="gpt-4o-mini">Loading…</option>
             </select>
             <span id="por-ai-cost-hint"></span>
             <button class="por-btn por-btn-default por-btn-sm" id="por-ai-test" title="Test API connection">
@@ -1525,7 +1525,7 @@ Plus a per-UOM cost table — rupees per stock UOM AND per every available UOM c
             <i class="fa-solid fa-circle-info" style="color:var(--por-info);"></i> About
           </div>
           <div style="font-size:11px;color:var(--por-muted);line-height:1.5;">
-            Powered by DeepSeek. Analyses the data loaded in Tab 1. Your data is sent only when you ask — nothing is stored externally.
+            Powered by OpenAI. Analyses the data loaded in Tab 1. Your data is sent only when you ask — nothing is stored externally.
           </div>
         </div>
       </div>

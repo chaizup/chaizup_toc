@@ -27,3 +27,5 @@ chaizup_toc.patches.v1_0.merge_draft_workflow_into_pending
 chaizup_toc.patches.v1_0.remove_item_level_adu_fields
 
 chaizup_toc.patches.v1_0.rename_custom_created_by_to_recorded_by
+
+chaizup_toc.patches.v1_0.rename_deepseek_to_openai_settings

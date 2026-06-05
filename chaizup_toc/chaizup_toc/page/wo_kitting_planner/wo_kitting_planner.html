@@ -148,7 +148,7 @@
   6. COLUMN POPOVER   — appears on ? button click; content from WKP_POPOVERS in JS
   7. SHORTAGE MODAL   — material breakdown for one WO; injected by JS
   8. WO DETAIL MODAL  — full WO info + decision card; injected by JS
-  9. AI ADVISOR PANE  — auto-insight card + session chat; powered by DeepSeek
+  9. AI ADVISOR PANE  — auto-insight card + session chat; powered by OpenAI
   10. ITEM VIEW PANE  — FG-wise Work Order + Sales Order summary; export + email
 -->
 
@@ -406,7 +406,7 @@
       <span class="wkp-tab-text">Dispatch Bottleneck</span>
     </button>
     <button class="wkp-tab-btn wkp-tab-btn-ai" data-tab="ai-chat"
-            data-tip="AI Advisor: Get a plain-language briefing of your production situation.&#10;Powered by DeepSeek AI &mdash; understands your current simulation data.">
+            data-tip="AI Advisor: Get a plain-language briefing of your production situation.&#10;Powered by OpenAI AI &mdash; understands your current simulation data.">
       <span class="wkp-tab-icon"><i class="fa-solid fa-robot"></i></span>
       <span class="wkp-tab-text">AI Advisor</span>
     </button>
@@ -609,8 +609,8 @@
               <div class="wkp-ai-card-sub">AI analysis of current simulation &mdash; refreshes with each load</div>
             </div>
             <span class="wkp-ai-model-badge"
-                  data-tip="Powered by DeepSeek AI (deepseek-chat model).&#10;Trained on manufacturing and production planning context.&#10;Responses are generated from your live ERP simulation data.">
-              DeepSeek AI
+                  data-tip="Powered by OpenAI AI (gpt-4o-mini model).&#10;Trained on manufacturing and production planning context.&#10;Responses are generated from your live ERP simulation data.">
+              OpenAI AI
             </span>
           </div>
           <div class="wkp-ai-insight-body" id="wkp-ai-insight-body">
@@ -649,8 +649,8 @@
           <div class="wkp-ai-model-row">
             <label class="wkp-ai-model-label" for="wkp-ai-model-select">AI Model:</label>
             <select class="wkp-select wkp-ai-model-select" id="wkp-ai-model-select"
-                    data-tip="Select DeepSeek model. Estimated cost shown per chat message. V3 Standard is fast and accurate for daily use. R1 Reasoning is slower but does deeper analysis for complex prioritization.">
-              <option value="deepseek-chat">V3 Standard (Fast, Cheap) (~$0.001/chat)</option>
+                    data-tip="Select OpenAI model. Estimated cost shown per chat message. V3 Standard is fast and accurate for daily use. R1 Reasoning is slower but does deeper analysis for complex prioritization.">
+              <option value="gpt-4o-mini">V3 Standard (Fast, Cheap) (~$0.001/chat)</option>
             </select>
             <span class="wkp-ai-cost-hint" id="wkp-ai-cost-hint"></span>
           </div>
