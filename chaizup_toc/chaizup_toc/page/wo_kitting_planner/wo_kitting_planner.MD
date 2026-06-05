@@ -743,3 +743,95 @@ is a future cleanup, not a Phase-A requirement.
   → all tabs recalculate; switch to Dispatch tab → SO list scoped; toggle a
   Workflow: <state> entry on SO panel → drafts in that state appear.
 ```
+
+## Phase B — Uniform Dual-UOM + Drill-down + Multi-sheet XLSX (2026-06-05)
+
+Phase B is **presentational + export + drilldown only** — it does NOT change any
+computed number. It makes every qty cell show both UOMs uniformly, lets a user click
+a qty cell to see the per-voucher breakdown in both UOMs, and adds a branded Excel
+export. Driving spec: §5 of `docs/superpowers/specs/2026-06-05-wkp-...-design.md`.
+
+### What changed
+- **Uniform dual-UOM cell.** New backend helpers `_higher_uom_pair(stock_qty, sec)`
+  and `_decorate_qty_pairs(rows, qty_fields, item_key, sec_map)` add a
+  `<field>_higher = {"uom","qty"}` to EVERY qty field of EVERY tab row. The higher qty
+  is ALWAYS `stock_qty / conversion_factor` (the FIXED rule from `_get_secondary_uom`:
+  smallest `UOM Conversion Detail.conversion_factor > 1`). Items with no CF>1 ship
+  `{"uom":"","qty":None}` → primary only. Applied in `simulate_kitting`
+  (list rows + nested `shortage_items`), `get_dispatch_bottleneck` (DICT keyed by
+  item_code → each value + its `so_list`), and `get_item_wo_summary` (list rows).
+  Frontend renders them through ONE shared `_qtyCell(stockQty, stockUom, higher, drill)`
+  used by the WO-plan, Item-View, Dispatch, AND Material-Shortage renderers (the
+  shortage tab builds its higher pair client-side via `_srHigher` since its rows are
+  client-aggregated — same `stock/factor` rule). `_qtyCell` shows 0 dp for whole units,
+  2 dp when the value is fractional (so material qtys like 2.5 kg are not truncated).
+- **Cell-click both-UOM drill-down.** New whitelisted `get_qty_drilldown(item_code,
+  metric, warehouses, company, wo/so/po_statuses)`; `metric ∈ {stock, pending_so,
+  pending_wo, pending_po, pending_mr}`. It REUSES the exact scoping/status/warehouse
+  SQL of the matching table query (Bin / PO inbound / SO line / WO / MR inbound) so the
+  drilldown TOTAL reconciles with the clicked cell (verified: stock total == Σ
+  Bin.actual_qty). Returns per-voucher rows with `qty_stock` + `qty_higher` and a
+  reconciling `totals`. The qty cells that map to a supported metric get
+  `drill={item,metric}` (current/FG stock→`stock`, pending SO/PO/WO/MR→`pending_*`);
+  others stay dual-UOM but non-clickable. Frontend modal is the `#wkp-m2-overlay`
+  shell + `_openQtyDrilldown`/`_renderQtyDrilldown`, opened by a DELEGATED click on
+  `#wkp-root` filtered to `.wkp-qty-clickable` with `stopPropagation` (DANGER: stays
+  cell-click — row-click is the WO-plan priority drag).
+- **Multi-sheet XLSX.** New whitelisted `export_xlsx_kitting(filters)` (openpyxl,
+  modelled on `item_short_surplus_api.export_xlsx`): sheets **Main / Filters & Run Info
+  / Material Shortage / Dispatch**, every qty in BOTH UOMs as paired columns. Streams
+  via the ISS attribute-style tail (`frappe.response.filename/.filecontent =
+  buf.getvalue()/.type="binary"/.display_content_as="attachment"`). Frontend `Excel`
+  button (`#wkp-export-xlsx`) → `_exportXLSX()` → GET `window.open` with an encoded
+  `filters` param (the proven binary-download idiom on this site). ADDITIVE — the
+  existing CSV / PDF / email exports are untouched.
+
+### Restricted Areas (Phase B — DO NOT change without review)
+- **Fixed conversion:** higher qty = `stock / conversion_factor`. NEVER multiply, never
+  invent another conversion. (The `* secondary_factor` lines in WO costing are
+  PRICE-per-higher-unit math, not qty — leave them.)
+- **Reconciliation:** `get_qty_drilldown` must keep reusing the SAME SQL fragments
+  (scoping + `_wkp_*_status_clause` + warehouse COALESCE) as the table query for each
+  metric, so the drilldown total equals the cell. Do not write parallel queries.
+- **Drill-down stays cell-click** (delegated on `#wkp-root`, `.wkp-qty-clickable`,
+  `stopPropagation`). Row-click = priority drag on the WO-plan tab.
+- **XLSX is additive** — never remove/alter CSV/PDF/email.
+- **Namespacing:** the new modal IDs are `#wkp-m2-overlay/-title/-sub/-body/-foot/-close`
+  (unique). The pre-existing row-detail modals share the `wkp-m2-body` CLASS but via the
+  compound `.wkp-modal-body.wkp-m2-body` rule; the new modal styles via `.wkp-m2
+  .wkp-m2-body` — keep these scopes separate.
+- JS↔CSS parity for `wkp-m2-*` and `wkp-qty-*` (verify with `comm`); HTML zero raw
+  apostrophes (POR-023).
+
+### Sync Block (cross-AI continuity, WKP-PhaseB)
+
+```
+[chaizup_toc · wo_kitting_planner · WKP-PhaseB · 2026-06-05]
+- Presentational+export+drilldown only — NO computed number changed.
+- Dual-UOM: _higher_uom_pair + _decorate_qty_pairs add <field>_higher={uom,qty}
+  (= stock/factor, FIXED) to every qty on simulate (list + nested shortage_items),
+  get_dispatch_bottleneck (DICT keyed by item_code + so_list), get_item_wo_summary
+  (list). Frontend: ONE _qtyCell renderer across WO-plan/Item-View/Dispatch/Shortage
+  (shortage builds higher client-side via _srHigher, same /factor). _qtyCell: 0dp for
+  ints, 2dp for fractionals (no material-qty truncation).
+- Drilldown: get_qty_drilldown(item,metric∈{stock,pending_so/wo/po/mr},...) reuses the
+  SAME scoping/status/warehouse SQL as the table query → total reconciles with cell
+  (verified stock total == ΣBin.actual_qty). Modal #wkp-m2-overlay +
+  _openQtyDrilldown/_renderQtyDrilldown, DELEGATED click on #wkp-root .wkp-qty-clickable
+  + stopPropagation (DANGER: cell-click, never row-click = WO priority drag).
+- XLSX: export_xlsx_kitting(filters) openpyxl, 4 sheets (Main/Filters & Run Info/
+  Material Shortage/Dispatch), both UOMs as paired cols; ISS attribute streaming tail
+  (filecontent=buf.getvalue(), type=binary, display_content_as=attachment). Button
+  #wkp-export-xlsx → _exportXLSX → GET window.open ?filters=encoded. ADDITIVE: CSV/PDF/
+  email untouched.
+- Real payload shapes (corrected vs plan): simulate=LIST (nested shortage_items),
+  dispatch=DICT keyed by item_code (so_list), item_view=LIST. Drilldown metric SQL:
+  stock=tabBin; pending_po=PO Item JOIN PO (COALESCE wh); pending_so=SO Item JOIN SO;
+  pending_wo=Work Order fg_warehouse; pending_mr=MR Item JOIN MR (legacy NOT-IN status).
+- Verified: all tabs ship _higher; drilldown 180==180 higher=stock/12; XLSX 4 sheets
+  PK 16.8KB both-UOM cols; py/js/apostrophe/parity/cell-click/wh-guard gate clean.
+- Browser test required: hard-reload /app/wo-kitting-planner; every qty cell shows
+  stock + higher line; click a stock/pending cell → modal lists vouchers in both UOMs,
+  total reconciles, close works, clicking does NOT drag the row; Excel button downloads
+  a 4-sheet workbook; CSV/PDF/email still work.
+```
