@@ -257,30 +257,34 @@
            Populated client-side from
            `chaizup_toc.api.wo_kitting_api.get_toc_pending_filters`.
            ═══════════════════════════════════════════════════════════════ -->
-      <div class="wkp-pending-banner" id="wkp-pending-banner"
-           data-tip="Pending Sales Order / Work Order / Purchase Order statuses are configured globally in TOC Settings.&#10;Every TOC report on this site reads the same lists so reports never diverge.&#10;Click &quot;Edit in TOC Settings&quot; to change them.">
-        <div class="wkp-pending-banner-head">
-          <i class="fa-solid fa-circle-info" style="font-size:11px;color:var(--brand-600)"></i>
-          <strong style="font-size:11px;letter-spacing:.04em">Active Pending Filter (read-only)</strong>
-          <a href="/app/toc-settings" target="_blank" rel="noopener" class="wkp-pending-banner-edit"
-             data-tip="Open TOC Settings to change which statuses are treated as pending. Applies to every TOC report on this site.">
-            <i class="fa-solid fa-up-right-from-square" style="font-size:10px;margin-right:3px"></i>Edit in TOC Settings
-          </a>
+      <!-- 2026-06-05 — editable filter row (replaces the read-only TOC banner).
+           Pre-filled from TOC Settings on load; user can override per session;
+           Load recalculates every tab. Multiselect triggers are filled by JS. -->
+      <div class="wkp-filter-row" id="wkp-filter-row">
+        <div class="wkp-fr-group wkp-fr-wide">
+          <label class="wkp-fr-label">SO Pending (Status : Workflow)</label>
+          <div class="wkp-ms" id="wkp-so-ms" tabindex="0" data-key="so"></div>
         </div>
-        <div class="wkp-pending-banner-row">
-          <span class="wkp-pending-chip-group" id="wkp-pending-so">
-            <span class="wkp-pending-chip-label"><i class="fa-solid fa-file-invoice" style="font-size:9px"></i> Pending SO</span>
-            <span class="wkp-pending-chip-list" id="wkp-pending-so-list">&hellip;</span>
-          </span>
-          <span class="wkp-pending-chip-group" id="wkp-pending-wo">
-            <span class="wkp-pending-chip-label"><i class="fa-solid fa-hammer" style="font-size:9px"></i> Pending WO</span>
-            <span class="wkp-pending-chip-list" id="wkp-pending-wo-list">&hellip;</span>
-          </span>
-          <span class="wkp-pending-chip-group" id="wkp-pending-po">
-            <span class="wkp-pending-chip-label"><i class="fa-solid fa-cart-shopping" style="font-size:9px"></i> Pending PO</span>
-            <span class="wkp-pending-chip-list" id="wkp-pending-po-list">&hellip;</span>
-          </span>
+        <div class="wkp-fr-group wkp-fr-wide">
+          <label class="wkp-fr-label">WO Pending (Status : Workflow)</label>
+          <div class="wkp-ms" id="wkp-wo-ms" tabindex="0" data-key="wo"></div>
         </div>
+        <div class="wkp-fr-group wkp-fr-wide">
+          <label class="wkp-fr-label">PO Pending (Status : Workflow)</label>
+          <div class="wkp-ms" id="wkp-po-ms" tabindex="0" data-key="po"></div>
+        </div>
+        <div class="wkp-fr-group wkp-fr-wide">
+          <label class="wkp-fr-label">Warehouses</label>
+          <div class="wkp-ms" id="wkp-wh-ms" tabindex="0" data-key="wh"></div>
+        </div>
+        <div class="wkp-fr-group">
+          <label class="wkp-fr-label">Company</label>
+          <div class="wkp-ms" id="wkp-company-ms" tabindex="0" data-key="company"></div>
+        </div>
+        <button class="wkp-btn wkp-btn-sm wkp-load-btn" id="wkp-load-btn" type="button"
+                data-tip="Apply the selected statuses, warehouses and company. Recalculates every tab.">
+          <i class="fa-solid fa-arrows-rotate"></i> Load
+        </button>
       </div>
 
       <!-- Back-compat: hidden legacy single-status select. Some tests / external
@@ -381,6 +385,27 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- 2026-06-05 — inline column sort (ported from item-short-surplus). -->
+  <div class="wkp-sortbar" id="wkp-sortbar">
+    <div class="wkp-sortpicker" id="wkp-sortpicker" tabindex="0" role="combobox"
+         aria-haspopup="listbox" aria-expanded="false"
+         data-tip="Pick a column to sort the active table by.">
+      <i class="fa-solid fa-sort"></i>
+      <span class="wkp-sortpicker-label">Sort:</span>
+      <span class="wkp-sortpicker-value" id="wkp-sortpicker-value">&mdash;</span>
+      <i class="fa-solid fa-caret-down"></i>
+    </div>
+    <button class="wkp-sortdir" id="wkp-sortdir" type="button"
+            data-tip="Toggle ascending / descending.">
+      <i class="fa-solid fa-arrow-down" id="wkp-sortdir-icon"></i>
+      <span id="wkp-sortdir-label">High to Low</span>
+    </button>
+    <button class="wkp-sortclear" id="wkp-sortclear" type="button" title="Clear sort">&times;</button>
+    <div class="wkp-sortpicker-dropdown" id="wkp-sortpicker-dropdown" role="listbox">
+      <div class="wkp-sortpicker-opts" id="wkp-sortpicker-opts"></div>
+    </div>
   </div>
 
   <!-- ════ 3.5. TAB BAR ════ -->
