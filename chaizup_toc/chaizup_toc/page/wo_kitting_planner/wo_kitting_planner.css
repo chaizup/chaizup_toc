@@ -4236,3 +4236,187 @@ body.wkp-dragging-active .wkp-drag-handle { cursor: grabbing; }
     color: var(--text-muted, #64748b);
     text-align: right;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   2026-06-06 — AI ADVISOR MODERN REFRESH
+   Restyle the AI Advisor tab to the item-short-surplus design language:
+   Inter font, 14px card radius, soft 0 1px 1px rgba(15,23,42,.04) shadows,
+   slate neutrals + indigo (#4f46e5) accent + chaizup amber for highlights,
+   modern chat bubbles, polished input + chips. Appended so it wins the
+   cascade — NO markup/IDs changed (every wkp-ai-* / wkp-msg-* hook preserved).
+   ═══════════════════════════════════════════════════════════════════════ */
+.wkp-ai-pane {
+    gap: 16px;
+    padding: 14px;
+    background: var(--bg-page, #f8fafc);
+    font-family: var(--font-sans, "Inter", system-ui, sans-serif);
+}
+.wkp-ai-left  { gap: 14px; }
+.wkp-ai-right { width: 248px; gap: 12px; padding: 2px; }
+
+/* ── Cards: insight + guide + dashboard ───────────────────────────────── */
+.wkp-ai-insight-card,
+.wkp-ai-guide-card,
+.wkp-ai-dashboard-card,
+.wkp-ai-chat-section {
+    background: var(--bg-surface, #fff);
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 14px;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, .04);
+}
+.wkp-ai-insight-card { padding: 16px 18px; }
+.wkp-ai-guide-card, .wkp-ai-dashboard-card { padding: 14px; }
+
+.wkp-ai-card-header {
+    display: flex; align-items: center; gap: 11px;
+    padding-bottom: 12px; margin-bottom: 12px;
+    border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.wkp-ai-bot-avatar {
+    width: 34px; height: 34px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px; font-size: 17px;
+    background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+    box-shadow: inset 0 0 0 1px var(--indigo-200, #c7d2fe);
+}
+.wkp-ai-card-title {
+    font-size: 14px; font-weight: 700; letter-spacing: -.01em;
+    color: var(--slate-900, #0f172a);
+}
+.wkp-ai-card-sub { font-size: 11px; color: var(--slate-500, #64748b); margin-top: 1px; }
+
+.wkp-ai-model-badge {
+    margin-left: auto; padding: 3px 10px; border-radius: 999px;
+    background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff;
+    font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    box-shadow: 0 1px 2px rgba(79, 70, 229, .35);
+}
+.wkp-ai-insight-body { font-size: 12.5px; line-height: 1.6; color: var(--slate-700, #334155); }
+.wkp-ai-data-points {
+    margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border, #e2e8f0);
+    font-size: 10.5px; color: var(--slate-500, #64748b); font-weight: 500;
+}
+
+/* ── Chat section ─────────────────────────────────────────────────────── */
+.wkp-ai-chat-section { display: flex; flex-direction: column; overflow: hidden; }
+.wkp-ai-chat-header {
+    display: flex; align-items: center; padding: 12px 16px;
+    border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.wkp-ai-chat-title { font-size: 13px; font-weight: 700; color: var(--slate-900, #0f172a); }
+.wkp-ai-clear-btn {
+    margin-left: auto; padding: 4px 10px; border-radius: 7px;
+    border: 1px solid var(--border, #e2e8f0); background: var(--bg-surface, #fff);
+    color: var(--slate-500, #64748b); font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.wkp-ai-clear-btn:hover { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+.wkp-ai-messages { padding: 14px 16px; gap: 12px; background: var(--bg-page, #f8fafc); }
+
+/* ── Chat bubbles ─────────────────────────────────────────────────────── */
+.wkp-msg-bubble {
+    max-width: 86%; padding: 10px 13px; border-radius: 14px;
+    font-size: 12.5px; line-height: 1.55;
+    box-shadow: 0 1px 1px rgba(15, 23, 42, .04);
+}
+.wkp-msg-bubble-ai {
+    background: var(--bg-surface, #fff);
+    color: var(--slate-800, #1e293b);
+    border: 1px solid var(--border, #e2e8f0);
+    border-bottom-left-radius: 5px;
+}
+.wkp-msg-bubble-user {
+    background: linear-gradient(135deg, #4f46e5, #6366f1);
+    color: #fff; border: none;
+    border-bottom-right-radius: 5px;
+    box-shadow: 0 1px 3px rgba(79, 70, 229, .3);
+}
+.wkp-msg-avatar {
+    width: 26px; height: 26px; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px; background: #eef2ff; margin-top: 0;
+    box-shadow: inset 0 0 0 1px var(--indigo-200, #c7d2fe);
+}
+.wkp-ai-tools-badge {
+    display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px;
+    background: #ecfdf5; color: #047857; font-size: 9.5px; font-weight: 700;
+    box-shadow: inset 0 0 0 1px #a7f3d0;
+}
+
+/* ── Model row + input ────────────────────────────────────────────────── */
+.wkp-ai-model-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; border-top: 1px solid var(--border, #e2e8f0);
+}
+.wkp-ai-model-label { font-size: 11px; font-weight: 600; color: var(--slate-500, #64748b); }
+.wkp-ai-model-select {
+    flex: 1; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border, #e2e8f0); background: var(--bg-surface, #fff);
+    font-size: 12px; color: var(--slate-900, #0f172a); outline: none;
+    transition: border-color .12s ease, box-shadow .12s ease;
+}
+.wkp-ai-model-select:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79, 70, 229, .18); }
+.wkp-ai-cost-hint { font-size: 10.5px; color: var(--slate-400, #94a3b8); white-space: nowrap; }
+
+.wkp-ai-input-row { padding: 12px 16px; gap: 10px; border-top: 1px solid var(--border, #e2e8f0); }
+.wkp-ai-input {
+    flex: 1; padding: 9px 12px; border-radius: 10px;
+    border: 1px solid var(--border, #e2e8f0); background: var(--bg-surface, #fff);
+    font-size: 12.5px; line-height: 1.5; color: var(--slate-900, #0f172a);
+    font-family: var(--font-sans, "Inter", system-ui, sans-serif); resize: none; outline: none;
+    transition: border-color .12s ease, box-shadow .12s ease;
+}
+.wkp-ai-input:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79, 70, 229, .18); }
+.wkp-ai-send-btn {
+    min-width: 84px; border-radius: 10px; font-weight: 700; font-size: 12.5px;
+    background: linear-gradient(135deg, #4f46e5, #6366f1); border: none; color: #fff;
+    box-shadow: 0 1px 3px rgba(79, 70, 229, .3); transition: transform .1s ease, box-shadow .12s ease;
+}
+.wkp-ai-send-btn:hover { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(79, 70, 229, .4); }
+.wkp-ai-input-hint { padding: 0 16px 12px; font-size: 10.5px; color: var(--slate-400, #94a3b8); }
+
+/* ── Quick-question chips + guide cards ───────────────────────────────── */
+.wkp-ai-quick-btn {
+    padding: 8px 11px; border-radius: 9px; font-size: 11.5px;
+    border: 1px solid var(--border, #e2e8f0); background: var(--bg-surface, #fff);
+    color: var(--slate-600, #475569); transition: all .12s ease; cursor: pointer;
+}
+.wkp-ai-quick-btn:hover {
+    background: #eef2ff; border-color: var(--indigo-200, #c7d2fe);
+    color: #4338ca; transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(79, 70, 229, .12);
+}
+.wkp-ai-guide-title { font-size: 12.5px; font-weight: 700; color: var(--slate-900, #0f172a); }
+.wkp-ai-guide-sub   { font-size: 10.5px; color: var(--slate-500, #64748b); margin-top: 1px; }
+.wkp-ai-dashboard-btn {
+    width: 100%; margin-top: 8px; border-radius: 9px; font-weight: 700; font-size: 12px;
+    background: linear-gradient(135deg, #4f46e5, #6366f1); border: none; color: #fff;
+    box-shadow: 0 1px 3px rgba(79, 70, 229, .3); transition: transform .1s ease, box-shadow .12s ease;
+}
+.wkp-ai-dashboard-btn:hover { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(79, 70, 229, .4); }
+
+/* ── Loading dots + status + warn/err ─────────────────────────────────── */
+.wkp-ai-loading-row, .wkp-ai-status {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 11.5px; color: var(--slate-500, #64748b);
+}
+.wkp-ai-warn { color: #b45309; }
+.wkp-ai-err  { color: #dc2626; }
+
+/* In-bubble AI tables (insight/dashboard HTML output) — modern + readable */
+.wkp-ai-insight-body table, .wkp-msg-bubble table, .wkp-ai-table {
+    width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 11.5px;
+}
+.wkp-ai-insight-body th, .wkp-msg-bubble th, .wkp-ai-table th {
+    background: #f1f5f9; color: var(--slate-700, #334155); font-weight: 700;
+    text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.wkp-ai-insight-body td, .wkp-msg-bubble td, .wkp-ai-table td {
+    padding: 6px 9px; border-bottom: 1px solid #f1f5f9;
+}
+
+/* Narrow screens: stack the two columns */
+@media (max-width: 920px) {
+    .wkp-ai-pane { flex-direction: column; }
+    .wkp-ai-right { width: 100%; }
+}
