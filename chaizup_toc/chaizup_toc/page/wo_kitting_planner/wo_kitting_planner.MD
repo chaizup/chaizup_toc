@@ -835,3 +835,100 @@ export. Driving spec: §5 of `docs/superpowers/specs/2026-06-05-wkp-...-design.m
   total reconciles, close works, clicking does NOT drag the row; Excel button downloads
   a 4-sheet workbook; CSV/PDF/email still work.
 ```
+
+## Filter UX + AI Advisor Refresh (2026-06-06)
+
+Five fixes landed after Phase B (commits `694effd`, `74d416c`, `2eb79cc`, `b3cf69f`,
+`276fd5d`). Two change behaviour; three are bug/UX fixes.
+
+### 1. Sort dropdown alignment (`694effd`)
+`.wkp-sortpicker-dropdown` was `right:0` so it hung off the right of the "Sort:"
+trigger. Changed to `left:0; right:auto` — it now anchors to the trigger's left edge.
+
+### 2. Mandatory Warehouse + Company scope modal (`74d416c`) — BEHAVIOUR CHANGE
+On page open, a **mandatory modal** (`#wkp-scope-overlay`) requires the user to pick
+ONE Warehouse + ONE Company (single-select, not multi) or click **Use defaults**,
+BEFORE the planner loads any data. Shown **once per session** (`sessionStorage` key
+`wkp.scope`); a hard refresh asks again. After commit the filter row shows two
+**single-select** dropdowns (the old Warehouse multiselect is gone; label "Warehouses"
+→ "Warehouse") to change scope + Load. Defaults: Warehouse = TOC Settings
+`default_so_warehouse`; Company = **new** TOC Settings field `default_wkp_company`
+(added this commit; falls back to Global Defaults company). The gate is in
+`_loadDynamicFilters`: session scope present → reflect + `this.load()`; absent →
+`_openScopeModal(m)` and DO NOT load. `_commitScope(wh, co)` is the only other load
+path. Backend scoping is UNCHANGED — a single warehouse is just a 1-item `warehouses`
+list to the existing kwarg.
+
+### 3. SO/WO/PO pickers exact-match item-short-surplus (`2eb79cc`) — BEHAVIOUR CHANGE
+The status pickers now use the **exact ISS `status|workflow_state` PAIR model** (widget
+`_mkPairMulti` ported verbatim as `_wkpPairMultiISS`, options `"status : workflow"` like
+`"Draft : WO Approved"`). Options + defaults come from ISS's `get_filter_options()`
+(single source of truth, reused via `wkp_get_filter_universe` which now also returns
+`{so,wo,po}_pairs` + `*_pairs_default`). Selected pair keys are converted to WKP's
+existing token list (`_pairsToTokens`: `"S|W"` → `S` + `"Workflow: W"`, mirrors ISS
+`_split_pairs`) at the JS boundary before EVERY status-bearing `frappe.call`, so the
+proven `_wkp_*_status_clause` SQL is reused UNCHANGED. This supersedes the Phase-A
+separable-token picker (the visible widget + data model now match ISS pixel-for-pixel);
+the resulting default WO count is the same (11 on dev).
+
+### 4. AI Advisor — always feed full data (`b3cf69f`) — THE REAL BUG FIX
+Reported as "AI not working even after setting the API key." Diagnosis: the key,
+network, SDK, and `chat_with_planner` ALL work (verified live). The real fault was
+**starved context** — `dispatch` is lazy-loaded by the JS only when the Dispatch tab is
+opened, so a user going straight to the AI tab sent `dispatch={}` and the model got no
+dispatch / SO-demand / FG-stock picture. Fix: the client now passes the current scope
+(`filters_json` = warehouses/company/SO·WO·PO status tokens) into
+`compress_context_for_ai`, which **recomputes dispatch server-side via
+`get_dispatch_bottleneck(filters)` whenever it arrives empty**. The AI now always sees
+WO (rows) + PO/MR supply (shortage_items po_qty/mr_qty/received) + SO (dispatch demand +
+customer_demand) + Stock (FG fg_stock) + Dispatch bottleneck. Verified: empty-dispatch
+input → 39 dispatch items / 5 alerts in context; real 800+ char AI briefing naming
+actual items. Cheap-path preserved (no recompute when the Dispatch tab already
+populated `_dispatchData`).
+
+### 5. AI Advisor modern UI (`276fd5d`)
+Restyled the AI tab to the item-short-surplus design language (Inter, 14px card radius,
+soft `rgba(15,23,42,.04)` shadows, slate + indigo `#4f46e5` accent, gradient send/dash
+buttons, modern chat bubbles, polished input/model-row/quick-chips, responsive stack at
+≤920px). Appended-override CSS only — NO markup/IDs changed; every `wkp-ai-*` /
+`wkp-msg-*` hook preserved (verified JS↔CSS parity; the two ID-only refs `#wkp-ai-send`
+/`#wkp-ai-clear` are element IDs, their styled classes are `-btn`).
+
+### Restricted Areas (2026-06-06 — DO NOT change without review)
+- The scope modal MUST gate the first `load()`. Never add an unconditional `this.load()`
+  on init — only the session-present branch or `_commitScope` may load.
+- Status pickers send TOKENS to the backend, not raw pair keys — keep the
+  `_pairsToTokens` conversion on every status-bearing `frappe.call`. The backend
+  `_wkp_*_status_clause` SQL stays untouched.
+- `wkp_get_filter_universe` MUST keep delegating pair options/defaults to ISS
+  `get_filter_options()` (single source) — never re-derive pairs in WKP.
+- AI context: keep `filters_json` flowing so dispatch self-heals; never let the AI run on
+  `dispatch={}` when filters are available. Do NOT send raw `rows`/`dispatch` to the LLM
+  system message (they are tool-data only — the strip rule in chat/insight stays).
+- AI UI is override-only CSS — do not rename/remove any `wkp-ai-*` / `wkp-msg-*` hook.
+- TOC Settings `default_wkp_company` (Link→Company) backs the modal's Company default.
+
+### Sync Block (cross-AI continuity, 2026-06-06)
+
+```
+[chaizup_toc · wo_kitting_planner · FilterUX+AI · 2026-06-06]
+- Sort dropdown: left:0 (was right:0, hung off trigger).
+- Scope modal #wkp-scope-overlay: mandatory ONE warehouse + ONE company (single-select)
+  or Use defaults, gates first load, once/session (sessionStorage wkp.scope). Filter row
+  now two single-selects (_wkpSingleLink key-aware: wh→_selWh=[name], company→_selCompany).
+  Defaults: TOC default_so_warehouse + NEW TOC field default_wkp_company. Backend scope
+  unchanged (1-item warehouses list). Gate in _loadDynamicFilters; _commitScope writes
+  sessionStorage + loads.
+- SO/WO/PO pickers = exact ISS status|workflow PAIR model: ported _mkPairMulti →
+  _wkpPairMultiISS, options/defaults from ISS get_filter_options() (via
+  wkp_get_filter_universe {so,wo,po}_pairs + *_pairs_default). _pairsToTokens("S|W"→S +
+  "Workflow: W") on EVERY status frappe.call; backend _wkp_*_status_clause untouched. iss-*
+  CSS ported verbatim. Default WO count still 11.
+- AI FIX (real bug): not the key — starved context. dispatch lazy-loads only on Dispatch
+  tab → AI got dispatch={}. Now client passes filters_json (warehouses/company/so/po/wo
+  tokens); compress_context_for_ai recomputes dispatch via get_dispatch_bottleneck when
+  empty. AI always gets WO+PO+SO+stock+dispatch. Verified 39 dispatch items / real briefing.
+- AI UI: ISS design language (Inter, 14px radius, soft shadows, indigo #4f46e5, modern
+  bubbles), append-override CSS, no markup change, all wkp-ai-*/wkp-msg-* hooks preserved.
+- Browser pass still pending (scope modal, ISS pickers, AI full-data answers + new look).
+```
