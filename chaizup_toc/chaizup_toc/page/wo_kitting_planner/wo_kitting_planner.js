@@ -5263,6 +5263,16 @@ class WOKittingPlanner {
         dispatch_json        : JSON.stringify(this._dispatchData || {}),
         stock_mode           : this.stockMode,
         calc_mode            : this.calcMode,
+        // 2026-06-06: pass current scope so the server can self-heal the
+        // dispatch/SO/stock data when the Dispatch tab was never opened —
+        // guarantees the AI gets WO + PO + SO + stock + dispatch every time.
+        filters_json         : JSON.stringify({
+          warehouses : this._selWh || [],
+          company    : this._selCompany || "",
+          so_statuses: this._pairsToTokens(this._selSo),
+          po_statuses: this._pairsToTokens(this._selPo),
+          wo_statuses: this._pairsToTokens(this._selWo),
+        }),
       },
       callback: r => {
         if (r.exc || !r.message) {

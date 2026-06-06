@@ -4945,9 +4945,25 @@ def _execute_ai_tool(fn_name, fn_args, context):
 # ─────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
-def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, calc_mode):
+def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, calc_mode,
+                            filters_json=None):
     """
     Convert full simulation data into a compact AI context object.
+
+    # =====================================================================
+    # CONTEXT (2026-06-06): the AI Advisor was "starving" — `dispatch` is
+    #   lazy-loaded by the JS only when the user opens the Dispatch tab, so a
+    #   user who goes straight to the AI tab sent dispatch={} and the model got
+    #   NO dispatch / SO-demand / FG-stock picture. This made the advisor look
+    #   broken even though the key + OpenAI call work fine.
+    # FIX: `filters_json` (warehouses/company/so/po/wo statuses) is now passed
+    #   from the client. When `dispatch` arrives empty we recompute it
+    #   server-side via get_dispatch_bottleneck(filters) so the AI ALWAYS has
+    #   the full set: Work Orders (rows) + Purchase/Material supply (shortage_items
+    #   po_qty/mr_qty/received) + Sales Orders + Stock + Dispatch bottleneck.
+    # RESTRICT: recompute ONLY when dispatch is empty (cheap-path preserved when
+    #   the Dispatch tab already populated it); never changes a computed number.
+    # =====================================================================
 
     Called once after each simulate() from the JS client. The client sends the
     full rows + dispatch data; the server distils it to a ~400-token summary and
@@ -4980,6 +4996,29 @@ def compress_context_for_ai(simulation_rows_json, dispatch_json, stock_mode, cal
     """
     rows     = frappe.parse_json(simulation_rows_json) if isinstance(simulation_rows_json, str) else (simulation_rows_json or [])
     dispatch = frappe.parse_json(dispatch_json) if isinstance(dispatch_json, str) else (dispatch_json or {})
+
+    # Self-heal: if the client did not load the Dispatch tab, `dispatch` is {} and
+    # the AI would miss dispatch/SO-demand/FG-stock. Recompute it from the current
+    # filters so the advisor always sees the complete picture (WO+PO+SO+stock+dispatch).
+    _filters = {}
+    if filters_json:
+        try:
+            _filters = frappe.parse_json(filters_json) if isinstance(filters_json, str) else (filters_json or {})
+        except Exception:
+            _filters = {}
+    if not dispatch and _filters:
+        try:
+            import json as _json
+            dispatch = get_dispatch_bottleneck(
+                stock_mode=stock_mode or "current_only",
+                so_statuses=_json.dumps(_filters.get("so_statuses") or []),
+                po_statuses=_json.dumps(_filters.get("po_statuses") or []),
+                warehouses=_json.dumps(_filters.get("warehouses") or []),
+                company=_filters.get("company") or "",
+            ) or {}
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "WKP AI: dispatch self-heal failed")
+            dispatch = {}
 
     total   = len(rows)
     ready   = sum(1 for r in rows if r.get("kit_status") == "ok")
