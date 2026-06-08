@@ -9,12 +9,18 @@ Each function is a top-level module function in `daily_tasks.py`.
 
 ```
 hooks.py scheduler_events:
-  "30 6 * * *"  → daily_adu_update()        06:30 AM daily
-  "0 7 * * *"   → daily_production_run()    07:00 AM daily
-  "30 7 * * *"  → daily_procurement_run()   07:30 AM daily
-  "0 8 * * *"   → daily_buffer_snapshot()   08:00 AM daily
-  "0 9 * * 0"   → weekly_dbm_check()        09:00 AM Sunday only
+  "0 0 * * *"   → daily_min_order_sync()         12:00 AM daily
+  "0 1 * * *"   → update_min_mfg_adu_levels()    01:00 AM daily  (SOLE ADU job; per warehouse)
+  "0 2 * * *"   → daily_production_plan_automation() 02:00 AM daily
+  "0 7 * * *"   → daily_production_run()          07:00 AM daily
+  "30 7 * * *"  → daily_procurement_run()         07:30 AM daily
+  "0 8 * * *"   → daily_buffer_snapshot()         08:00 AM daily
+  "0 9 * * 0"   → weekly_dbm_check()              09:00 AM Sunday only
 ```
+
+> **2026-06-02:** the item-level `daily_adu_update` job was REMOVED (the
+> standalone item-level ADU fields it wrote no longer exist). ADU is now
+> per warehouse only — see `update_min_mfg_adu_levels` below — and runs at 01:00.
 
 **Why DBM runs at 09:00 AM Sunday (not 08:00 AM):** DBM reads from today's `TOC Buffer Log` entries. The snapshot task fires at 08:00 AM. If both ran at the same time, DBM could read before the snapshot committed, silently evaluating stale data. The 1-hour gap ensures the snapshot is fully committed before DBM reads it.
 
@@ -22,79 +28,94 @@ hooks.py scheduler_events:
 
 ---
 
-## daily_adu_update() — 06:30 AM
+## update_min_mfg_adu_levels() — 01:00 AM  (SOLE ADU job since 2026-06-02)
+
+> Replaces the removed item-level `daily_adu_update`. ADU is computed PER
+> WAREHOUSE into the "Minimum Manufacture / Purchase Qty per Warehouse" table
+> (`Item.custom_minimum_manufacture` → `Item Minimum Manufacture`). The
+> standalone item-level ADU fields were deleted (patch
+> `v1_0.remove_item_level_adu_fields`).
 
 ### Purpose
-Auto-calculate Average Daily Usage (ADU) for all TOC-enabled items from actual historical transactions.
+Per (item, warehouse), refresh `adu`, `adu_lookback_days`, `max_level` and
+`last_updated_on` from actual historical transactions.
 
-### R1 Rule — Skip Manual ADU Items
-```python
-if item.custom_toc_custom_adu:
-    skipped += 1
-    continue   # User entered manual ADU — never overwrite it
-```
+### Skip rules (per warehouse row)
+- `auto_adu = 0` → row is user-managed; the engine never touches it.
+- Insufficient history (earliest outflow newer than `today − lookback`) → row is
+  left as "warming up" to avoid understating ADU (IMM-003).
 
-### ADU Calculation by Buffer Type
+### ADU Calculation — UNIVERSAL, item-group-independent (current behaviour)
 
-**FG — Delivery Note based (what was SHIPPED)**
+> **2026-06-02 — IMPORTANT:** ADU does **NOT** depend on Item Group or buffer
+> type (FG/SFG/RM/PM). Whatever the Item Group is, the calculation reads **all**
+> outward stock movements from the Stock Ledger Entry. This section previously
+> documented a per-buffer-type branch (Delivery Note for FG, Stock Entry for
+> RM/PM) — that branching **no longer exists in the code** and must not be
+> re-introduced. The single source of truth is the Stock Ledger Entry.
+
+**One query for every item — no branching:**
 ```sql
-SELECT COALESCE(SUM(dni.qty), 0) as total
-FROM `tabDelivery Note Item` dni
-JOIN `tabDelivery Note` dn ON dn.name = dni.parent
-WHERE dni.item_code = %(item)s
-  AND dn.docstatus = 1                    -- submitted only
-  AND dn.posting_date BETWEEN %(from)s AND %(to)s
+SELECT COALESCE(ABS(SUM(actual_qty)), 0) AS total_out
+FROM `tabStock Ledger Entry`
+WHERE item_code   = %(item)s
+  AND actual_qty  < 0            -- negative = stock LEFT (any outward movement)
+  AND posting_date BETWEEN %(from)s AND %(to)s
+  AND is_cancelled = 0
 ```
-`ADU = total / days`
+`ADU = total_out / days`
 
-Why Delivery Notes not Sales Orders? DNs represent actual shipments (what left the warehouse). SOs may have future delivery dates and represent demand, not consumption.
+**Why the Stock Ledger Entry, and why `actual_qty < 0`?**
+Every outward movement in ERPNext writes a Stock Ledger Entry with a negative
+`actual_qty`, regardless of the document that caused it. A single `actual_qty < 0`
+filter therefore captures, in one query and for any item type:
 
-**RM/PM — Stock Entry based (what was CONSUMED in production)**
-```sql
-SELECT COALESCE(SUM(sed.qty), 0) as total
-FROM `tabStock Entry Detail` sed
-JOIN `tabStock Entry` se ON se.name = sed.parent
-WHERE sed.item_code = %(item)s
-  AND se.docstatus = 1
-  AND se.posting_date BETWEEN %(from)s AND %(to)s
-  AND se.stock_entry_type IN (
-      'Material Issue',
-      'Manufacture',
-      'Material Transfer for Manufacture'
-  )
-  AND sed.s_warehouse IS NOT NULL        -- source warehouse present = outgoing
-```
-`ADU = total / days`
+| Outward movement | Underlying document |
+|---|---|
+| Sales shipment | Delivery Note |
+| Production consumption | Stock Entry (Manufacture / Material Transfer for Manufacture) |
+| Manual issue | Stock Entry (Material Issue) |
+| Subcontracting transfer-out | Stock Entry / Subcontracting |
+| Inventory correction down* | Stock Reconciliation |
+| Inter-warehouse transfer-out* | Stock Entry (Material Transfer) |
 
-`s_warehouse IS NOT NULL` filters outgoing entries only — target-only rows (incoming to WIP) are excluded.
+*\*Consideration (not a bug):* the directive is literally "all the outward
+database", so Stock Reconciliation down-adjustments and inter-warehouse
+Material Transfer out-legs are currently included. They are corrections /
+relocations rather than true demand. If operations later wants a pure
+demand-only ADU, exclude those two voucher types in **both** `daily_adu_update`
+and `update_min_mfg_adu_levels` — do not change one without the other.
 
-**SFG — Any outgoing Stock Entry**
-```sql
-WHERE sed.s_warehouse IS NOT NULL        -- all types where SFG was consumed
-```
-SFGs are consumed when blended into FG. Capture all such movements.
+**Live verification (development.localhost, 2026-06-02):** item `CZPFG653`
+(a Finished Goods item) — outward in the last 90 days was Delivery Note 61,200 +
+Stock Entry 7,200 + Stock Reconciliation 65,880 = 134,280. The scheduled
+function wrote `custom_toc_adu_value = 134,280 / 90 = 1,492.0`, summing all
+three voucher types — proving item-group independence.
 
-### Period Map
+### Lookback window
 
-| `custom_toc_adu_period` | Days |
-|------------------------|------|
-| "Last 30 Days" | 30 |
-| "Last 90 Days" | 90 (default) |
-| "Last 180 Days" | 180 |
-| "Last 365 Days" | 365 |
-
-`from_date = add_days(today(), -days)` to `today()`.
+The lookback is read from `TOC Settings.adu_lookback_days` (default 90), the
+single source of truth. `from_date = add_days(today(), -lookback)` to `today()`.
+(The old per-item `custom_toc_adu_period` select was removed with the item-level
+ADU fields on 2026-06-02.)
 
 ### What Gets Written
 
+Per `Item Minimum Manufacture` row (scoped by item AND warehouse), via
+`frappe.db.set_value(..., update_modified=False)`:
+
 ```python
-frappe.db.set_value("Item", item.name, {
-    "custom_toc_adu_value": adu,           # e.g., 10.45 units/day
-    "custom_toc_adu_last_updated": now_datetime(),
-}, update_modified=False)   # Don't change modified timestamp — ADU update is not a doc edit
+frappe.db.set_value("Item Minimum Manufacture", row.name, {
+    "adu": adu,                          # per-warehouse units/day
+    "adu_lookback_days": lookback,       # snapshot of the window used
+    "max_level": round(adu * lead * sf, 3),
+    "last_updated_on": now_datetime(),
+}, update_modified=False)
 ```
 
-`update_modified=False` prevents ADU updates from cluttering the Item's modified history.
+The universal outward SQL above is the same, but additionally scoped by
+`warehouse = %(wh)s` so each warehouse gets its own ADU.
+`update_modified=False` keeps the parent Item's modified history clean.
 
 ### Error Handling
 - Per-item exceptions caught → logged to Error Log → batch continues
@@ -259,3 +280,66 @@ Sunday DBM
 | DBM never adjusting | `enable_dbm=0` or insufficient log history | Enable DBM; wait for log data to accumulate |
 | Snapshot count < expected | Some items failing `calculate_all_buffers` | Check Error Log for individual item failures |
 | Duplicate MRs | `_has_open_mr` check failing | Check MR status — might be "Stopped" (query excludes it) |
+
+---
+
+## Sync Block — 2026-06-02 (ADU-UNIVERSAL)
+
+```
+[chaizup_toc · tasks/daily_tasks · ADU-UNIVERSAL · 2026-06-02]
+- Average Daily Usage (ADU) is UNIVERSAL and ITEM-GROUP-INDEPENDENT.
+  daily_adu_update() (06:30) and update_min_mfg_adu_levels() (06:35) both
+  read ALL outward stock movement from `tabStock Ledger Entry`
+  (actual_qty < 0, is_cancelled = 0), divided by the lookback days.
+- NO branching by Item Group / buffer type / FG-SFG-RM-PM anywhere. One
+  query per item (item-level) and per (item, warehouse) (min-mfg rows).
+- This supersedes the old per-buffer-type branch (Delivery Note for FG,
+  Stock Entry for RM/PM). That code path is gone; do not re-introduce it.
+- Consideration: the universal query also includes negative Stock
+  Reconciliation legs and inter-warehouse Material Transfer out-legs
+  (corrections / relocations, not true demand). Kept because the directive
+  is "all outward". To switch to demand-only ADU, exclude those two
+  voucher types in BOTH functions in lockstep.
+- Verified live (development.localhost): CZPFG653 ADU = (Delivery Note
+  61,200 + Stock Entry 7,200 + Stock Reconciliation 65,880) / 90 = 1,492.0.
+- RESTRICT: do NOT re-add Item-Group / buffer-type branching to ADU;
+  keep update_modified=False on every write; keep the warm-up history
+  gate in update_min_mfg_adu_levels (IMM-003); per-warehouse SLE scope
+  must stay scoped by warehouse on the min-mfg path.
+```
+
+---
+
+## Sync Block — 2026-06-02 (ADU-PER-WAREHOUSE — item-level fields removed)
+
+```
+[chaizup_toc · tasks/daily_tasks · ADU-PER-WAREHOUSE · 2026-06-02]
+- Standalone item-level ADU fields removed (custom_toc_custom_adu /
+  _adu_period / _adu_value / _adu_last_updated + section/column breaks).
+  ADU now lives ONLY in the per-warehouse "Minimum Manufacture / Purchase
+  Qty per Warehouse" table (Item Minimum Manufacture.adu).
+- daily_adu_update DELETED. update_min_mfg_adu_levels is the SOLE ADU job,
+  moved to 01:00 (0 1 * * *). Universal + item-group-independent.
+- Patch v1_0.remove_item_level_adu_fields drops the 6 Custom Fields + columns.
+- Consumers repointed to per-warehouse ADU: Item Projection View Days of
+  Cover; Bulk Item Settings (per-row ADU column in Buffer Rules).
+- RESTRICT: never re-add an item-level ADU field or item-level ADU cron.
+```
+
+---
+
+## Sync Block — Phase 2 (2026-06-03): every job writes an audit row (D4)
+
+```
+[chaizup_toc · tasks/daily_tasks · PHASE 2 · 2026-06-03]
+- Helper _write_job_log(triggered_by, summary) writes ONE header-only
+  TOC Production Plan Run Log row (summary in pending_so_statuses_used) for the
+  MONITORING jobs: min_order_sync_cron (00:00), adu_cron (01:00),
+  procurement_cron (07:30), snapshot_cron (08:00), dbm_cron (Sun 09:00).
+- Voucher-creating jobs log richer: the 07:00 buffer MR generator
+  (toc_engine/mr_generator.generate_material_requests) now writes a FULL run log
+  with per-item Run Items + a replenishment-mode gate (monitor-only items skipped
+  + logged). The 02:00 projection run + Calc SO + Calc Action already log.
+- RESTRICT: monitoring logs stay header-only (run-item.item_code is a mandatory
+  Link). Do not force item rows there.
+```

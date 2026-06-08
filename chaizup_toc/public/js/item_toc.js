@@ -6,8 +6,9 @@
 
 frappe.ui.form.on("Item", {
     refresh(frm) {
-        // R1: Make ADU field read-only unless Custom ADU is checked
-        _toggle_adu(frm);
+        // ADU (2026-06-02): the standalone item-level ADU fields were removed.
+        // ADU is maintained per warehouse in the "Minimum Manufacture / Purchase
+        // Qty per Warehouse" table; no item-level toggle remains.
 
         // R3: Disable "Add Row" in Min Order Qty table if item is not yet saved
         _setup_min_order_qty_grid(frm);
@@ -99,9 +100,6 @@ frappe.ui.form.on("Item", {
     // without requiring a save first.
     uoms_on_form_rendered(frm) { _setup_min_mfg_grid(frm); },
 
-    // R1: Toggle ADU field editability
-    custom_toc_custom_adu(frm) { _toggle_adu(frm); },
-
     // Mutual exclusion for Auto Purchase / Auto Manufacturing
     custom_toc_auto_purchase(frm) {
         if (frm.doc.custom_toc_auto_purchase && frm.doc.custom_toc_auto_manufacture) {
@@ -122,20 +120,6 @@ frappe.ui.form.on("Item", {
     custom_toc_constraint_speed(frm) { _calc_tcu(frm); },
 });
 
-function _toggle_adu(frm) {
-    // R1: If Custom ADU is checked, user can edit ADU Value; otherwise read-only (auto-calculated)
-    let is_custom = frm.doc.custom_toc_custom_adu;
-    frm.set_df_property("custom_toc_adu_value", "read_only", is_custom ? 0 : 1);
-    frm.set_df_property("custom_toc_adu_period", "hidden", is_custom ? 1 : 0);
-    frm.set_df_property("custom_toc_adu_last_updated", "hidden", is_custom ? 1 : 0);
-    if (is_custom) {
-        frm.set_df_property("custom_toc_adu_value", "description",
-            "MANUAL MODE: Enter your ADU value here. The daily auto-calculator will SKIP this item.");
-    } else {
-        frm.set_df_property("custom_toc_adu_value", "description",
-            "AUTO MODE: Calculated daily at 6:30 AM from actual shipment/consumption data. Read-only.");
-    }
-}
 
 function _calc_tcu(frm) {
     let p = flt(frm.doc.custom_toc_selling_price);

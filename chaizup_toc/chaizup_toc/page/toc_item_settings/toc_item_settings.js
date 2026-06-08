@@ -263,7 +263,6 @@ class TOCItemSettings {
         <td style="font-size:12px;color:var(--tis-muted)">${this._esc(item.item_group || "")}</td>
         <td><span class="tis-badge ${item.toc_enabled ? "tis-badge-active" : "tis-badge-inactive"}">${item.toc_enabled ? "&#10003; Active" : "&#8212; Inactive"}</span></td>
         <td>${this._modeBadge(item)}</td>
-        <td style="font-size:12px">${parseFloat(item.adu_value || 0).toFixed(2)}</td>
         <td style="font-size:12px">${item.buffer_rules_count > 0
           ? `<span style="color:#2563eb;font-weight:600">${item.buffer_rules_count} wh</span>`
           : `<span style="color:#fca5a5;font-size:11px">None</span>`}</td>
@@ -337,7 +336,6 @@ class TOCItemSettings {
 
   _renderTabs(data) {
     document.getElementById("tis-tab-enable").innerHTML = this._buildEnableTab(data);
-    document.getElementById("tis-tab-adu").innerHTML = this._buildAduTab(data);
     document.getElementById("tis-tab-tcu").innerHTML = this._buildTcuTab(data);
     document.getElementById("tis-tab-bom").innerHTML = this._buildBomTab(data);
     document.getElementById("tis-tab-rules").innerHTML = this._buildRulesTab(data);
@@ -392,42 +390,8 @@ class TOCItemSettings {
       </div>`;
   }
 
-  _buildAduTab(d) {
-    const uom = this._esc(d.stock_uom || "units");
-    return `
-      <div style="border-bottom:1px solid var(--tis-border); padding-bottom:16px; margin-bottom:24px">
-        <h6 style="margin:0">ADU — Average Daily Usage</h6>
-        <p class="text-muted" style="font-size:12px; margin:4px 0 0">How much of this item is consumed or sold per day · Formula F1: <strong>Target Buffer = ADU × RLT × VF</strong></p>
-      </div>
-      <div class="tis-field-row">
-        <div class="tis-field tis-full">
-          <div class="tis-check-row">
-            <input type="checkbox" id="f-custom-adu" class="tis-check" ${d.custom_adu ? "checked" : ""} onchange="tisApp.onCustomAduChange(this.checked)">
-            <label for="f-custom-adu" style="cursor:pointer; font-weight:500">Set ADU Manually (override auto-calculation)</label>
-            <button class="btn btn-link btn-xs" onclick="tisApp.showHelp('custom_adu')">ⓘ</button>
-          </div>
-          <p class="text-muted" style="font-size:11px; margin: 4px 0 0 28px">Uncheck to let the system calculate ADU automatically each night from historical consumption data.</p>
-        </div>
-        <div class="tis-field">
-          <label class="tis-field-label">
-            Lookback Period for Auto-Calculation
-            <button class="btn btn-link btn-xs" style="padding:0; margin-left:2px" onclick="tisApp.showHelp('adu_period')">ⓘ</button>
-          </label>
-          <select id="f-adu-period" class="tis-select" ${d.custom_adu ? "disabled" : ""} title="How far back to look when calculating average daily usage automatically">
-            ${["Last 30 Days", "Last 90 Days", "Last 180 Days", "Last 365 Days"].map(v => `<option ${d.adu_period === v ? "selected" : ""}>${v}</option>`).join("")}
-          </select>
-          <p class="text-muted" style="font-size:11px; margin-top:4px">Only active when manual override is OFF</p>
-        </div>
-        <div class="tis-field">
-          <label class="tis-field-label">
-            ADU — Average Daily Usage (${uom}/day)
-            <button class="btn btn-link btn-xs" style="padding:0; margin-left:2px" onclick="tisApp.showHelp('adu_value')">ⓘ</button>
-          </label>
-          <input id="f-adu-value" type="number" class="tis-input" value="${d.adu_value || 0}" ${!d.custom_adu ? "readonly" : ""} oninput="tisApp.recalcAllRules()" title="Average units consumed per day — foundation for all buffer calculations">
-          <p class="text-muted" style="font-size:11px; margin-top:4px">Units used/sold per day — basis for buffer sizing</p>
-        </div>
-      </div>`;
-  }
+  // ADU tab removed 2026-06-02 — ADU is per warehouse, edited inline in the
+  // Buffer Rules tab (each rule's own ADU column). No item-level ADU field.
 
   _buildTcuTab(d) {
     const tcu = d.tcu || 0;
@@ -509,6 +473,10 @@ class TOCItemSettings {
           <thead>
             <tr>
               <th style="min-width:160px">Warehouse</th>
+              <th style="min-width:80px">
+                ADU
+                <div style="font-weight:400; font-size:10px; color:var(--tis-muted)">per warehouse</div>
+              </th>
               <th style="min-width:90px">
                 RLT (days)
                 <button class="btn btn-link btn-xs" style="padding:0; font-size:10px; vertical-align:middle" onclick="tisApp.showHelp('rlt')">ⓘ</button>
@@ -541,8 +509,7 @@ class TOCItemSettings {
   }
 
   _buildRuleRow(r, i) {
-    const adu_el = document.getElementById("f-adu-value");
-    const adu = adu_el ? (parseFloat(adu_el.value) || 0) : (this.currentData ? this.currentData.adu_value : 0);
+    const adu = parseFloat(r.adu) || 0;   // per-warehouse ADU (TOC Item Buffer.adu)
     const target = Math.round(adu * (r.rlt || 7) * (r.variability_factor || 1.5));
     const currentWh = r.warehouse || "";
     const whInList = (this.warehouses || []).some(w => w.name === currentWh);
@@ -556,6 +523,7 @@ class TOCItemSettings {
     ).join("");
     return `<tr data-idx="${i}">
       <td><select class="tis-rule-input" name="wh" title="Storage location for this buffer rule">${whOptions}</select></td>
+      <td><input class="tis-rule-input" type="number" name="adu" value="${adu}" title="Average Daily Usage for THIS warehouse (units/day). Auto-refreshed nightly by the 01:00 AM per-warehouse ADU cron; you may override." oninput="tisApp.recalcRuleRow(this)"></td>
       <td><input class="tis-rule-input" type="number" name="rlt" value="${r.rlt || 7}" title="Days to replenish: order placed → stock available" oninput="tisApp.recalcRuleRow(this)"></td>
       <td><input class="tis-rule-input" type="number" name="vf" value="${r.variability_factor || 1.5}" title="Variability multiplier: 1.0 = no extra buffer, 1.5 = standard, 2.0 = high variability" oninput="tisApp.recalcRuleRow(this)"></td>
       <td><input class="tis-rule-input" readonly name="target" style="background:var(--tis-bg); font-weight:600; color:var(--tis-primary)" value="${target}" title="Target Buffer = ADU × RLT × VF (auto-calculated)"></td>
@@ -574,8 +542,7 @@ class TOCItemSettings {
 
   recalcRuleRow(el) {
     const tr = el.closest("tr");
-    const adu_el = document.getElementById("f-adu-value");
-    const adu = adu_el ? (parseFloat(adu_el.value) || 0) : (this.currentData ? this.currentData.adu_value : 0);
+    const adu = parseFloat(tr.querySelector('[name="adu"]').value) || 0;  // per-warehouse ADU
     const rlt = parseFloat(tr.querySelector('[name="rlt"]').value) || 0;
     const vf = parseFloat(tr.querySelector('[name="vf"]').value) || 0;
     tr.querySelector('[name="target"]').value = Math.round(adu * rlt * vf);
@@ -653,31 +620,29 @@ class TOCItemSettings {
     document.getElementById("f-auto-manufacture").checked = val;
     if (val) document.getElementById("f-auto-purchase").checked = false; 
   }
-  onCustomAduChange(val) { document.getElementById("f-adu-period").disabled = val; document.getElementById("f-adu-value").readOnly = !val; }
+  // onCustomAduChange removed 2026-06-02 (item-level ADU fields removed).
 
   saveModal() {
     if (!this.canWrite) { frappe.msgprint("You do not have permission to save settings."); return; }
     const btn = document.getElementById("tis-save-btn");
     btn.disabled = true;
-    const adu_val = parseFloat(document.getElementById("f-adu-value").value) || 0;
+    // ADU (2026-06-02): item-level ADU removed. Each warehouse buffer rule
+    // carries its own per-warehouse ADU (TOC Item Buffer.adu).
     const data = {
       toc_enabled: document.getElementById("f-toc-enabled").checked ? 1 : 0,
       auto_purchase: document.getElementById("f-auto-purchase").checked ? 1 : 0,
       auto_manufacture: document.getElementById("f-auto-manufacture").checked ? 1 : 0,
-      custom_adu: document.getElementById("f-custom-adu").checked ? 1 : 0,
-      adu_period: document.getElementById("f-adu-period").value,
-      adu_value: adu_val,
       selling_price: parseFloat(document.getElementById("f-selling-price").value) || 0,
       tvc: parseFloat(document.getElementById("f-tvc").value) || 0,
       constraint_speed: parseFloat(document.getElementById("f-constraint-speed").value) || 0,
       check_bom_availability: document.getElementById("f-check-bom").checked ? 1 : 0,
       buffer_rules: Array.from(document.querySelectorAll("#tis-rules-body tr")).map(row => ({
         warehouse: row.querySelector("[name=wh]").value,
+        adu: parseFloat(row.querySelector("[name=adu]").value) || 0,
         rlt: parseFloat(row.querySelector("[name=rlt]").value),
         variability_factor: parseFloat(row.querySelector("[name=vf]").value),
         daf: parseFloat(row.querySelector("[name=daf]").value),
         enabled: row.querySelector("[name=enabled]").checked ? 1 : 0,
-        adu: adu_val
       })).filter(r => r.warehouse)
     };
     frappe.call({
@@ -756,15 +721,8 @@ class TOCItemSettings {
       const rad = document.querySelector("input[name=bulk-mode]:checked");
       data.replenishment_mode = rad ? rad.value : "Monitor";
     }
-    if (document.querySelector("#tis-bfr-adu-period .tis-bulk-apply-chk").checked) {
-      fields.push("adu_period");
-      data.adu_period = document.getElementById("tis-bulk-adu-period").value;
-    }
-    if (document.querySelector("#tis-bfr-custom-adu .tis-bulk-apply-chk").checked) {
-      fields.push("custom_adu");
-      const val = document.getElementById("tis-bulk-custom-adu").value;
-      data.custom_adu = (val === "" || val === null) ? null : parseFloat(val);
-    }
+    // ADU bulk options removed 2026-06-02 — ADU is per warehouse (see the
+    // minmfg_* per-warehouse bulk fields below).
     if (document.querySelector("#tis-bfr-bom-check .tis-bulk-apply-chk").checked) {
       fields.push("check_bom_availability");
       const rad = document.querySelector("input[name=bulk-bom-check]:checked");

@@ -1172,3 +1172,39 @@ SELECT COUNT(*) FROM `tabWork Order`
 ```
 
 Returns 0. Same for Production Plan Item. Patch is idempotent — re-running is a no-op.
+
+---
+
+## Sync Block — Phase 2 (2026-06-03): replenishment-mode gate + purchase branch + app-wide logging
+
+```
+[chaizup_toc · production_plan_engine · PHASE 2 · 2026-06-03]
+- GATE before any voucher (Calc A/B, Calc SO, Calc Action, and the Buffer MR
+  generator in toc_engine/mr_generator.py): _resolve_replenishment_mode(item)
+  reads Item.custom_toc_auto_manufacture / custom_toc_auto_purchase.
+    * Manufacture -> Production Plan + Work Orders
+    * Purchase    -> Material Request
+    * neither     -> SKIP + log "Skipped - No Replenishment Mode"
+  Voucher TYPE is the Item-master flag, NOT per-row action_type.
+- Per-warehouse Min Qty gate: Item Minimum Manufacture.min_manufacturing_qty == 0
+  for the (item, warehouse) -> SKIP + log "Skipped - Min Qty Not Set".
+- Calc A/B PURCHASE branch (_process_item_v2_purchase): supply = stock + open PO;
+  shortage = max(CalcA, CalcB); pooled into ONE consolidated Purchase MR per run
+  (_create_consolidated_purchase_mr, D2); MR name back-filled to run-item
+  .material_request. Dedup via _calc_ab_purchase_mr_exists ([Calc A/B][Purchase]).
+- Calc SO + Calc Action supply now include open_po (parity with Calc A/B purchase).
+- Run-item logging: NEW Link field `material_request` (MR refs MUST go here, not in
+  the `production_plan` Link -> else LinkValidationError). New statuses + calc_used
+  + triggered_by options (see doctype/doctype.md).
+
+RESTRICT (do not break):
+- Never create PP/WO for a Purchase item, nor MR for a Manufacture item.
+- Keep `material_request` and `production_plan` as separate Link fields on the run item.
+- _discover_pending_so_pairs: GROUP BY the alias `warehouse`, params positional
+  (SELECT wh param first). Do NOT inline wh_expr twice with one param (the old
+  "not enough arguments for format string" bug when default_so_warehouse is set).
+- add_days MUST stay in the module-level frappe.utils import (purchase MR paths).
+- confirmed_states reads settings.projection_pending_so_statuses (the merged field);
+  projection_confirmed_so_workflow_states was dropped in v0.0.28.
+- After editing run-log/run-item Select options or fields: reload-doctype / migrate.
+```

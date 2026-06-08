@@ -100,6 +100,21 @@ For each Item Minimum Manufacture row:
 
 Per `Sales Projected Items` row, scoped to `(item, source_warehouse)`. Calc A runs first → commit → Calc B re-reads ITMWO / ITMWSTK fresh.
 
+> **PHASE 2 gate (2026-06-03) — applies to Calc A/B, Calc SO and Calc Action.**
+> Before creating ANY voucher the engine checks the Item-master replenishment
+> mode and the per-warehouse Minimum Qty:
+> 1. **Replenishment mode** from `Item.custom_toc_auto_manufacture` /
+>    `custom_toc_auto_purchase`. Neither set → skip + log
+>    *"Skipped - No Replenishment Mode"* (monitor-only item, no voucher).
+>    The flag decides the voucher TYPE (not the per-row `action_type`).
+> 2. **Per-warehouse Min Qty** from `Item Minimum Manufacture.min_manufacturing_qty`
+>    for that `(item, warehouse)`. 0/unset → skip + log *"Skipped - Min Qty Not Set"*.
+>
+> **Manufacture mode** → Production Plan + Work Orders (per item).
+> **Purchase mode** → the purchased item's shortage is added to ONE consolidated
+> Material Request raised per run (all purchase-mode items pooled). Purchase-mode
+> supply = `stock + open PO`; shortage = `max(Calc A, Calc B)`; qty = `max(shortage, MOQ)`.
+
 ### Variable definitions (stock UOM)
 
 | Symbol | Meaning | Source |
@@ -174,13 +189,19 @@ HAVING pending_qty > 0
 For each pair (item × warehouse):
   stock     = Bin.actual_qty at warehouse
   open_wo   = pending_wo_qty (per TOC Settings)
-  shortage  = pending_qty − stock − open_wo
-  row_idx   = _build_min_mfg_index(item)[warehouse]   # may be None
-  action    = row_idx.action_type if row_idx else "Manufacture"
-  minmfg    = row_idx.min_qty_stock_uom if row_idx else 0
+  open_po   = open_po_qty   (per TOC Settings)            # added 2026-06-03
+  shortage  = pending_qty − stock − open_wo − open_po     # supply now incl PO
+  minmfg    = _build_min_mfg_index(item)[warehouse].min_qty_stock_uom or 0
 
   if shortage ≤ 0:
       log Skipped - No Shortage; continue
+
+  # PHASE 2 gate (2026-06-03) — voucher type from Item master, not action_type:
+  action = Manufacture if Item.custom_toc_auto_manufacture
+           else Purchase if Item.custom_toc_auto_purchase
+           else None
+  if action is None:  log Skipped - No Replenishment Mode; continue
+  if minmfg ≤ 0:      log Skipped - Min Qty Not Set;       continue
 
   qty = max(shortage, minmfg)
 
@@ -236,7 +257,7 @@ threshold    = row.max_level_threshold_pct
 ### E.2 Mode 1 — Shortage (only when `auto_on_shortage=1`)
 
 ```
-supply   = stock + open_wo
+supply   = stock + open_wo + open_po          # open_po added 2026-06-02
 demand   = pending_so + wo_required
 shortage = demand − supply
 if shortage > 0:

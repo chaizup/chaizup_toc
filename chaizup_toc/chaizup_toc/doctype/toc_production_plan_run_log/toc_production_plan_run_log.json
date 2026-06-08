@@ -45,7 +45,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Triggered By",
-   "options": "\nmanual\nmanual_button\nsystem\ncron\nso_shortage_manual\nso_shortage_cron\nshortage_action_manual\nshortage_action_cron",
+   "options": "\nmanual\nmanual_button\nsystem\ncron\nso_shortage_manual\nso_shortage_cron\nshortage_action_manual\nshortage_action_cron\nbuffer_mr_cron\nbuffer_mr_manual\ncomponent_mr\nadu_cron\nsnapshot_cron\nprocurement_cron\ndbm_cron\nmin_order_sync_cron",
    "description": "manual_button = TOC Settings 'Run Now' (Projection). cron = 02:00 AM daily Projection scheduler. so_shortage_manual = TOC Settings 'Run Sales Order Shortage Now' button. so_shortage_cron = scheduled SO-shortage runner. shortage_action_manual = TOC Settings 'Run Shortage Action Now' button. shortage_action_cron = scheduled Shortage Action runner (opt-in via hooks.py)."
   },
   {

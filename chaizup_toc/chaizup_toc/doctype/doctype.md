@@ -233,3 +233,28 @@ Each DocType has its own in-depth documentation:
 - `toc_settings/toc_settings.md` — all fields, DBM params, warehouse rules, access patterns
 - `toc_warehouse_rule/toc_warehouse_rule.md` — Inventory/WIP/Excluded classification, F2 impact
 - `toc_item_group_rule/toc_item_group_rule.md` — resolution algorithm, priority, hierarchy walk
+
+---
+
+## TOC Production Plan Run Log / Run Item — Phase 2 additions (2026-06-03)
+
+The run log is now the single audit trail for EVERY TOC automation (D4).
+
+**Run Item (`toc_production_plan_run_item`) new/changed:**
+- New Link field `material_request` (-> Material Request). MR references are
+  stored here; the existing `production_plan` Link (-> Production Plan) is for PPs
+  only. Putting an MR name in `production_plan` raises LinkValidationError.
+- `status` Select += `Skipped - No Replenishment Mode`, `Skipped - Min Qty Not Set`,
+  `Created (MR Consolidated)`.
+- `calc_used` Select += `Calc A — Purchase`, `Calc B — Purchase`, `Buffer MR`,
+  `Component MR`.
+
+**Run Log (`toc_production_plan_run_log`) new triggered_by options:**
+`buffer_mr_cron`, `buffer_mr_manual`, `component_mr`, `adu_cron`, `snapshot_cron`,
+`procurement_cron`, `dbm_cron`, `min_order_sync_cron`.
+
+**Who writes a row now:** the 02:00 projection run (Calc A/B, with per-item rows),
+Calc SO, Calc Action, the 07:00 Buffer MR generator (full per-item rows), and the
+monitoring jobs (ADU 01:00, procurement 07:30, snapshot 08:00, DBM Sun 09:00,
+min-order 00:00) which write ONE header-only row via
+`tasks.daily_tasks._write_job_log` (summary in `pending_so_statuses_used`).

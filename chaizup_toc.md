@@ -271,6 +271,8 @@ Recent cross-feature change sets that touch ≥3 layers. Each row points at the 
 
 | Tag | Date | Headline | Deep doc |
 |---|---|---|---|
+| ADU-PW | 2026-06-02 | Item-level ADU fields removed; ADU per-warehouse only (Item Minimum Manufacture), single 01:00 cron | `tasks/tasks.md` |
+| PHASE2 | 2026-06-03 | Replenishment-mode + Min-Qty gate on every voucher engine; Calc A/B purchase → consolidated MR; Shortage Action/Calc SO supply += open PO; every job writes a run log | `production_plan_engine.md` + `tasks/tasks.md` + `doctype/doctype.md` |
 | TS-001 | 2026-05-14 | TOC Settings as single source of truth; WKP+POR status pickers removed → read-only banners | this file + `production_plan_engine.md` |
 | BTP-001 | 2026-05-14 | FG/SFG/RM/PM "buffer_type" fully retired; configurable WO/PO pending statuses added | `production_plan_engine.md` |
 | SPA-001 | 2026-05-14 | Action-aware Shortage Cover + new Shortage Action engine (Calc Action) | `production_plan_engine.md` |

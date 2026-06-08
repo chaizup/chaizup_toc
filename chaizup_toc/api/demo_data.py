@@ -300,9 +300,8 @@ def _create_item(config, company, warehouse, manifest):
         "custom_toc_enabled": 1,
         "custom_toc_auto_purchase": config.get("auto_pur", 0),
         "custom_toc_auto_manufacture": config.get("auto_mfg", 0),
-        "custom_toc_adu_value": config.get("adu", 0),
-        "custom_toc_adu_period": "Last 90 Days",
-        "custom_toc_custom_adu": 1,  # Manual ADU for demo
+        # ADU (2026-06-02): item-level ADU fields removed; ADU is per warehouse
+        # in the Minimum Manufacture / Purchase Qty per Warehouse table.
         "custom_toc_selling_price": config.get("price", 0),
         "custom_toc_tvc": config.get("tvc", 0),
         "custom_toc_constraint_speed": config.get("speed", 0),

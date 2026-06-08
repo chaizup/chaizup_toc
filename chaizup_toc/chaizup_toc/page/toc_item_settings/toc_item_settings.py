@@ -87,9 +87,6 @@ def get_items_for_bulk_settings(
             COALESCE(i.custom_toc_enabled, 0) AS toc_enabled,
             COALESCE(i.custom_toc_auto_purchase, 0) AS auto_purchase,
             COALESCE(i.custom_toc_auto_manufacture, 0) AS auto_manufacture,
-            COALESCE(i.custom_toc_custom_adu, 0) AS custom_adu,
-            COALESCE(i.custom_toc_adu_value, 0) AS adu_value,
-            COALESCE(i.custom_toc_adu_period, '') AS adu_period,
             (
                 SELECT COUNT(*)
                 FROM `tabTOC Item Buffer` tib
@@ -141,10 +138,7 @@ def get_item_toc_details(item_code):
         "toc_enabled": cint(item.custom_toc_enabled),
         "auto_purchase": cint(item.custom_toc_auto_purchase),
         "auto_manufacture": cint(item.custom_toc_auto_manufacture),
-        "custom_adu": cint(item.custom_toc_custom_adu),
-        "adu_period": item.custom_toc_adu_period or "Last 90 Days",
-        "adu_value": flt(item.custom_toc_adu_value),
-        "adu_last_updated": str(item.custom_toc_adu_last_updated or ""),
+        # ADU (2026-06-02): per-warehouse only — see custom_minimum_manufacture rows.
         "selling_price": flt(item.custom_toc_selling_price),
         "tvc": flt(item.custom_toc_tvc),
         "constraint_speed": flt(item.custom_toc_constraint_speed),
@@ -172,12 +166,8 @@ def save_item_toc_settings(item_code, toc_data):
     item.custom_toc_enabled = cint(toc_data.get("toc_enabled", 0))
     item.custom_toc_auto_purchase = cint(toc_data.get("auto_purchase", 0))
     item.custom_toc_auto_manufacture = cint(toc_data.get("auto_manufacture", 0))
-    item.custom_toc_custom_adu = cint(toc_data.get("custom_adu", 0))
-    item.custom_toc_adu_period = toc_data.get("adu_period") or "Last 90 Days"
-
-    if cint(toc_data.get("custom_adu")):
-        item.custom_toc_adu_value = flt(toc_data.get("adu_value", 0))
-
+    # ADU (2026-06-02): removed item-level ADU fields; ADU is per warehouse
+    # in the Minimum Manufacture / Purchase Qty per Warehouse table.
     item.custom_toc_selling_price = flt(toc_data.get("selling_price", 0))
     item.custom_toc_tvc = flt(toc_data.get("tvc", 0))
     item.custom_toc_constraint_speed = flt(toc_data.get("constraint_speed", 0))
@@ -537,10 +527,22 @@ def bulk_auto_configure_toc(item_codes):
                         warehouses = [fallback]
 
                 default_rlt = 14 if mode == "Purchase" else 7
-                adu = flt(item.custom_toc_adu_value) or 0
+                # ADU (2026-06-02): seed each warehouse rule from the per-warehouse
+                # Minimum Manufacture / Purchase Qty per Warehouse table (the single
+                # ADU source); fall back to 0 when no row exists for that warehouse.
+                minmfg_adu = {
+                    r.warehouse: flt(r.adu)
+                    for r in frappe.db.sql(
+                        """SELECT warehouse, IFNULL(adu, 0) AS adu
+                           FROM `tabItem Minimum Manufacture`
+                           WHERE parent = %s AND warehouse IS NOT NULL AND warehouse != ''""",
+                        item_code, as_dict=True,
+                    )
+                }
 
                 for wh in warehouses:
                     vf = 1.5
+                    adu = flt(minmfg_adu.get(wh)) or 0
                     target = round(adu * default_rlt * vf)
                     item.append("custom_toc_buffer_rules", {
                         "warehouse": wh,
@@ -609,7 +611,6 @@ def bulk_save_toc_settings(item_codes, toc_data, fields_to_apply):
 
     field_map = {
         "toc_enabled":           "custom_toc_enabled",
-        "adu_period":            "custom_toc_adu_period",
         "check_bom_availability": "custom_toc_check_bom_availability",
     }
 
@@ -630,19 +631,9 @@ def bulk_save_toc_settings(item_codes, toc_data, fields_to_apply):
                 frappe.db.set_value("Item", item_code, "custom_toc_auto_manufacture",
                                     1 if mode == "Manufacture" else 0)
 
-            elif field == "adu_period":
-                period = toc_data.get("adu_period") or "Last 90 Days"
-                frappe.db.set_value("Item", item_code, "custom_toc_adu_period", period)
-
-            elif field == "custom_adu":
-                adu_val = toc_data.get("custom_adu")
-                if adu_val is None:
-                    frappe.db.set_value("Item", item_code, "custom_toc_custom_adu", 0)
-                    frappe.db.set_value("Item", item_code, "custom_toc_adu_value", 0)
-                else:
-                    frappe.db.set_value("Item", item_code, "custom_toc_custom_adu", 1)
-                    frappe.db.set_value("Item", item_code, "custom_toc_adu_value",
-                                        flt(adu_val))
+            # ADU (2026-06-02): item-level adu_period / custom_adu bulk options
+            # removed — ADU is per warehouse in the Minimum Manufacture table
+            # (see the minmfg_* bulk fields below).
 
             elif field == "check_bom_availability":
                 frappe.db.set_value("Item", item_code, "custom_toc_check_bom_availability",

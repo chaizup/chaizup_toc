@@ -43,7 +43,8 @@
 #     causes "ghost filters" between page actions.
 #   - Higher UOM picker is per-ITEM not per-(item, warehouse) — same Yarn
 #     item across two warehouses uses the same Carton CF; that's correct.
-#   - Days of Cover uses Item.custom_toc_adu_value. If ADU is 0 or None,
+#   - Days of Cover uses per-(item, warehouse) ADU from the Minimum Manufacture
+#     / Purchase Qty per Warehouse table (Item Minimum Manufacture). If 0/None,
 #     return None (not 0!) so the page renders "—" instead of "0.0".
 #
 # RESTRICT:
@@ -206,8 +207,7 @@ def _get_item_names(item_codes: list[str]) -> dict[str, dict]:
     if not item_codes:
         return {}
     rows = frappe.db.sql(
-        """SELECT name AS item_code, item_name, item_group,
-                  IFNULL(custom_toc_adu_value, 0) AS adu
+        """SELECT name AS item_code, item_name, item_group
            FROM `tabItem` WHERE name IN %(codes)s""",
         {"codes": tuple(item_codes)}, as_dict=True,
     )
@@ -215,10 +215,27 @@ def _get_item_names(item_codes: list[str]) -> dict[str, dict]:
         r.item_code: {
             "item_name":  r.item_name or r.item_code,
             "item_group": r.item_group or "",
-            "adu":        flt(r.adu),
         }
         for r in rows
     }
+
+
+def _get_minmfg_adu_by_iw(item_codes: list[str]) -> dict[tuple[str, str], float]:
+    """Per-(item, warehouse) Average Daily Usage (ADU), read from the
+    "Minimum Manufacture / Purchase Qty per Warehouse" child table
+    (`Item Minimum Manufacture`). This is the single source of ADU since the
+    standalone item-level ADU fields were removed (2026-06-02). Days of Cover
+    on this page is per (item, warehouse), so it uses this per-warehouse ADU."""
+    if not item_codes:
+        return {}
+    rows = frappe.db.sql(
+        """SELECT parent AS item_code, warehouse, IFNULL(adu, 0) AS adu
+           FROM `tabItem Minimum Manufacture`
+           WHERE parent IN %(codes)s
+             AND warehouse IS NOT NULL AND warehouse != ''""",
+        {"codes": tuple(item_codes)}, as_dict=True,
+    )
+    return {(r.item_code, r.warehouse): flt(r.adu) for r in rows}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -365,6 +382,7 @@ def _columns():
 def _build_row(
     ic: str, wh: str, info: dict, uom_meta: dict,
     stock_map, wo_prod_map, po_map, wo_cons_map, so_disp_map,
+    adu_map=None,
 ):
     """
     Single (item, warehouse) row. Each numeric output cell ships with a
@@ -389,7 +407,9 @@ def _build_row(
     short_proj_s      = max(0.0, demand - (stock_q + will_receive))
     net_available_s   = stock_q + will_receive - demand
 
-    adu      = flt(info.get("adu"))
+    # ADU is per (item, warehouse) from the Minimum Manufacture / Purchase Qty
+    # per Warehouse table (2026-06-02 — item-level ADU field removed).
+    adu      = flt((adu_map or {}).get(key))
     doc_days = (stock_q / adu) if adu > 0 else None
 
     # Tooltips: keyed by fieldname → list of human lines (rendered with
@@ -453,10 +473,13 @@ def _build_row(
                 f"= current_stock ÷ ADU",
                 f"= {stock_q:.3f} ÷ {adu:.3f}",
                 f"= {doc_days:.2f} days",
-                "ADU = Item.custom_toc_adu_value (daily ADU cron, 06:30 AM).",
+                "ADU = Item Minimum Manufacture.adu for this warehouse "
+                "(per-warehouse ADU cron, 01:00 AM).",
             ] if doc_days is not None else [
-                "Days of Cover unavailable — Item.custom_toc_adu_value is 0 or null.",
-                "Run TOC daily ADU update or set ADU manually on the Item.",
+                "Days of Cover unavailable — no per-warehouse ADU for this "
+                "(item, warehouse) in the Minimum Manufacture table.",
+                "Add a warehouse row in Minimum Manufacture / Purchase Qty per "
+                "Warehouse, or wait for the 01:00 AM ADU cron.",
             ]
         ),
     }
@@ -603,6 +626,7 @@ def execute(filters=None):
 
     info_map = _get_item_names(items)
     uom_map  = _pick_higher_uoms(items)
+    adu_map  = _get_minmfg_adu_by_iw(items)   # per (item, warehouse) ADU
 
     wo_plain, wo_wf, po_plain, po_wf, so_plain, so_wf = _toc_pending_lists()
 
@@ -626,11 +650,12 @@ def execute(filters=None):
 
     leaf_rows: list[dict] = []
     for ic, wh in sorted(pairs):
-        info     = info_map.get(ic) or {"item_name": ic, "item_group": "", "adu": 0.0}
+        info     = info_map.get(ic) or {"item_name": ic, "item_group": ""}
         uom_meta = uom_map.get(ic) or {}
         leaf_rows.append(_build_row(
             ic, wh, info, uom_meta,
             stock_map, wo_prod_map, po_map, wo_cons_map, so_disp_map,
+            adu_map,
         ))
 
     # Apply "only shortage" filter — done AFTER row build so the totals

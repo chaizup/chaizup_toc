@@ -54,7 +54,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Calc",
-   "options": "\nCalc A — Forecast\nCalc B — SO-driven\nCalc SO\nCalc Action",
+   "options": "\nCalc A — Forecast\nCalc B — SO-driven\nCalc SO\nCalc Action\nCalc A — Purchase\nCalc B — Purchase\nBuffer MR\nComponent MR",
    "description": "Which calculation produced this row. Calc A runs from the Sales Projection forecast; Calc B re-checks against pending Sales Orders after Calc A commits. Calc SO is the standalone Sales Order Shortage automation (Shortage Cover — scans all pending SOs across items × warehouses, action-type aware). Calc Action is the Shortage Action automation (auto-trigger per Item Minimum Manufacture row when Auto on Shortage or Auto on Max Level fires).",
    "columns": 2
   },
@@ -63,7 +63,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "\nCreated\nCreated (PP)\nCreated (MR)\nSkipped - No Shortage\nSkipped - No BOM\nSkipped - No Demand\nSkipped - PP Exists\nSkipped - MR Exists\nSkipped - No Warehouse\nError\nError - See Log",
+   "options": "\nCreated\nCreated (PP)\nCreated (MR)\nSkipped - No Shortage\nSkipped - No BOM\nSkipped - No Demand\nSkipped - PP Exists\nSkipped - MR Exists\nSkipped - No Warehouse\nError\nError - See Log\nSkipped - No Replenishment Mode\nSkipped - Min Qty Not Set\nCreated (MR Consolidated)",
    "columns": 2
   },
   {
@@ -136,6 +136,14 @@
    "label": "Production Plan",
    "options": "Production Plan",
    "columns": 6
+  },
+  {
+   "fieldname": "material_request",
+   "fieldtype": "Link",
+   "label": "Material Request",
+   "options": "Material Request",
+   "in_list_view": 0,
+   "read_only": 1
   },
   {
    "fieldname": "work_orders",

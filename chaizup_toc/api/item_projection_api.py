@@ -371,25 +371,30 @@ def _shape_breakdown(column, item_code, warehouse, ladder_cf):
         }
 
     if column == "days_of_cover":
-        adu_val = frappe.db.get_value(
-            "Item", item_code,
-            ["item_name", "custom_toc_adu_value",
-             "custom_toc_adu_period_days"],
+        # ADU is per (item, warehouse) from the Minimum Manufacture / Purchase
+        # Qty per Warehouse table (2026-06-02 — item-level ADU field removed).
+        item_name = frappe.db.get_value("Item", item_code, "item_name") or ""
+        adu_row = frappe.db.get_value(
+            "Item Minimum Manufacture",
+            {"parent": item_code, "warehouse": warehouse},
+            ["adu", "adu_lookback_days"],
             as_dict=True) or {}
         stock = sum(flt(r.get("actual_qty") or 0) for r in _bd_stock(item_code, warehouse))
-        adu   = flt(adu_val.get("custom_toc_adu_value") or 0)
+        adu   = flt(adu_row.get("adu") or 0)
         doc   = (stock / adu) if adu > 0 else None
         return {
             "title": f"Days of Cover — {item_code}",
             "scalar": True,
             "lines": [
-                f"Item: {item_code}  ({adu_val.get('item_name') or ''})",
+                f"Item: {item_code}  ({item_name})",
+                f"Warehouse: {warehouse or '—'}",
                 f"Current Stock: {stock:.3f}",
-                f"ADU (Item.custom_toc_adu_value): {adu:.3f}",
-                f"ADU Period: {adu_val.get('custom_toc_adu_period_days') or '—'} days",
+                f"ADU (Item Minimum Manufacture.adu, this warehouse): {adu:.3f}",
+                f"ADU Lookback: {adu_row.get('adu_lookback_days') or '—'} days",
                 (f"Days of Cover = Stock ÷ ADU = {doc:.2f} days"
                  if doc is not None else
-                 "Days of Cover unavailable — ADU is 0 or unset."),
+                 "Days of Cover unavailable — no per-warehouse ADU for this "
+                 "(item, warehouse) in the Minimum Manufacture table."),
             ],
         }
 

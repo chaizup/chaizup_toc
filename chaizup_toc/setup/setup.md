@@ -69,6 +69,8 @@ Dependencies:
 - `custom_toc_buffer_type` → `mandatory_depends_on="eval:doc.custom_toc_enabled"` (required only when enabled)
 - `custom_toc_auto_purchase` → `depends_on="eval:doc.custom_toc_enabled"` (hidden when disabled)
 
+> **2026-06-02 — Section 2 (ADU) REMOVED.** The standalone item-level ADU fields were deleted; ADU is maintained per warehouse in the "Minimum Manufacture / Purchase Qty per Warehouse" table (Item Minimum Manufacture.adu). See patch `v1_0.remove_item_level_adu_fields` and tasks.md ADU-PER-WAREHOUSE.
+
 #### Section 2: ADU — Average Daily Usage
 
 | Fieldname | Type | Key |

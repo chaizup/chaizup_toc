@@ -85,11 +85,12 @@ Key difference from default ERPNext:
 """
 
 import frappe
-from frappe.utils import flt, today, add_days, cint
+from frappe.utils import flt, today, add_days, cint, now_datetime
 from frappe import _
 
 
-def generate_material_requests(buffer_type=None, zone_filter=None, company=None):
+def generate_material_requests(buffer_type=None, zone_filter=None, company=None,
+                               triggered_by="buffer_mr_cron"):
     """
     Main entry point. Routes actionable buffer items to MR (Purchase) or PP (Manufacture).
 
@@ -98,11 +99,28 @@ def generate_material_requests(buffer_type=None, zone_filter=None, company=None)
                      Routing is now derived from auto_purchase/auto_manufacture flags.
         zone_filter: list of zones e.g. ['Red', 'Black'] or None (reads from TOC Settings)
         company: filter by company
+        triggered_by: run-log marker (default buffer_mr_cron; buffer_mr_manual for button).
 
     Returns:
         list of created Material Request names (MRs only; PPs tracked separately)
+
+    PHASE 2 (2026-06-02):
+      - Every actionable item is gated on the Item-master replenishment mode
+        ("Auto Manufacturing TOC" / "Auto Purchase TOC"); monitor-only items
+        (neither flag) are SKIPPED + logged, never auto-vouchered.
+      - One TOC Production Plan Run Log is written per run with a per-item Run
+        Item row (created / skipped + reason) — the buffer MR job is now audited
+        like the Calc A/B/SO/Action engines.
     """
     from chaizup_toc.toc_engine.buffer_calculator import calculate_all_buffers
+    from chaizup_toc.chaizup_toc.toc_engine.production_plan_engine import (
+        _resolve_replenishment_mode, _append_run_item, _wo_names_for_pp,
+    )
+    def _wo_names_for_pp_safe(pp):
+        try:
+            return _wo_names_for_pp(pp)
+        except Exception:
+            return ""
 
     settings = frappe.get_cached_doc("TOC Settings")
     if not cint(settings.auto_generate_mr):
@@ -137,19 +155,65 @@ def generate_material_requests(buffer_type=None, zone_filter=None, company=None)
     created_pps = []
     errors = []
 
+    # PHASE 2 (2026-06-02): audit run log for the buffer MR/PP generator.
+    run_log = frappe.new_doc("TOC Production Plan Run Log")
+    run_log.run_started = now_datetime()
+    run_log.triggered_by = triggered_by
+    run_log.company = company or frappe.defaults.get_global_default("company") or ""
+    run_log.flags.ignore_mandatory = True
+    run_log.insert(ignore_permissions=True)
+
     for item_data in actionable:
+        ic = item_data["item_code"]; wh = item_data.get("warehouse")
+        zone = item_data.get("zone"); oq = flt(item_data.get("order_qty"))
         try:
+            # PHASE 2 gate: skip monitor-only items (neither auto flag set).
+            mode, mode_reason = _resolve_replenishment_mode(ic)
+            if mode is None:
+                _append_run_item(run_log, {
+                    "item_code": ic, "item_name": item_data.get("item_name"),
+                    "warehouse": wh, "calc_used": "Buffer MR",
+                    "status": "Skipped - No Replenishment Mode",
+                    "itmwstk": flt(item_data.get("on_hand")), "qty_of_shortage": oq,
+                    "reason": f"[Buffer MR][{zone}] {mode_reason}",
+                })
+                continue
+
             if item_data.get("mr_type") == "Manufacture":
                 # Manufacture mode → Production Plan (auto-submitted + WOs)
-                if _has_open_pp(item_data["item_code"], item_data["warehouse"]):
+                existing_pp = _has_open_pp(item_data["item_code"], item_data["warehouse"])
+                if existing_pp:
+                    _append_run_item(run_log, {
+                        "item_code": ic, "item_name": item_data.get("item_name"),
+                        "warehouse": wh, "calc_used": "Buffer MR",
+                        "status": "Skipped - PP Exists", "qty_of_shortage": oq,
+                        "production_plan": existing_pp if isinstance(existing_pp, str) else "",
+                        "reason": f"[Buffer MR][{zone}] Active Production Plan already covers {ic} at {wh}.",
+                    })
                     continue
                 pp_name = _create_buffer_production_plan(item_data)
                 if pp_name:
                     _log_snapshot(item_data, pp_name)
                     created_pps.append(pp_name)
+                    _append_run_item(run_log, {
+                        "item_code": ic, "item_name": item_data.get("item_name"),
+                        "warehouse": wh, "calc_used": "Buffer MR",
+                        "status": "Created (PP)", "production_qty": oq,
+                        "qty_of_shortage": oq, "production_plan": pp_name,
+                        "work_orders": _wo_names_for_pp_safe(pp_name),
+                        "reason": f"[Buffer MR][{zone}] Manufacture buffer replenishment for {ic} at {wh}.",
+                    })
             else:
                 # Purchase mode → Material Request (purchase_uom with conversion_factor)
-                if _has_open_mr(item_data["item_code"], item_data["warehouse"], item_data["mr_type"]):
+                existing_mr = _has_open_mr(item_data["item_code"], item_data["warehouse"], item_data["mr_type"])
+                if existing_mr:
+                    _append_run_item(run_log, {
+                        "item_code": ic, "item_name": item_data.get("item_name"),
+                        "warehouse": wh, "calc_used": "Buffer MR",
+                        "status": "Skipped - MR Exists", "qty_of_shortage": oq,
+                        "material_request": existing_mr if isinstance(existing_mr, str) else "",
+                        "reason": f"[Buffer MR][{zone}] Active Material Request already covers {ic} at {wh}.",
+                    })
                     continue
 
                 # Check component availability for items with BOM dependency
@@ -159,9 +223,6 @@ def generate_material_requests(buffer_type=None, zone_filter=None, company=None)
                         f"{item_data['sfg_status']['message']}")
 
                 # Apply min order qty floor (stock_uom).
-                # order_qty = max(buffer_shortage, min_order_qty_in_stock_uom)
-                # min_order_qty comes from Item Min Order Qty child table.
-                # If no row configured, min_qty = 0 → floor has no effect.
                 min_qty = min_order_map.get(
                     (item_data["item_code"], item_data["warehouse"]), 0.0
                 )
@@ -176,11 +237,35 @@ def generate_material_requests(buffer_type=None, zone_filter=None, company=None)
                 if mr_name:
                     _log_snapshot(item_data, mr_name)
                     created_mrs.append(mr_name)
+                    _append_run_item(run_log, {
+                        "item_code": ic, "item_name": item_data.get("item_name"),
+                        "warehouse": wh, "calc_used": "Buffer MR",
+                        "status": "Created (MR)", "production_qty": flt(item_data.get("order_qty")),
+                        "qty_of_shortage": oq, "material_request": mr_name,
+                        "reason": f"[Buffer MR][{zone}] Purchase buffer replenishment for {ic} at {wh}.",
+                    })
 
         except Exception:
             errors.append(item_data["item_code"])
             frappe.log_error(frappe.get_traceback(),
                 f"TOC MR/PP Error: {item_data['item_code']}")
+            try:
+                _append_run_item(run_log, {
+                    "item_code": ic, "item_name": item_data.get("item_name"),
+                    "warehouse": wh, "calc_used": "Buffer MR", "status": "Error - See Log",
+                    "qty_of_shortage": oq,
+                    "reason": "[Buffer MR] Engine exception — see Error Log for traceback.",
+                })
+            except Exception:
+                pass
+
+    # Finalize the audit run log.
+    try:
+        run_log.errors = len(errors)
+        run_log.run_completed = now_datetime()
+        run_log.save(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "TOC Buffer MR: run-log finalize failed")
 
     frappe.db.commit()
 

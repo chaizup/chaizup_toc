@@ -496,7 +496,6 @@ body {
             <th>Group</th>
             <th>Status</th>
             <th>Mode</th>
-            <th>ADU</th>
             <th>Rules</th>
             <th style="width: 100px; text-align: right;">Action</th>
           </tr>
@@ -549,7 +548,6 @@ body {
     
     <div class="tis-modal-tabs">
       <button class="tis-modal-tab tis-tab-active" data-tab="enable" onclick="tisApp.switchTab(&quot;enable&quot;, this)">Setup</button>
-      <button class="tis-modal-tab" data-tab="adu" onclick="tisApp.switchTab(&quot;adu&quot;, this)">ADU</button>
       <button class="tis-modal-tab" data-tab="tcu" onclick="tisApp.switchTab(&quot;tcu&quot;, this)">T/CU</button>
       <button class="tis-modal-tab" data-tab="bom" onclick="tisApp.switchTab(&quot;bom&quot;, this)">BOM</button>
       <button class="tis-modal-tab" data-tab="rules" onclick="tisApp.switchTab(&quot;rules&quot;, this)">Buffer Rules</button>
@@ -559,7 +557,6 @@ body {
     <div class="tis-modal-body">
       <div class="tis-modal-form-area" id="tis-modal-form">
         <div class="tis-tab-pane tis-active" id="tis-tab-enable"></div>
-        <div class="tis-tab-pane" id="tis-tab-adu"></div>
         <div class="tis-tab-pane" id="tis-tab-tcu"></div>
         <div class="tis-tab-pane" id="tis-tab-bom"></div>
         <div class="tis-tab-pane" id="tis-tab-rules"></div>
@@ -643,34 +640,8 @@ body {
               </div>
             </div>
 
-            <!-- Field 3: ADU Period -->
-            <div class="tis-bulk-field-row" id="tis-bfr-adu-period">
-              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
-                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;adu_period&quot;, this.checked)">
-                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
-              </div>
-              <div class="tis-bulk-field-body">
-                <div class="tis-bulk-field-label">ADU Calculation Period</div>
-                <select class="tis-select" id="tis-bulk-adu-period">
-                  <option value="Last 30 Days">Last 30 Days</option>
-                  <option value="Last 90 Days" selected>Last 90 Days</option>
-                  <option value="Last 180 Days">Last 180 Days</option>
-                  <option value="Last 365 Days">Last 365 Days</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Field 4: Custom ADU -->
-            <div class="tis-bulk-field-row" id="tis-bfr-custom-adu">
-              <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 60px;">
-                 <input type="checkbox" class="tis-bulk-apply-chk" onchange="tisApp.toggleBulkRow(&quot;custom_adu&quot;, this.checked)">
-                 <span style="font-size:10px; font-weight:800; color:var(--tis-muted)">APPLY</span>
-              </div>
-              <div class="tis-bulk-field-body">
-                <div class="tis-bulk-field-label">Custom ADU Override</div>
-                <input type="number" class="tis-input" id="tis-bulk-custom-adu" step="0.01" placeholder="Leave empty to use auto-calculated values">
-              </div>
-            </div>
+            <!-- ADU Period / Custom ADU bulk fields removed 2026-06-02:
+                 ADU is per warehouse in the Minimum Manufacture table. -->
 
             <!-- Field 5: BOM Check -->
             <div class="tis-bulk-field-row" id="tis-bfr-bom-check">

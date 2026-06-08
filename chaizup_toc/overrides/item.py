@@ -32,12 +32,9 @@ def on_item_validate(doc, method):
     if not doc.custom_toc_enabled:
         return
 
-    # R1: Custom ADU value check
-    if doc.custom_toc_custom_adu and flt(doc.custom_toc_adu_value) <= 0:
-        frappe.msgprint(
-            "You have 'Custom ADU' checked but ADU Value is 0. "
-            "Please enter your manual ADU value (units/day).",
-            indicator="orange", alert=True)
+    # NOTE (2026-06-02): the standalone item-level ADU fields were removed.
+    # ADU is maintained per warehouse in the "Minimum Manufacture / Purchase
+    # Qty per Warehouse" table (validated by _validate_min_mfg_rows above).
 
     # R2: Mutual exclusion — auto_purchase XOR auto_manufacture
     if doc.custom_toc_auto_purchase and doc.custom_toc_auto_manufacture:
