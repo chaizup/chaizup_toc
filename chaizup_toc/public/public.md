@@ -1,16 +1,22 @@
 # public — Static Frontend Assets
 
-CSS, JavaScript, and image assets served to the browser. Loaded by Frappe on desk pages via `hooks.py → app_include_js/css` and `doctype_js`.
+CSS, JavaScript, and image assets served to the browser. Loaded by Frappe on desk pages via `hooks.py → app_include_js/css`, `doctype_js`, and `doctype_list_js`.
 
 ```
 public/
 ├── js/
-│   ├── desk_branding.js        ← Global desk: zone colors, realtime alerts, Ctrl+Shift+T
-│   ├── item_toc.js             ← Item form TOC Setting tab behavior
-│   ├── material_request_toc.js ← MR form: zone banner, Priority Board button
-│   └── stock_entry_toc.js      ← Stock Entry: buffer impact check button
+│   ├── grid_polyfill.bundle.js    ← [BUNDLE] Frappe Grid compat polyfill (esbuild)
+│   ├── desk_branding.js           ← Global desk: zone colors, realtime alerts, Ctrl+Shift+T
+│   ├── item_toc.js                ← Item form TOC Setting tab behavior
+│   ├── material_request_toc.js    ← MR form: zone banner, Priority Board button
+│   ├── stock_entry_toc.js         ← Stock Entry: buffer impact check button
+│   ├── work_order_mrp_uom.js      ← Work Order form: MRP UOM display fields
+│   ├── work_order_list_extras.js  ← Work Order list: audit columns in report view
+│   ├── production_plan_mrp_uom.js ← Production Plan form: MRP UOM columns
+│   ├── bom_uom.js                 ← BOM form: UOM fields
+│   └── bom_list_extras.js         ← BOM list: audit columns in report view
 ├── css/
-│   └── toc.css                 ← Global TOC styling (zone pills, progress bars, etc.)
+│   └── toc.css                    ← Global TOC styling (zone pills, progress bars, etc.)
 └── images/
     ├── chaizup_toc_icon.svg
     ├── chaizup_toc_logo.svg
@@ -23,11 +29,29 @@ public/
 
 | Asset | Hook | Scope | When loaded |
 |-------|------|-------|------------|
-| `desk_branding.js` | `app_include_js` | Every Frappe desk page | Page load, always |
-| `toc.css` | `app_include_css` | Every Frappe desk page | Page load, always |
+| `grid_polyfill.bundle.js` | `app_include_js` (bundle) | Every desk page | Page load, always |
+| `desk_branding.js` | `app_include_js` (static) | Every desk page | Page load, always |
+| `toc.css` | `app_include_css` | Every desk page | Page load, always |
 | `item_toc.js` | `doctype_js["Item"]` | Item form only | When Item form opens |
 | `material_request_toc.js` | `doctype_js["Material Request"]` | MR form only | When MR form opens |
-| `stock_entry_toc.js` | `doctype_js["Stock Entry"]` | Stock Entry form only | When SE form opens |
+| `stock_entry_toc.js` | `doctype_js["Stock Entry"]` | SE form only | When SE form opens |
+| `work_order_mrp_uom.js` | `doctype_js["Work Order"]` | WO form only | When WO form opens |
+| `work_order_list_extras.js` | `doctype_list_js["Work Order"]` | WO list only | When WO list opens |
+| `production_plan_mrp_uom.js` | `doctype_js["Production Plan"]` | PP form only | When PP form opens |
+| `bom_uom.js` | `doctype_js["BOM"]` | BOM form only | When BOM form opens |
+| `bom_list_extras.js` | `doctype_list_js["BOM"]` | BOM list only | When BOM list opens |
+
+---
+
+## js/grid_polyfill.bundle.js — Frappe/ERPNext Compat Polyfill
+
+**Added**: 2026-06-10 | **Reason**: ERPNext v16.22.0 / Frappe v16.20.0 version mismatch
+
+Patches `Grid.prototype.set_column_disp_in_list_view` which ERPNext's `work_order.js` calls but Frappe hasn't released yet. Without this, Work Order form renders blank.
+
+Uses `.bundle.js` format (esbuild-compiled) for reliable loading — plain static JS via `app_include_js` path was not consistently included. See `js/js.md` for full technical details.
+
+**Remove when**: Frappe v16 ships `set_column_disp_in_list_view` natively in `grid.js`.
 
 ---
 

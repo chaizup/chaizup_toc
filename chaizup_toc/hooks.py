@@ -306,7 +306,10 @@ doctype_list_js = {
 #   zone colours in list views, workspace icon injection
 # toc.css: global TOC styling across all DocType forms
 # ═══════════════════════════════════════════════════════
-app_include_js  = ["/assets/chaizup_toc/js/desk_branding.js"]
+app_include_js  = [
+    "grid_polyfill.bundle.js",
+    "/assets/chaizup_toc/js/desk_branding.js",
+]
 app_include_css = "/assets/chaizup_toc/css/toc.css"
 
 # ═══════════════════════════════════════════════════════

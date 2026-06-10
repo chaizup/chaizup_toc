@@ -1,27 +1,85 @@
 # public/js/ — Client-Side JavaScript Files
 
-Four JavaScript files that extend the Frappe desk UI with TOC-specific behavior. All files are served as static assets after `bench build`.
+JavaScript files that extend the Frappe desk UI with TOC-specific behavior. Bundles are compiled by esbuild; static JS files are served via asset symlinks.
 
 ```
 public/js/
-├── desk_branding.js       ← Loaded globally on all desk pages
-├── item_toc.js            ← Item form: TOC Settings tab behavior
-├── material_request_toc.js ← MR form: TOC zone banner and button
-└── stock_entry_toc.js     ← Stock Entry form: buffer impact check
+├── grid_polyfill.bundle.js    ← [BUNDLE] Frappe/ERPNext compat: Grid.set_column_disp_in_list_view
+├── desk_branding.js           ← [STATIC] Loaded globally: zone colors, alerts, Ctrl+Shift+T
+├── item_toc.js                ← [DOCTYPE_JS] Item form: TOC Settings tab
+├── material_request_toc.js    ← [DOCTYPE_JS] MR form: TOC zone banner
+├── stock_entry_toc.js         ← [DOCTYPE_JS] Stock Entry: buffer impact check
+├── work_order_mrp_uom.js      ← [DOCTYPE_JS] Work Order form: MRP UOM fields
+├── work_order_list_extras.js  ← [DOCTYPE_LIST_JS] Work Order list: audit columns
+├── production_plan_mrp_uom.js ← [DOCTYPE_JS] Production Plan form: MRP UOM
+├── bom_uom.js                 ← [DOCTYPE_JS] BOM form: UOM fields
+└── bom_list_extras.js         ← [DOCTYPE_LIST_JS] BOM list: audit columns
 ```
 
 Loading mechanism via `hooks.py`:
 
 ```python
-# Loaded on EVERY desk page
-app_include_js = ["/assets/chaizup_toc/js/desk_branding.js"]
+# Loaded on EVERY desk page (bundles compiled by esbuild)
+app_include_js = [
+    "grid_polyfill.bundle.js",            # Frappe Grid compat polyfill
+    "/assets/chaizup_toc/js/desk_branding.js",  # zone colors, alerts
+]
 
 # Loaded only when that specific DocType form is opened
 doctype_js = {
-    "Item": "public/js/item_toc.js",
-    "Material Request": "public/js/material_request_toc.js",
-    "Stock Entry": "public/js/stock_entry_toc.js",
+    "Item":            "public/js/item_toc.js",
+    "Material Request":"public/js/material_request_toc.js",
+    "Stock Entry":     "public/js/stock_entry_toc.js",
+    "Work Order":      "public/js/work_order_mrp_uom.js",
+    "Production Plan": "public/js/production_plan_mrp_uom.js",
+    "BOM":             "public/js/bom_uom.js",
 }
+
+# Loaded on DocType list views
+doctype_list_js = {
+    "Work Order": "public/js/work_order_list_extras.js",
+    "BOM":        "public/js/bom_list_extras.js",
+}
+```
+
+---
+
+## grid_polyfill.bundle.js — Frappe/ERPNext Version Compat Polyfill
+
+**Type**: esbuild bundle (`app_include_js`)
+**Loaded**: Every desk page, AFTER form.bundle.js
+**Created**: 2026-06-10 — ERPNext v16.22.0 / Frappe v16.20.0 version mismatch
+
+### Problem
+
+ERPNext v16.22.0 (commit `3f983c9e4d`) added `grid.set_column_disp_in_list_view()` calls in `work_order.js`. The corresponding Frappe method (commit `cd5b9ad9bd`) was never merged to the Frappe v16 release branch. Work Order form renders blank with `TypeError`.
+
+### Why a `.bundle.js` (not plain `.js`)
+
+Static `.js` files via `app_include_js` path (`/assets/chaizup_toc/js/foo.js`) were not reliably included in the desk page HTML. Bundle files go through esbuild → `assets.json` → `bundled_asset()` resolution, which is the same mechanism Frappe uses for its own bundles (desk.bundle.js, form.bundle.js, etc.). This guarantees loading.
+
+### How It Works
+
+1. Wraps `frappe.ui.form.ScriptManager.prototype.setup` (globally accessible)
+2. Before the original `setup()` fires the "setup" event, finds any grid instance via `frm.fields_dict`
+3. Patches `Grid.prototype` (accessed via `Object.getPrototypeOf(grid)`) with:
+   - `set_column_disp_in_list_view(fieldname, show)` — the missing method
+   - Wrapped `setup_fields()` — applies `column_disp_overrides` map after docfields are set
+
+### Why NOT These Alternatives
+
+| Approach | Why It Failed |
+|----------|---------------|
+| `frappe.ui.form.Grid` | Doesn't exist — Grid is an ES module, not globally exposed |
+| `setInterval` polling | Race condition — Grid instances created synchronously, poll fires too late |
+| `import Grid from "..."` in bundle | esbuild creates a separate copy — won't affect Frappe's actual instances |
+| Direct edit to `frappe/form/grid.js` | Violates project rule: never edit frappe/erpnext core |
+
+### Self-Healing
+
+If Frappe later ships `set_column_disp_in_list_view` natively, the polyfill detects it and becomes a no-op. Safe to remove once confirmed:
+```bash
+grep "set_column_disp_in_list_view" apps/frappe/frappe/public/js/frappe/form/grid.js
 ```
 
 ---
